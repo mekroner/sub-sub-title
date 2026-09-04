@@ -23,10 +23,28 @@ export interface Project {
   speakers: Speaker[];
 }
 
-/** The `.captions.json` sidecar. Versioned so the format can move later. */
-export interface Sidecar extends Project {
+/** The `.sstproj` project file. Versioned so the format can move later. */
+export interface ProjectFile extends Project {
   version: 1;
   savedAt: string;
+}
+
+/**
+ * The legacy `.captions.json` sidecar. Same shape; still read when opening a
+ * bare video, never written any more.
+ */
+export type Sidecar = ProjectFile;
+
+export interface RecentProject {
+  path: string;
+  videoPath: string;
+  /** Milliseconds since the epoch. */
+  openedAt: number;
+}
+
+export interface AppState {
+  lastProject: string | null;
+  recentProjects: RecentProject[];
 }
 
 // --- Mirrors of the Rust command payloads ---
@@ -51,6 +69,7 @@ export interface Peaks {
 export interface ProjectPaths {
   dir: string;
   stem: string;
+  project: string;
   sidecar: string;
   srt: string;
   ass: string;

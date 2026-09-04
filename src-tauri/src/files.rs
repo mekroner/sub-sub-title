@@ -65,6 +65,9 @@ pub fn startup_file() -> Option<String> {
 pub struct ProjectPaths {
     pub dir: String,
     pub stem: String,
+    /// The `.sstproj` project file suggested by Save As.
+    pub project: String,
+    /// Legacy `.captions.json`, still read when opening a bare video.
     pub sidecar: String,
     pub srt: String,
     pub ass: String,
@@ -86,6 +89,7 @@ pub fn derive_paths(video_path: String) -> AppResult<ProjectPaths> {
     let join = |suffix: &str| dir.join(format!("{stem}{suffix}")).to_string_lossy().to_string();
 
     Ok(ProjectPaths {
+        project: join(".sstproj"),
         sidecar: join(".captions.json"),
         srt: join(".srt"),
         ass: join(".ass"),

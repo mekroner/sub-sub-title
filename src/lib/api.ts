@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppState,
   ContinueRequest,
   MediaInfo,
   ModelInfo,
@@ -41,6 +42,16 @@ export const hasApiKey = () => invoke<boolean>("has_api_key");
 export const setApiKey = (key: string) => invoke<void>("set_api_key", { key });
 
 export const clearApiKey = () => invoke<void>("clear_api_key");
+
+export const loadAppState = () => invoke<AppState>("load_app_state");
+
+export const rememberProject = (path: string, videoPath: string) =>
+  invoke<AppState>("remember_project", { path, videoPath });
+
+export const forgetProject = (path: string) =>
+  invoke<AppState>("forget_project", { path });
+
+export const clearLastProject = () => invoke<AppState>("clear_last_project");
 
 export const aiContinue = (request: ContinueRequest) =>
   invoke<string[]>("ai_continue", { request });

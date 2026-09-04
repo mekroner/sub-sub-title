@@ -2,6 +2,7 @@ mod ai;
 mod error;
 mod files;
 mod media;
+mod project_state;
 mod render;
 mod settings;
 
@@ -36,6 +37,10 @@ pub fn run() {
             settings::has_api_key,
             settings::set_api_key,
             settings::clear_api_key,
+            project_state::load_app_state,
+            project_state::remember_project,
+            project_state::forget_project,
+            project_state::clear_last_project,
             ai::ai_continue,
             ai::list_models,
             render::render_burn_in,

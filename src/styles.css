@@ -147,6 +147,54 @@ kbd {
   text-overflow: ellipsis;
   display: block;
 }
+.recent-menu {
+  position: relative;
+}
+.recent-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 260px;
+  max-width: 460px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+.recent-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+.recent-item:hover {
+  background: var(--bg-input);
+}
+.recent-item.current {
+  color: var(--accent);
+}
+.recent-name {
+  display: block;
+}
+.recent-path {
+  display: block;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Long paths matter at the end, so keep the filename visible. */
+  direction: rtl;
+  text-align: left;
+}
+
 .zoom-control {
   display: flex;
   align-items: center;

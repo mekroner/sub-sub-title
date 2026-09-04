@@ -23,6 +23,9 @@ export type ShortcutCommand =
   | { type: "deleteSelected" }
   | { type: "generate" }
   | { type: "save" }
+  | { type: "saveAs" }
+  | { type: "newProject" }
+  | { type: "openProject" }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "zoom"; direction: number }
@@ -78,7 +81,11 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
       case "KeyG":
         return { type: "generate" };
       case "KeyS":
-        return { type: "save" };
+        return shift ? { type: "saveAs" } : { type: "save" };
+      case "KeyN":
+        return { type: "newProject" };
+      case "KeyO":
+        return { type: "openProject" };
       case "KeyZ":
         return shift ? { type: "redo" } : { type: "undo" };
       case "KeyY":

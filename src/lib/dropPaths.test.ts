@@ -32,6 +32,16 @@ describe("classifyDrop", () => {
     expect(intent).toEqual({ kind: "video", path: "C:\\a\\clip.mp4" });
   });
 
+  it("recognises a dropped project, and prefers it over everything", () => {
+    expect(classifyDrop(["C:\\a\\job.sstproj"])).toEqual({
+      kind: "project",
+      path: "C:\\a\\job.sstproj",
+    });
+    expect(
+      classifyDrop(["C:\\a\\clip.mp4", "C:\\a\\subs.srt", "C:\\a\\job.SSTPROJ"]).kind,
+    ).toBe("project");
+  });
+
   it("ignores unrelated files", () => {
     expect(classifyDrop(["C:\\a\\notes.txt", "C:\\a\\image.png"]).kind).toBe("none");
     expect(classifyDrop([]).kind).toBe("none");

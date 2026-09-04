@@ -47,9 +47,23 @@ describe("matchShortcut", () => {
     expect(matchShortcut({ code: "KeyV", ctrlKey: true })).toBeNull();
   });
 
+  it("handles the project chords", () => {
+    expect(matchShortcut({ code: "KeyN", ctrlKey: true })).toEqual({
+      type: "newProject",
+    });
+    expect(matchShortcut({ code: "KeyO", ctrlKey: true })).toEqual({
+      type: "openProject",
+    });
+    expect(matchShortcut({ code: "KeyS", ctrlKey: true, shiftKey: true })).toEqual({
+      type: "saveAs",
+    });
+  });
+
   it("does not fire Ctrl actions from the bare key", () => {
     expect(matchShortcut({ code: "KeyS" })).toEqual({ type: "split" });
     expect(matchShortcut({ code: "KeyG" })).toBeNull();
+    expect(matchShortcut({ code: "KeyN" })).toEqual({ type: "newCue" });
+    expect(matchShortcut({ code: "KeyO" })).toBeNull();
   });
 
   /**
