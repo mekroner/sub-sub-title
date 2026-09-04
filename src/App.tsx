@@ -5,7 +5,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 
 import { TransportBar } from "./components/TransportBar";
 import { VideoPane } from "./components/VideoPane";
-import { WaveformPane } from "./components/WaveformPane";
+import { MAX_ZOOM, MIN_ZOOM, WaveformPane } from "./components/WaveformPane";
 import { CueList } from "./components/CueList";
 import { SpeakerPanel } from "./components/SpeakerPanel";
 import { ContinuePanel } from "./components/ContinuePanel";
@@ -623,7 +623,10 @@ export default function App() {
       save: () => void saveSidecar(),
       undo,
       redo,
-      zoom: (direction) => setZoom((z) => clamp(Math.round(z * (direction > 0 ? 1.4 : 1 / 1.4)), 5, 600)),
+      zoom: (direction) =>
+        setZoom((z) =>
+          clamp(Math.round(z * (direction > 0 ? 1.4 : 1 / 1.4)), MIN_ZOOM, MAX_ZOOM),
+        ),
       toggleFollow: () => setFollow((f) => !f),
       showHelp: () => setShowHelp(true),
     },
@@ -687,8 +690,8 @@ export default function App() {
             <span>Zoom</span>
             <input
               type="range"
-              min={5}
-              max={400}
+              min={MIN_ZOOM}
+              max={MAX_ZOOM}
               value={zoom}
               onChange={(e) => setZoom(Number(e.target.value))}
             />
@@ -754,11 +757,13 @@ export default function App() {
             speakers={speakers}
             selectedCueId={selectedCueId}
             zoom={zoom}
+            follow={follow}
             onSelectCue={setSelectedCueId}
             onRetimeCue={(id, start, end) => retimeFromWaveform(id, start, end)}
             onCreateCue={createCue}
             // Clicking a region must move the video, not just the app's clock.
             onSeek={seek}
+            onZoomChange={setZoom}
           />
         </div>
 

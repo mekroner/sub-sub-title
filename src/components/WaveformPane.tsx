@@ -3,6 +3,7 @@ import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.esm.js";
 import type { Cue, Speaker } from "../types";
 import { contrastText, withAlpha } from "../lib/colors";
+import { clamp } from "../lib/time";
 
 interface Props {
   videoEl: HTMLVideoElement | null;
@@ -12,14 +13,32 @@ interface Props {
   speakers: Speaker[];
   selectedCueId: string | null;
   zoom: number;
+  /** When off, playback stops dragging the view along, so a pan sticks. */
+  follow: boolean;
   onSelectCue: (id: string) => void;
   onRetimeCue: (id: string, start: number, end: number, final: boolean) => void;
   onCreateCue: (start: number, end: number) => void;
   onSeek: (time: number) => void;
+  onZoomChange: (zoom: number) => void;
 }
 
 /** Regions outside the viewport are not created at all; this is the margin. */
 const WINDOW_PADDING_SECONDS = 20;
+
+/** Waveform zoom bounds, in pixels per second. */
+export const MIN_ZOOM = 5;
+export const MAX_ZOOM = 600;
+/** Multiplier per wheel notch; gentler than the keyboard's 1.4x. */
+const WHEEL_ZOOM_STEP = 1.15;
+
+/** Wheel deltas arrive in pixels, lines or pages depending on the device. */
+function wheelPixels(event: WheelEvent): number {
+  // Trackpads report horizontal intent in deltaX; take whichever dominates.
+  const raw = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+  if (event.deltaMode === 1) return raw * 16; // lines
+  if (event.deltaMode === 2) return raw * 400; // pages
+  return raw;
+}
 
 export function WaveformPane({
   videoEl,
@@ -29,10 +48,12 @@ export function WaveformPane({
   speakers,
   selectedCueId,
   zoom,
+  follow,
   onSelectCue,
   onRetimeCue,
   onCreateCue,
   onSeek,
+  onZoomChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
@@ -43,6 +64,11 @@ export function WaveformPane({
   const syncing = useRef(false);
   const [visible, setVisible] = useState<[number, number]>([0, 60]);
   const [ready, setReady] = useState(false);
+  /**
+   * Scroll position to restore once a wheel-driven zoom has been applied, so the
+   * moment under the pointer stays put instead of the view jumping.
+   */
+  const pendingScroll = useRef<number | null>(null);
 
   // Latest props, so the wavesurfer event handlers never close over stale state.
   const handlers = useRef({ onSelectCue, onRetimeCue, onCreateCue, onSeek, cues });
@@ -64,8 +90,8 @@ export function WaveformPane({
       cursorColor: "#ff4d4d",
       cursorWidth: 2,
       minPxPerSec: zoom,
-      autoScroll: true,
-      autoCenter: true,
+      autoScroll: follow,
+      autoCenter: follow,
       normalize: true,
       fillParent: true,
       interact: true,
@@ -133,10 +159,63 @@ export function WaveformPane({
     if (!ws || !ready) return;
     try {
       ws.zoom(zoom);
+      // Applied after the zoom so the anchored point lands where it should.
+      if (pendingScroll.current !== null) {
+        ws.setScroll(Math.max(0, pendingScroll.current));
+        pendingScroll.current = null;
+      }
     } catch {
       // zoom() throws if the instance is mid-teardown; harmless.
+      pendingScroll.current = null;
     }
   }, [zoom, ready]);
+
+  // --- Follow the playhead -------------------------------------------------
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (!ws || !ready) return;
+    try {
+      ws.setOptions({ autoScroll: follow, autoCenter: follow });
+    } catch {
+      // Ignore if the instance is mid-teardown.
+    }
+  }, [follow, ready]);
+
+  // --- Wheel: Alt to zoom, otherwise pan through time ----------------------
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !ready) return;
+
+    const onWheel = (event: WheelEvent) => {
+      const ws = wsRef.current;
+      if (!ws) return;
+      const delta = wheelPixels(event);
+      if (delta === 0) return;
+
+      // Both branches take over the gesture: the pane has nothing to scroll
+      // vertically, and Alt+wheel is a history gesture in some webviews.
+      event.preventDefault();
+
+      if (event.altKey) {
+        const factor = delta < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP;
+        const next = clamp(Math.round(zoom * factor), MIN_ZOOM, MAX_ZOOM);
+        if (next === zoom) return;
+
+        // Keep the instant under the pointer fixed while the scale changes.
+        const offsetX = event.clientX - el.getBoundingClientRect().left;
+        const timeAtPointer = (ws.getScroll() + offsetX) / zoom;
+        pendingScroll.current = timeAtPointer * next - offsetX;
+        onZoomChange(next);
+        return;
+      }
+
+      ws.setScroll(Math.max(0, ws.getScroll() + delta));
+    };
+
+    // Not passive: both branches call preventDefault.
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [ready, zoom, onZoomChange]);
 
   // --- Sync cues -> regions, windowed to the visible range ----------------
   useEffect(() => {

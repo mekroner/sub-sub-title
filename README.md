@@ -63,12 +63,24 @@ explicit actions, so an export never silently overwrites your source subtitles.
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `+` / `-` | Zoom the waveform |
 | `F` | Toggle follow-playhead scrolling |
+| `Alt` + scroll | Zoom the waveform, anchored at the pointer |
+| scroll on waveform | Pan through time |
 | `?` | Show the shortcut list |
 
 Shortcuts are matched on **physical key position**, so `[` and `]` work on a
 Norwegian layout (where they need AltGr) by pressing the keys where `[` and `]`
 sit on a US board. `,` and `.` are bound to the same nudge actions as an
 easier-to-reach alternative. Shortcuts are inert while a text box has focus.
+
+## Navigating the waveform
+
+Scroll over the waveform to pan through time; hold `Alt` and scroll to zoom,
+anchored at the pointer so the moment under the cursor stays put. `+` / `-` zoom
+from the keyboard, and the toolbar has a zoom slider. Zoom ranges from 5 to 600
+pixels per second.
+
+`F` toggles follow-playhead. With it on, playback drags the waveform and the cue
+list along; with it off, a pan stays where you put it while the video plays.
 
 ## Transport controls
 

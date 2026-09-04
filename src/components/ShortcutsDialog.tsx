@@ -15,6 +15,8 @@ const SHORTCUTS: Array<[string, string]> = [
   ["Ctrl + S", "Save the project sidecar"],
   ["Ctrl + Z / Ctrl + Y", "Undo / redo"],
   ["+ / −", "Zoom the waveform in / out"],
+  ["Alt + scroll", "Zoom the waveform, anchored at the pointer"],
+  ["Scroll on waveform", "Pan through time"],
   ["F", "Toggle follow-playhead scrolling"],
   ["?", "Show this list"],
 ];
