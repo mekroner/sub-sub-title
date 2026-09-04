@@ -9,7 +9,7 @@ for this specific loop only.
 
 ## The loop
 
-1. Open a video — via the button, by dragging it onto the window, or as a
+1. Open a video — from **File ▸ Open video…**, by dragging it onto the window, or as a
    command-line argument. A sibling `.sstproj`, `.captions.json` or `.srt` is
    picked up automatically. The project you had open last reopens on launch.
 2. Tag each line with a speaker (`1`–`9`), each speaker having a colour.
@@ -52,7 +52,7 @@ file can live anywhere.
 
 - **New** (Ctrl+N), **Open project…** (Ctrl+O), **Save** (Ctrl+S), **Save As…**
   (Ctrl+Shift+S).
-- **Recent ▾** lists the last ten projects; pick one to switch.
+- **File ▸ Open recent** lists the last ten projects; pick one to switch.
 - The project open when the app closed reopens on the next launch. A file passed
   on the command line wins over it.
 - Anything that would discard unsaved edits — New, opening another project or
@@ -63,6 +63,18 @@ file can live anywhere.
 
 `lastProject` and the recents list live in `state.json` in the app config
 directory, beside `settings.json` — they are per-machine, not part of any project.
+
+## Menu bar
+
+Every command lives in an in-app menu bar — **File**, **Edit**, **View**,
+**Help** — rather than a row of buttons. It is drawn in the webview instead of
+using Tauri's native menu, so it keeps the app's dark chrome and its items call
+the same handlers as the shortcuts; the two can never drift apart. Editor
+shortcuts are suspended while a menu is open, so `S` picks an item rather than
+splitting a cue.
+
+The bar also keeps the three things worth having permanently visible: the
+project/cue-count label, the zoom slider, and the Follow toggle.
 
 ## Keyboard shortcuts
 

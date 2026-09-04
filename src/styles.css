@@ -147,26 +147,54 @@ kbd {
   text-overflow: ellipsis;
   display: block;
 }
-.recent-menu {
+/* --- Menu bar ----------------------------------------------------------- */
+.menu-bar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.menu-root {
   position: relative;
 }
-.recent-list {
+.menu-title {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 10px;
+}
+.menu-title:hover,
+.menu-title.open {
+  background: var(--bg-input);
+  border-color: var(--border);
+}
+
+.menu-list {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  z-index: 20;
+  z-index: 30;
   margin: 0;
   padding: 4px;
   list-style: none;
-  min-width: 260px;
-  max-width: 460px;
+  min-width: 230px;
   background: var(--bg-raised);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
 }
-.recent-item {
-  display: block;
+/* Flyouts sit beside their parent item, not under it. */
+.menu-sublist {
+  top: -5px;
+  left: 100%;
+  max-width: 460px;
+}
+.menu-parent {
+  position: relative;
+}
+.menu-list button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   width: 100%;
   text-align: left;
   background: none;
@@ -174,16 +202,39 @@ kbd {
   border-radius: 4px;
   padding: 5px 8px;
 }
-.recent-item:hover {
+.menu-list button:hover:not(:disabled),
+.menu-list button:focus-visible {
   background: var(--bg-input);
+  outline: none;
 }
-.recent-item.current {
+.menu-list button:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+.menu-tick {
+  width: 10px;
+  flex: none;
   color: var(--accent);
 }
-.recent-name {
-  display: block;
+.menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.recent-path {
+.menu-accelerator {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+/* The recent-projects flyout: name on top, dimmed path underneath. */
+.menu-detail {
   display: block;
   color: var(--text-dim);
   font-size: 11px;

@@ -13,7 +13,8 @@ import { ContinuePanel } from "./components/ContinuePanel";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { RenderDialog } from "./components/RenderDialog";
-import { RecentMenu } from "./components/RecentMenu";
+import { MenuBar } from "./components/MenuBar";
+import type { Menu } from "./components/MenuBar";
 
 import { emptyProject, useProjectHistory } from "./state/useProjectHistory";
 import { useShortcuts } from "./hooks/useShortcuts";
@@ -123,6 +124,9 @@ export default function App() {
   const [playbackRate, setPlaybackRate] = useState(() => readStored("playbackRate", 1));
   const [follow, setFollow] = useState(true);
 
+  // An open menu suspends the editor shortcuts, so `S` picks a menu item rather
+  // than splitting a cue.
+  const [menuOpen, setMenuOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showRender, setShowRender] = useState(false);
@@ -759,6 +763,43 @@ export default function App() {
     generateRef.current = fn;
   }, []);
 
+  // --- Cue actions --------------------------------------------------------
+  // Shared by the Edit menu and the keyboard shortcuts, so the two can never
+  // drift apart.
+  const splitAtPlayhead = useCallback(() => {
+    if (!selectedCueId) return;
+    const result = splitCueAt(cues, selectedCueId, currentTime);
+    if (!result.newCueId) {
+      return notify("Move the playhead inside the selected cue to split it.", "error");
+    }
+    setCues(() => result.cues);
+    setSelectedCueId(result.newCueId);
+  }, [cues, selectedCueId, currentTime, setCues, notify]);
+
+  const mergeSelectedWithNext = useCallback(() => {
+    if (!selectedCueId) return;
+    setCues((list) => mergeWithNext(list, selectedCueId));
+  }, [selectedCueId, setCues]);
+
+  const newCueAtPlayhead = useCallback(() => {
+    const end = Math.min(currentTime + 2, duration || currentTime + 2);
+    createCue(currentTime, end);
+  }, [currentTime, duration, createCue]);
+
+  const deleteSelected = useCallback(() => {
+    if (!selectedCueId) return;
+    const index = cues.findIndex((c) => c.id === selectedCueId);
+    setCues((list) => list.filter((c) => c.id !== selectedCueId));
+    const nextSelection = cues[index + 1] ?? cues[index - 1] ?? null;
+    setSelectedCueId(nextSelection?.id ?? null);
+  }, [cues, selectedCueId, setCues]);
+
+  const zoomBy = useCallback((direction: number) => {
+    setZoom((z) =>
+      clamp(Math.round(z * (direction > 0 ? 1.4 : 1 / 1.4)), MIN_ZOOM, MAX_ZOOM),
+    );
+  }, []);
+
   // --- Window title and close guard ---------------------------------------
   useEffect(() => {
     const name = projectPath ? projectName(projectPath) : "Untitled";
@@ -793,19 +834,8 @@ export default function App() {
       clearSpeaker: () => {
         if (selectedCueId) assignSpeaker(selectedCueId, null);
       },
-      splitAtPlayhead: () => {
-        if (!selectedCueId) return;
-        const result = splitCueAt(cues, selectedCueId, currentTime);
-        if (!result.newCueId) {
-          return notify("Move the playhead inside the selected cue to split it.", "error");
-        }
-        setCues(() => result.cues);
-        setSelectedCueId(result.newCueId);
-      },
-      mergeWithNext: () => {
-        if (!selectedCueId) return;
-        setCues((list) => mergeWithNext(list, selectedCueId));
-      },
+      splitAtPlayhead,
+      mergeWithNext: mergeSelectedWithNext,
       nudge: (edge, direction) => {
         if (!selectedCueId) return;
         setCues(
@@ -826,17 +856,8 @@ export default function App() {
       jumpToSelected: () => {
         if (selectedCue) seek(selectedCue.start);
       },
-      newCueAtPlayhead: () => {
-        const end = Math.min(currentTime + 2, duration || currentTime + 2);
-        createCue(currentTime, end);
-      },
-      deleteSelected: () => {
-        if (!selectedCueId) return;
-        const index = cues.findIndex((c) => c.id === selectedCueId);
-        setCues((list) => list.filter((c) => c.id !== selectedCueId));
-        const nextSelection = cues[index + 1] ?? cues[index - 1] ?? null;
-        setSelectedCueId(nextSelection?.id ?? null);
-      },
+      newCueAtPlayhead,
+      deleteSelected,
       generateContinuation: () => {
         if (generateRef.current) generateRef.current();
         else notify("Add an OpenRouter API key in Settings first.", "error");
@@ -847,14 +868,11 @@ export default function App() {
       openProject: () => void openProject(),
       undo,
       redo,
-      zoom: (direction) =>
-        setZoom((z) =>
-          clamp(Math.round(z * (direction > 0 ? 1.4 : 1 / 1.4)), MIN_ZOOM, MAX_ZOOM),
-        ),
+      zoom: zoomBy,
       toggleFollow: () => setFollow((f) => !f),
       showHelp: () => setShowHelp(true),
     },
-    !modalOpen,
+    !modalOpen && !menuOpen,
   );
 
   // --- Render -------------------------------------------------------------
@@ -863,78 +881,156 @@ export default function App() {
   /** There is something worth writing to disk. */
   const hasProject = Boolean(paths) || cues.length > 0 || speakers.length > 0;
 
+  const menus: Menu[] = [
+    {
+      label: "File",
+      entries: [
+        { kind: "item", label: "New project", accelerator: "Ctrl+N", onSelect: () => void newProject() },
+        {
+          kind: "item",
+          label: "Open project…",
+          accelerator: "Ctrl+O",
+          onSelect: () => void openProject(),
+        },
+        {
+          kind: "submenu",
+          label: "Open recent",
+          disabled: appState.recentProjects.length === 0,
+          entries: appState.recentProjects.map((entry) => ({
+            kind: "item" as const,
+            label: projectName(entry.path),
+            detail: entry.path,
+            checked: entry.path === projectPath,
+            disabled: entry.path === projectPath,
+            onSelect: () => void openRecent(entry.path),
+          })),
+        },
+        { kind: "separator" },
+        { kind: "item", label: "Open video…", onSelect: () => void chooseVideo() },
+        {
+          kind: "item",
+          label: "Locate video…",
+          disabled: !projectPath || Boolean(videoUrl),
+          onSelect: () => void relocateVideo(),
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: dirty ? "Save •" : "Save",
+          accelerator: "Ctrl+S",
+          disabled: !hasProject,
+          onSelect: () => void saveProject(),
+        },
+        {
+          kind: "item",
+          label: "Save as…",
+          accelerator: "Ctrl+Shift+S",
+          disabled: !hasProject,
+          onSelect: () => void saveProjectAs(),
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Import .srt…",
+          disabled: !paths,
+          onSelect: () => void importSrt(),
+        },
+        {
+          kind: "item",
+          label: "Export .srt…",
+          disabled: cues.length === 0,
+          onSelect: () => void exportSrt(),
+        },
+        {
+          kind: "item",
+          label: "Export .ass…",
+          disabled: cues.length === 0,
+          onSelect: () => void exportAss(),
+        },
+        {
+          kind: "item",
+          label: "Burn in…",
+          disabled: cues.length === 0 || !tools?.ffmpeg,
+          onSelect: () => setShowRender(true),
+        },
+        { kind: "separator" },
+        { kind: "item", label: "Settings…", onSelect: () => setShowSettings(true) },
+        // Goes through the same close guard as the window's own close button.
+        {
+          kind: "item",
+          label: "Exit",
+          onSelect: () => void getCurrentWindow().close(),
+        },
+      ],
+    },
+    {
+      label: "Edit",
+      entries: [
+        { kind: "item", label: "Undo", accelerator: "Ctrl+Z", disabled: !canUndo, onSelect: undo },
+        { kind: "item", label: "Redo", accelerator: "Ctrl+Y", disabled: !canRedo, onSelect: redo },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "New cue at playhead",
+          accelerator: "N",
+          disabled: !media,
+          onSelect: newCueAtPlayhead,
+        },
+        {
+          kind: "item",
+          label: "Split at playhead",
+          accelerator: "S",
+          disabled: !selectedCueId,
+          onSelect: splitAtPlayhead,
+        },
+        {
+          kind: "item",
+          label: "Merge with next",
+          accelerator: "M",
+          disabled: !selectedCueId,
+          onSelect: mergeSelectedWithNext,
+        },
+        {
+          kind: "item",
+          label: "Delete cue",
+          accelerator: "Del",
+          disabled: !selectedCueId,
+          onSelect: deleteSelected,
+        },
+      ],
+    },
+    {
+      label: "View",
+      entries: [
+        { kind: "item", label: "Zoom in", accelerator: "+", onSelect: () => zoomBy(1) },
+        { kind: "item", label: "Zoom out", accelerator: "−", onSelect: () => zoomBy(-1) },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Follow playhead",
+          accelerator: "F",
+          checked: follow,
+          onSelect: () => setFollow((f) => !f),
+        },
+      ],
+    },
+    {
+      label: "Help",
+      entries: [
+        {
+          kind: "item",
+          label: "Keyboard shortcuts",
+          accelerator: "?",
+          onSelect: () => setShowHelp(true),
+        },
+      ],
+    },
+  ];
+
   return (
     <div className="app">
       <header className="toolbar">
-        <div className="toolbar-group">
-          <button type="button" onClick={newProject} title="Ctrl+N">
-            New
-          </button>
-          <button type="button" onClick={openProject} title="Ctrl+O">
-            Open project…
-          </button>
-          <RecentMenu
-            projects={appState.recentProjects}
-            currentPath={projectPath}
-            onPick={(path) => void openRecent(path)}
-          />
-          <button
-            type="button"
-            onClick={saveProject}
-            disabled={!hasProject}
-            title="Ctrl+S"
-          >
-            Save{dirty ? " •" : ""}
-          </button>
-          <button
-            type="button"
-            onClick={saveProjectAs}
-            disabled={!hasProject}
-            title="Ctrl+Shift+S"
-          >
-            Save As…
-          </button>
-        </div>
-
-        <div className="toolbar-group">
-          <button type="button" className="primary" onClick={chooseVideo}>
-            Open video…
-          </button>
-          {projectPath && !videoUrl && (
-            <button type="button" onClick={relocateVideo} title="Point at the moved video">
-              Locate video…
-            </button>
-          )}
-          <button type="button" onClick={importSrt} disabled={!paths}>
-            Import .srt
-          </button>
-        </div>
-
-        <div className="toolbar-group">
-          <button type="button" onClick={exportSrt} disabled={cues.length === 0}>
-            Export .srt
-          </button>
-          <button type="button" onClick={exportAss} disabled={cues.length === 0}>
-            Export .ass
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowRender(true)}
-            disabled={cues.length === 0 || !tools?.ffmpeg}
-            title={tools?.ffmpeg ? "Burn subtitles into a new video" : "ffmpeg not found"}
-          >
-            Burn in…
-          </button>
-        </div>
-
-        <div className="toolbar-group">
-          <button type="button" onClick={undo} disabled={!canUndo} title="Ctrl+Z">
-            ↶
-          </button>
-          <button type="button" onClick={redo} disabled={!canRedo} title="Ctrl+Y">
-            ↷
-          </button>
-        </div>
+        <MenuBar menus={menus} onOpenChange={setMenuOpen} />
 
         <div className="toolbar-spacer">
           <span className="file-label">
@@ -965,12 +1061,6 @@ export default function App() {
             title="Follow the playhead (F)"
           >
             Follow
-          </button>
-          <button type="button" onClick={() => setShowHelp(true)} title="Shortcuts (?)">
-            ?
-          </button>
-          <button type="button" onClick={() => setShowSettings(true)}>
-            Settings
           </button>
         </div>
       </header>
