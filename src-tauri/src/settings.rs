@@ -1,0 +1,122 @@
+//! App settings (a JSON file) and the OpenRouter API key (Windows Credential
+//! Manager, via the keyring crate).
+
+use crate::error::{AppError, AppResult};
+use keyring::Entry;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use tauri::{AppHandle, Manager};
+
+const KEYRING_SERVICE: &str = "sub-sub-title";
+const KEYRING_USER: &str = "openrouter";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    /// OpenRouter model id, e.g. "anthropic/claude-sonnet-4.5".
+    pub model: String,
+    pub temperature: f32,
+    /// How many preceding cues are sent as context to the continue-feature.
+    pub context_lines: u32,
+    /// How many candidate lines to ask for.
+    pub candidate_count: u32,
+    /// Extra guidance appended to the system prompt (tone, era, language...).
+    pub style_notes: String,
+    /// Default .ass styling used for export and the preview overlay.
+    pub font_name: String,
+    pub font_size: u32,
+    pub outline: f32,
+    pub shadow: f32,
+    /// Waveform extraction resolution, in points per second.
+    pub peaks_resolution: u32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            model: "anthropic/claude-sonnet-4.5".to_string(),
+            temperature: 0.9,
+            context_lines: 12,
+            candidate_count: 3,
+            style_notes: String::new(),
+            font_name: "Arial".to_string(),
+            font_size: 48,
+            outline: 2.0,
+            shadow: 0.0,
+            peaks_resolution: 80,
+        }
+    }
+}
+
+fn settings_path(app: &AppHandle) -> AppResult<PathBuf> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| AppError::msg(format!("No config directory: {e}")))?;
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join("settings.json"))
+}
+
+#[tauri::command]
+pub fn load_settings(app: AppHandle) -> AppResult<Settings> {
+    let path = settings_path(&app)?;
+    match std::fs::read(&path) {
+        // A corrupt or partial settings file should not stop the app booting.
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
+        Err(_) => Ok(Settings::default()),
+    }
+}
+
+#[tauri::command]
+pub fn save_settings(app: AppHandle, settings: Settings) -> AppResult<()> {
+    let path = settings_path(&app)?;
+    std::fs::write(&path, serde_json::to_vec_pretty(&settings)?)?;
+    Ok(())
+}
+
+fn keyring_entry() -> AppResult<Entry> {
+    Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(AppError::from)
+}
+
+/// The key itself is never returned to the frontend — only whether one is set.
+#[tauri::command]
+pub fn has_api_key() -> bool {
+    keyring_entry()
+        .and_then(|e| e.get_password().map_err(AppError::from))
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn set_api_key(key: String) -> AppResult<()> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(AppError::msg("The API key is empty."));
+    }
+    keyring_entry()?.set_password(key)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_api_key() -> AppResult<()> {
+    match keyring_entry()?.delete_credential() {
+        Ok(()) => Ok(()),
+        // Clearing a key that was never stored is a success from the UI's view.
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(AppError::from(e)),
+    }
+}
+
+/// Used by the AI module; not exposed as a command.
+pub fn read_api_key() -> AppResult<String> {
+    let key = keyring_entry()?.get_password().map_err(|e| match e {
+        keyring::Error::NoEntry => AppError::msg(
+            "No OpenRouter API key saved. Add one in Settings before using the continue-feature.",
+        ),
+        other => AppError::from(other),
+    })?;
+    if key.trim().is_empty() {
+        return Err(AppError::msg("The saved OpenRouter API key is empty."));
+    }
+    Ok(key)
+}
