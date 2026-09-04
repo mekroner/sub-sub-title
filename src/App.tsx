@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 
 import { TransportBar } from "./components/TransportBar";
 import { VideoPane } from "./components/VideoPane";
@@ -12,8 +13,9 @@ import { ContinuePanel } from "./components/ContinuePanel";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { RenderDialog } from "./components/RenderDialog";
+import { RecentMenu } from "./components/RecentMenu";
 
-import { useProjectHistory } from "./state/useProjectHistory";
+import { emptyProject, useProjectHistory } from "./state/useProjectHistory";
 import { useShortcuts } from "./hooks/useShortcuts";
 
 import * as api from "./lib/api";
@@ -22,6 +24,12 @@ import { buildAss } from "./lib/ass";
 import { parseSrt, serializeSrt, speakerNameOf, stripSpeakerPrefix } from "./lib/srt";
 import { nextPaletteColor } from "./lib/colors";
 import { classifyDrop, VIDEO_EXTENSIONS } from "./lib/dropPaths";
+import {
+  PROJECT_EXTENSION,
+  parseProjectFile,
+  projectName,
+  serializeProjectFile,
+} from "./lib/projectFile";
 import { makeId } from "./lib/ids";
 import { clamp } from "./lib/time";
 import {
@@ -36,6 +44,7 @@ import {
   splitCueAt,
 } from "./lib/cues";
 import type {
+  AppState,
   Cue,
   MediaInfo,
   Project,
@@ -87,6 +96,14 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [apiKeySet, setApiKeySet] = useState(false);
   const [tools, setTools] = useState<ToolStatus | null>(null);
+
+  // The `.sstproj` this project was loaded from / last saved to; null until the
+  // first Save As.
+  const [projectPath, setProjectPath] = useState<string | null>(null);
+  const [appState, setAppState] = useState<AppState>({
+    lastProject: null,
+    recentProjects: [],
+  });
 
   const [paths, setPaths] = useState<ProjectPaths | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -205,22 +222,52 @@ export default function App() {
   );
 
   // --- Opening a video ----------------------------------------------------
+  /**
+   * Attaches a video to the panes without touching the cue data, so both
+   * "open a video" and "open a project" can use it. Returns the derived paths.
+   */
+  const attachMedia = useCallback(async (path: string) => {
+    const info = await api.probeMedia(path);
+    const derived = await api.derivePaths(path);
+
+    setMedia(info);
+    setPaths(derived);
+    setVideoUrl(convertFileSrc(path));
+    setPeaks(null);
+    setCurrentTime(0);
+    setSelectedCueId(null);
+    return { info, derived };
+  }, []);
+
+  /** Clears the media panes — a project whose video has gone missing, or New. */
+  const detachMedia = useCallback(() => {
+    setMedia(null);
+    setPaths(null);
+    setVideoUrl(null);
+    setPeaks(null);
+    setCurrentTime(0);
+    setSelectedCueId(null);
+  }, []);
+
   const openVideoAt = useCallback(
     async (path: string) => {
       try {
-        const info = await api.probeMedia(path);
-        const derived = await api.derivePaths(path);
+        const { info, derived } = await attachMedia(path);
+        // A bare video starts an untitled project; Save As names it. A sibling
+        // .sstproj adopts its name instead.
+        let adopted: string | null = null;
 
-        setMedia(info);
-        setPaths(derived);
-        setVideoUrl(convertFileSrc(path));
-        setPeaks(null);
-        setCurrentTime(0);
-        setSelectedCueId(null);
-
-        // Prefer the sidecar (it has speakers); fall back to a sibling .srt.
+        // Sibling project file, then the legacy sidecar (it has speakers), then
+        // a sibling .srt.
         let loaded: Project = { videoPath: path, cues: [], speakers: [] };
-        if (await api.fileExists(derived.sidecar)) {
+        if (await api.fileExists(derived.project)) {
+          const raw = await api.readTextFile(derived.project);
+          loaded = { ...parseProjectFile(raw), videoPath: path };
+          adopted = derived.project;
+          notify(
+            `Opened ${projectName(derived.project)} with ${loaded.cues.length} cues.`,
+          );
+        } else if (await api.fileExists(derived.sidecar)) {
           const raw = await api.readTextFile(derived.sidecar);
           const parsed = JSON.parse(raw) as Sidecar;
           loaded = {
@@ -238,11 +285,18 @@ export default function App() {
               (warnings.length ? ` (${warnings.length} warnings).` : "."),
           );
         } else {
-          notify("Video opened. No matching .srt or sidecar found.");
+          notify("Video opened. No matching project or .srt found.");
         }
 
         load(loaded);
+        setProjectPath(adopted);
         if (loaded.cues.length > 0) setSelectedCueId(loaded.cues[0].id);
+
+        // One write to the app state, so the two calls cannot race each other.
+        const stateCall = adopted
+          ? api.rememberProject(adopted, path)
+          : api.clearLastProject();
+        stateCall.then(setAppState).catch(() => undefined);
 
         if (!info.hasAudio) {
           notify("This file has no audio track, so there is no waveform.", "error");
@@ -251,29 +305,124 @@ export default function App() {
         notify(errorMessage(e), "error");
       }
     },
-    [load, notify],
+    [attachMedia, load, notify],
   );
 
-  // Opened via "Open with" in Explorer, or a path on the command line.
+  // --- Projects -----------------------------------------------------------
+  /**
+   * True when it is safe to throw the current project away. `dirty` is read
+   * through a ref because the callers are memoised on identities that must not
+   * change on every edit.
+   */
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const confirmDiscard = useCallback(async () => {
+    if (!dirtyRef.current) return true;
+    return ask("This project has unsaved changes. Discard them?", {
+      title: "Unsaved changes",
+      kind: "warning",
+      okLabel: "Discard",
+      cancelLabel: "Cancel",
+    });
+  }, []);
+
+  const openProjectAt = useCallback(
+    async (path: string) => {
+      try {
+        const raw = await api.readTextFile(path);
+        const loaded = parseProjectFile(raw);
+
+        if (loaded.videoPath && (await api.fileExists(loaded.videoPath))) {
+          const { info } = await attachMedia(loaded.videoPath);
+          if (!info.hasAudio) {
+            notify("This file has no audio track, so there is no waveform.", "error");
+          }
+        } else {
+          detachMedia();
+          notify(
+            loaded.videoPath
+              ? `The video ${loaded.videoPath} is missing. Cues loaded — use "Locate video…" to point at it.`
+              : "This project has no video attached.",
+            "error",
+          );
+        }
+
+        load(loaded);
+        setProjectPath(path);
+        if (loaded.cues.length > 0) setSelectedCueId(loaded.cues[0].id);
+        api.rememberProject(path, loaded.videoPath).then(setAppState).catch(() => undefined);
+      } catch (e) {
+        // A project that cannot be read is not worth offering again.
+        api.forgetProject(path).then(setAppState).catch(() => undefined);
+        notify(`Could not open ${path}: ${errorMessage(e)}`, "error");
+      }
+    },
+    [attachMedia, detachMedia, load, notify],
+  );
+
+  const openProject = useCallback(async () => {
+    if (!(await confirmDiscard())) return;
+    const picked = await openDialog({
+      multiple: false,
+      filters: [{ name: "sub-sub-title project", extensions: [PROJECT_EXTENSION] }],
+    });
+    if (typeof picked === "string") await openProjectAt(picked);
+  }, [confirmDiscard, openProjectAt]);
+
+  const openRecent = useCallback(
+    async (path: string) => {
+      if (!(await confirmDiscard())) return;
+      await openProjectAt(path);
+    },
+    [confirmDiscard, openProjectAt],
+  );
+
+  const newProject = useCallback(async () => {
+    if (!(await confirmDiscard())) return;
+    detachMedia();
+    setProjectPath(null);
+    load(emptyProject);
+    api.clearLastProject().then(setAppState).catch(() => undefined);
+    notify("New project. Open a video to get started.");
+  }, [confirmDiscard, detachMedia, load, notify]);
+
+  // Opened via "Open with" in Explorer, a path on the command line, or — failing
+  // that — the project that was open when the app last closed.
   const openedStartupFile = useRef(false);
   useEffect(() => {
     if (openedStartupFile.current) return;
     openedStartupFile.current = true;
-    api
-      .startupFile()
-      .then((path) => {
-        if (path) void openVideoAt(path);
-      })
-      .catch(() => undefined);
-  }, [openVideoAt]);
+
+    void (async () => {
+      const startup = await api.startupFile().catch(() => null);
+      if (startup) {
+        if (startup.toLowerCase().endsWith(`.${PROJECT_EXTENSION}`)) {
+          await openProjectAt(startup);
+        } else {
+          await openVideoAt(startup);
+        }
+        return;
+      }
+
+      const state = await api.loadAppState().catch(() => null);
+      if (!state) return;
+      setAppState(state);
+      if (state.lastProject && (await api.fileExists(state.lastProject))) {
+        await openProjectAt(state.lastProject);
+      } else if (state.lastProject) {
+        api.forgetProject(state.lastProject).then(setAppState).catch(() => undefined);
+      }
+    })();
+  }, [openProjectAt, openVideoAt]);
 
   const chooseVideo = useCallback(async () => {
+    if (!(await confirmDiscard())) return;
     const picked = await openDialog({
       multiple: false,
       filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
     });
     if (typeof picked === "string") await openVideoAt(picked);
-  }, [openVideoAt]);
+  }, [confirmDiscard, openVideoAt]);
 
   // --- Waveform extraction -------------------------------------------------
   useEffect(() => {
@@ -420,21 +569,62 @@ export default function App() {
   );
 
   // --- File actions -------------------------------------------------------
-  const saveSidecar = useCallback(async () => {
-    if (!paths) return notify("Open a video first.", "error");
+  const writeProjectTo = useCallback(
+    async (target: string) => {
+      try {
+        await api.writeTextFile(target, serializeProjectFile(project));
+        markSaved(project);
+        setProjectPath(target);
+        api
+          .rememberProject(target, project.videoPath)
+          .then(setAppState)
+          .catch(() => undefined);
+        notify(`Saved ${projectName(target)}.${PROJECT_EXTENSION}`);
+      } catch (e) {
+        notify(errorMessage(e), "error");
+      }
+    },
+    [project, markSaved, notify],
+  );
+
+  const saveProjectAs = useCallback(async () => {
+    const target = await saveDialog({
+      defaultPath: projectPath ?? paths?.project,
+      filters: [{ name: "sub-sub-title project", extensions: [PROJECT_EXTENSION] }],
+    });
+    if (!target) return;
+    // The dialog usually appends the filter's extension, but a typed name with
+    // no extension comes back bare.
+    const withExtension = target.toLowerCase().endsWith(`.${PROJECT_EXTENSION}`)
+      ? target
+      : `${target}.${PROJECT_EXTENSION}`;
+    await writeProjectTo(withExtension);
+  }, [projectPath, paths, writeProjectTo]);
+
+  const saveProject = useCallback(async () => {
+    if (projectPath) return writeProjectTo(projectPath);
+    await saveProjectAs();
+  }, [projectPath, writeProjectTo, saveProjectAs]);
+
+  /** Re-points a project at a video that was moved or renamed. */
+  const relocateVideo = useCallback(async () => {
+    const picked = await openDialog({
+      multiple: false,
+      filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
+    });
+    if (typeof picked !== "string") return;
     try {
-      const sidecar: Sidecar = {
-        version: 1,
-        savedAt: new Date().toISOString(),
-        ...project,
-      };
-      await api.writeTextFile(paths.sidecar, JSON.stringify(sidecar, null, 2));
-      markSaved(project);
-      notify(`Saved ${paths.stem}.captions.json`);
+      const { info } = await attachMedia(picked);
+      update((current) => ({ ...current, videoPath: picked }));
+      if (!info.hasAudio) {
+        notify("This file has no audio track, so there is no waveform.", "error");
+      } else {
+        notify("Video relocated. Save the project to keep the new path.");
+      }
     } catch (e) {
       notify(errorMessage(e), "error");
     }
-  }, [paths, project, markSaved, notify]);
+  }, [attachMedia, update, notify]);
 
   const importSrtFrom = useCallback(
     async (path: string) => {
@@ -469,7 +659,15 @@ export default function App() {
   const openDroppedPaths = useCallback(
     async (paths: string[]) => {
       const intent = classifyDrop(paths);
-      if (intent.kind === "video") return openVideoAt(intent.path);
+      if (intent.kind === "project") {
+        if (!(await confirmDiscard())) return;
+        return openProjectAt(intent.path);
+      }
+
+      if (intent.kind === "video") {
+        if (!(await confirmDiscard())) return;
+        return openVideoAt(intent.path);
+      }
 
       if (intent.kind === "srt") {
         if (!project.videoPath) {
@@ -478,9 +676,12 @@ export default function App() {
         return importSrtFrom(intent.path);
       }
 
-      notify("Drop a video file, or an .srt to import cues into the open video.", "error");
+      notify(
+        "Drop a project, a video, or an .srt to import cues into the open video.",
+        "error",
+      );
     },
-    [openVideoAt, importSrtFrom, project.videoPath, notify],
+    [confirmDiscard, openProjectAt, openVideoAt, importSrtFrom, project.videoPath, notify],
   );
 
   useEffect(() => {
@@ -558,6 +759,26 @@ export default function App() {
     generateRef.current = fn;
   }, []);
 
+  // --- Window title and close guard ---------------------------------------
+  useEffect(() => {
+    const name = projectPath ? projectName(projectPath) : "Untitled";
+    void getCurrentWindow()
+      .setTitle(`${name}${dirty ? " •" : ""} — sub-sub-title`)
+      .catch(() => undefined);
+  }, [projectPath, dirty]);
+
+  useEffect(() => {
+    const pending = getCurrentWindow().onCloseRequested(async (event) => {
+      // Always take the close back: the confirmation is async, so the window
+      // would otherwise be gone before the answer arrives.
+      event.preventDefault();
+      if (await confirmDiscard()) await getCurrentWindow().destroy();
+    });
+    return () => {
+      void pending.then((unlisten) => unlisten());
+    };
+  }, [confirmDiscard]);
+
   // --- Shortcuts ----------------------------------------------------------
   const modalOpen = showSettings || showHelp || showRender;
 
@@ -620,7 +841,10 @@ export default function App() {
         if (generateRef.current) generateRef.current();
         else notify("Add an OpenRouter API key in Settings first.", "error");
       },
-      save: () => void saveSidecar(),
+      save: () => void saveProject(),
+      saveAs: () => void saveProjectAs(),
+      newProject: () => void newProject(),
+      openProject: () => void openProject(),
       undo,
       redo,
       zoom: (direction) =>
@@ -636,19 +860,53 @@ export default function App() {
   // --- Render -------------------------------------------------------------
   const activeSpeaker =
     speakers.find((s) => s.id === activeCue?.speakerId) ?? null;
+  /** There is something worth writing to disk. */
+  const hasProject = Boolean(paths) || cues.length > 0 || speakers.length > 0;
 
   return (
     <div className="app">
       <header className="toolbar">
         <div className="toolbar-group">
+          <button type="button" onClick={newProject} title="Ctrl+N">
+            New
+          </button>
+          <button type="button" onClick={openProject} title="Ctrl+O">
+            Open project…
+          </button>
+          <RecentMenu
+            projects={appState.recentProjects}
+            currentPath={projectPath}
+            onPick={(path) => void openRecent(path)}
+          />
+          <button
+            type="button"
+            onClick={saveProject}
+            disabled={!hasProject}
+            title="Ctrl+S"
+          >
+            Save{dirty ? " •" : ""}
+          </button>
+          <button
+            type="button"
+            onClick={saveProjectAs}
+            disabled={!hasProject}
+            title="Ctrl+Shift+S"
+          >
+            Save As…
+          </button>
+        </div>
+
+        <div className="toolbar-group">
           <button type="button" className="primary" onClick={chooseVideo}>
             Open video…
           </button>
+          {projectPath && !videoUrl && (
+            <button type="button" onClick={relocateVideo} title="Point at the moved video">
+              Locate video…
+            </button>
+          )}
           <button type="button" onClick={importSrt} disabled={!paths}>
             Import .srt
-          </button>
-          <button type="button" onClick={saveSidecar} disabled={!paths}>
-            Save{dirty ? " •" : ""}
           </button>
         </div>
 
@@ -680,7 +938,11 @@ export default function App() {
 
         <div className="toolbar-spacer">
           <span className="file-label">
-            {paths ? `${paths.stem} — ${cues.length} cues` : "No project"}
+            {hasProject
+              ? `${projectPath ? projectName(projectPath) : "Untitled"}${
+                  dirty ? " •" : ""
+                } — ${paths ? `${paths.stem} · ` : ""}${cues.length} cues`
+              : "No project"}
             {peaksBusy && " · extracting waveform…"}
           </span>
         </div>

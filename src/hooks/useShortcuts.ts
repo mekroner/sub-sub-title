@@ -16,6 +16,9 @@ export interface ShortcutActions {
   deleteSelected: () => void;
   generateContinuation: () => void;
   save: () => void;
+  saveAs: () => void;
+  newProject: () => void;
+  openProject: () => void;
   undo: () => void;
   redo: () => void;
   zoom: (direction: number) => void;
@@ -89,6 +92,15 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
           break;
         case "save":
           a.save();
+          break;
+        case "saveAs":
+          a.saveAs();
+          break;
+        case "newProject":
+          a.newProject();
+          break;
+        case "openProject":
+          a.openProject();
           break;
         case "undo":
           a.undo();

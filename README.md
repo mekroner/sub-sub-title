@@ -10,8 +10,8 @@ for this specific loop only.
 ## The loop
 
 1. Open a video — via the button, by dragging it onto the window, or as a
-   command-line argument. A sibling `.captions.json` or `.srt` is picked up
-   automatically.
+   command-line argument. A sibling `.sstproj`, `.captions.json` or `.srt` is
+   picked up automatically. The project you had open last reopens on launch.
 2. Tag each line with a speaker (`1`–`9`), each speaker having a colour.
 3. Fine-tune timing by dragging regions on the waveform.
 4. Optionally ask an AI to propose the next line of dialogue.
@@ -34,13 +34,35 @@ play in the preview.
 
 | File | Role |
 |---|---|
-| `<name>.captions.json` | The project sidecar — cues, speakers, colours. This is the native save format. |
+| `<name>.sstproj` | The project file — cues, speakers, colours, and the path of the video. This is the native save format. |
+| `<name>.captions.json` | The legacy sidecar. Still read when opening a bare video; no longer written. |
 | `<name>.srt` | Import source, and a plain export with speaker data stripped for portability. |
 | `<name>.ass` | Styled export: one `Style` per speaker, `Actor` set per line. This is what renders colour on burn-in. |
 | `<name>.subtitled.mp4` | Default burn-in output. |
 
-`Save` (Ctrl+S) writes the sidecar only. The `.srt` and `.ass` exports are
+`Save` (Ctrl+S) writes the project file only. The `.srt` and `.ass` exports are
 explicit actions, so an export never silently overwrites your source subtitles.
+
+## Projects
+
+A project holds the cues, the speakers, and a *reference* to the video — the
+video itself is never copied, so projects stay tiny and the same footage can back
+several of them. Save As suggests `<video>.sstproj` next to the video, but the
+file can live anywhere.
+
+- **New** (Ctrl+N), **Open project…** (Ctrl+O), **Save** (Ctrl+S), **Save As…**
+  (Ctrl+Shift+S).
+- **Recent ▾** lists the last ten projects; pick one to switch.
+- The project open when the app closed reopens on the next launch. A file passed
+  on the command line wins over it.
+- Anything that would discard unsaved edits — New, opening another project or
+  video, closing the window — asks first. The window title carries the project
+  name and a `•` while there are unsaved changes.
+- If the video has moved, the project still opens with its cues and offers
+  **Locate video…** to re-point it.
+
+`lastProject` and the recents list live in `state.json` in the app config
+directory, beside `settings.json` — they are per-machine, not part of any project.
 
 ## Keyboard shortcuts
 
@@ -59,7 +81,10 @@ explicit actions, so an export never silently overwrites your source subtitles.
 | `N` | New cue at the playhead |
 | `Delete` | Delete the selected cue |
 | `Ctrl+G` | Generate a continuation for the selected cue |
-| `Ctrl+S` | Save the sidecar |
+| `Ctrl+N` | New project |
+| `Ctrl+O` | Open a project |
+| `Ctrl+S` | Save the project |
+| `Ctrl+Shift+S` | Save the project as… |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `+` / `-` | Zoom the waveform |
 | `F` | Toggle follow-playhead scrolling |
@@ -90,16 +115,18 @@ not 1×). Slow speeds are the useful ones for catching exact speech onsets.
 
 Volume, mute and speed persist between sessions in the webview's `localStorage`.
 They are per-machine UI preferences, not part of the project, so they are
-deliberately kept out of the `.captions.json` sidecar.
+deliberately kept out of the project file.
 
 ## Drag and drop
 
 Drop onto the window:
 
-- a **video** — opens it as the project, picking up a sibling sidecar or `.srt`;
+- an **`.sstproj`** — opens that project;
+- a **video** — opens it as the project, picking up a sibling project, sidecar
+  or `.srt`;
 - an **`.srt`** — imports its cues into the video already open.
 
-Dropping both at once opens the video. This uses Tauri's own drag-drop events
+Dropping several at once prefers the project, then the video. This uses Tauri's own drag-drop events
 rather than the HTML5 ones, because only those carry a real filesystem path,
 which is what ffmpeg needs.
 
