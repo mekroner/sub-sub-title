@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 
+import { TransportBar } from "./components/TransportBar";
 import { VideoPane } from "./components/VideoPane";
 import { WaveformPane } from "./components/WaveformPane";
 import { CueList } from "./components/CueList";
@@ -19,6 +21,7 @@ import { errorMessage } from "./lib/api";
 import { buildAss } from "./lib/ass";
 import { parseSrt, serializeSrt, speakerNameOf, stripSpeakerPrefix } from "./lib/srt";
 import { nextPaletteColor } from "./lib/colors";
+import { classifyDrop, VIDEO_EXTENSIONS } from "./lib/dropPaths";
 import { makeId } from "./lib/ids";
 import { clamp } from "./lib/time";
 import {
@@ -56,7 +59,26 @@ const DEFAULT_SETTINGS: Settings = {
   peaksResolution: 80,
 };
 
-const VIDEO_EXTENSIONS = ["mp4", "m4v", "mov", "webm", "mkv"];
+const STORAGE_PREFIX = "sub-sub-title:";
+
+/** localStorage can throw outright (blocked site data), so never let it escape. */
+function readStored(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(STORAGE_PREFIX + key);
+    const value = raw === null ? NaN : Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStored(key: string, value: number): void {
+  try {
+    localStorage.setItem(STORAGE_PREFIX + key, String(value));
+  } catch {
+    // A lost preference is not worth interrupting an edit session.
+  }
+}
 
 export default function App() {
   const { project, update, undo, redo, load, markSaved, dirty, canUndo, canRedo } =
@@ -76,6 +98,12 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(50);
+  const [dropActive, setDropActive] = useState(false);
+  // Transport preferences are per-machine UI state, so they live in
+  // localStorage rather than the project or the app config file.
+  const [volume, setVolume] = useState(() => readStored("volume", 1));
+  const [muted, setMuted] = useState(() => readStored("muted", 0) === 1);
+  const [playbackRate, setPlaybackRate] = useState(() => readStored("playbackRate", 1));
   const [follow, setFollow] = useState(true);
 
   const [showSettings, setShowSettings] = useState(false);
@@ -138,6 +166,32 @@ export default function App() {
   );
   const frameStep = media && media.fps > 0 ? 1 / media.fps : 0.04;
   const duration = media?.duration ?? 0;
+
+  // --- Transport ----------------------------------------------------------
+  // Loading a new source resets volume/rate on the element, so re-apply on
+  // `loadeddata` as well as whenever the values change.
+  useEffect(() => {
+    if (!videoEl) return;
+    const apply = () => {
+      videoEl.volume = clamp(volume, 0, 1);
+      videoEl.muted = muted;
+      videoEl.playbackRate = playbackRate;
+    };
+    apply();
+    videoEl.addEventListener("loadeddata", apply);
+    return () => videoEl.removeEventListener("loadeddata", apply);
+  }, [videoEl, volume, muted, playbackRate, videoUrl]);
+
+  useEffect(() => writeStored("volume", volume), [volume]);
+  useEffect(() => writeStored("muted", muted ? 1 : 0), [muted]);
+  useEffect(() => writeStored("playbackRate", playbackRate), [playbackRate]);
+
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) void video.play();
+    else video.pause();
+  }, []);
 
   // --- Seeking ------------------------------------------------------------
   const seek = useCallback(
@@ -411,6 +465,43 @@ export default function App() {
     if (typeof picked === "string") await importSrtFrom(picked);
   }, [importSrtFrom]);
 
+  // --- Drag and drop ------------------------------------------------------
+  const openDroppedPaths = useCallback(
+    async (paths: string[]) => {
+      const intent = classifyDrop(paths);
+      if (intent.kind === "video") return openVideoAt(intent.path);
+
+      if (intent.kind === "srt") {
+        if (!project.videoPath) {
+          return notify("Open a video before dropping subtitles onto it.", "error");
+        }
+        return importSrtFrom(intent.path);
+      }
+
+      notify("Drop a video file, or an .srt to import cues into the open video.", "error");
+    },
+    [openVideoAt, importSrtFrom, project.videoPath, notify],
+  );
+
+  useEffect(() => {
+    // Tauri's own drag-drop events; the webview's HTML5 ones are suppressed
+    // while this is enabled, so file paths arrive here rather than as File
+    // objects (which would have no usable path for ffmpeg).
+    const pending = getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type === "over" || event.payload.type === "enter") {
+        setDropActive(true);
+      } else if (event.payload.type === "drop") {
+        setDropActive(false);
+        void openDroppedPaths(event.payload.paths);
+      } else {
+        setDropActive(false);
+      }
+    });
+    return () => {
+      void pending.then((unlisten) => unlisten());
+    };
+  }, [openDroppedPaths]);
+
   const exportSrt = useCallback(async () => {
     if (cues.length === 0) return notify("Nothing to export.", "error");
     const target = await saveDialog({
@@ -472,12 +563,7 @@ export default function App() {
 
   useShortcuts(
     {
-      togglePlay: () => {
-        const video = videoRef.current;
-        if (!video) return;
-        if (video.paused) void video.play();
-        else video.pause();
-      },
+      togglePlay,
       assignSpeakerIndex: (index) => {
         const speaker = speakers[index];
         if (!speaker || !selectedCueId) return;
@@ -642,6 +728,24 @@ export default function App() {
             onError={(message) => notify(message, "error")}
           />
 
+          <TransportBar
+            enabled={Boolean(videoUrl)}
+            playing={playing}
+            currentTime={currentTime}
+            duration={duration}
+            volume={volume}
+            muted={muted}
+            playbackRate={playbackRate}
+            onTogglePlay={togglePlay}
+            onVolumeChange={(v) => {
+              setVolume(v);
+              // Dragging the slider up is an unmute in every player.
+              if (v > 0 && muted) setMuted(false);
+            }}
+            onToggleMute={() => setMuted((m) => !m)}
+            onPlaybackRateChange={setPlaybackRate}
+          />
+
           <WaveformPane
             videoEl={videoEl}
             peaks={peaks}
@@ -699,6 +803,15 @@ export default function App() {
           />
         </section>
       </main>
+
+      {dropActive && (
+        <div className="drop-overlay">
+          <div className="drop-card">
+            <strong>Drop to open</strong>
+            <span>A video replaces the project; an .srt imports cues into it.</span>
+          </div>
+        </div>
+      )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
 

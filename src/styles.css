@@ -285,6 +285,86 @@ kbd {
   display: block;
 }
 
+/* --- Transport --------------------------------------------------------- */
+
+.transport-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+}
+.transport-play {
+  width: 34px;
+  height: 28px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+}
+.transport-time {
+  font-variant-numeric: tabular-nums;
+  min-width: 130px;
+}
+.transport-time .dim {
+  color: var(--text-dim);
+}
+.transport-spacer {
+  flex: 1;
+}
+.transport-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.transport-label {
+  color: var(--text-dim);
+}
+.volume-slider {
+  width: 110px;
+  padding: 0;
+}
+.transport-readout {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+}
+.transport-group select {
+  padding: 3px 4px;
+}
+
+/* --- Drag and drop ----------------------------------------------------- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 12, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+  pointer-events: none;
+}
+.drop-card {
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  padding: 28px 44px;
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  text-align: center;
+}
+.drop-card strong {
+  font-size: 17px;
+}
+.drop-card span {
+  color: var(--text-dim);
+}
+
 /* --- Waveform ---------------------------------------------------------- */
 
 .waveform-pane {

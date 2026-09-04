@@ -9,7 +9,9 @@ for this specific loop only.
 
 ## The loop
 
-1. Open a video. A sibling `.captions.json` or `.srt` is picked up automatically.
+1. Open a video — via the button, by dragging it onto the window, or as a
+   command-line argument. A sibling `.captions.json` or `.srt` is picked up
+   automatically.
 2. Tag each line with a speaker (`1`–`9`), each speaker having a colour.
 3. Fine-tune timing by dragging regions on the waveform.
 4. Optionally ask an AI to propose the next line of dialogue.
@@ -67,6 +69,27 @@ Shortcuts are matched on **physical key position**, so `[` and `]` work on a
 Norwegian layout (where they need AltGr) by pressing the keys where `[` and `]`
 sit on a US board. `,` and `.` are bound to the same nudge actions as an
 easier-to-reach alternative. Shortcuts are inert while a text box has focus.
+
+## Transport controls
+
+Under the video: play/pause, elapsed/total time, a volume slider with a mute
+toggle, and a playback-speed selector (0.25×–2×, with a reset button when it is
+not 1×). Slow speeds are the useful ones for catching exact speech onsets.
+
+Volume, mute and speed persist between sessions in the webview's `localStorage`.
+They are per-machine UI preferences, not part of the project, so they are
+deliberately kept out of the `.captions.json` sidecar.
+
+## Drag and drop
+
+Drop onto the window:
+
+- a **video** — opens it as the project, picking up a sibling sidecar or `.srt`;
+- an **`.srt`** — imports its cues into the video already open.
+
+Dropping both at once opens the video. This uses Tauri's own drag-drop events
+rather than the HTML5 ones, because only those carry a real filesystem path,
+which is what ffmpeg needs.
 
 ## Speaker tagging
 
