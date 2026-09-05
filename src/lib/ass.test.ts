@@ -23,6 +23,7 @@ const settings: Settings = {
   dialect: "american",
   whisperModel: "medium",
   whisperLanguage: "",
+  whisperEnginePath: "",
 };
 
 const speakers: Speaker[] = [

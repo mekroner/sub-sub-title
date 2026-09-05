@@ -14,11 +14,13 @@ use crate::error::{AppError, AppResult};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::media::quiet_command;
+use std::process::Stdio;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const ENGINE_VERSION: &str = "r245.4";
@@ -98,6 +100,9 @@ impl EngineProgress {
         }
     }
 
+    /// `done`/`total` are archive entries here, not bytes — bsdtar reports
+    /// progress per entry. The dialog only renders the byte fields for the
+    /// download phase, so the shared struct is not misleading in the UI.
     fn extracting(done: u64, total: u64, detail: &str) -> Self {
         let fraction = if total > 0 {
             (done as f64 / total as f64).clamp(0.0, 1.0)
@@ -186,6 +191,23 @@ fn manifest_path(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(engine_root(app)?.join("engine.json"))
 }
 
+/// An engine the user installed by hand and pointed at in Settings. Checked
+/// before the managed install, so anyone who unpacks the archive themselves —
+/// the escape hatch every unpack failure message offers — is never asked to
+/// download 1.4 GB again.
+fn override_exe(app: &AppHandle) -> Option<PathBuf> {
+    let settings = crate::settings::load_settings(app.clone()).ok()?;
+    let path = PathBuf::from(settings.whisper_engine_path.trim());
+    path.is_file().then_some(path)
+}
+
+/// The engine to run, wherever it came from. The single place that answers
+/// "is the engine available", so the status command and the transcriber can
+/// never disagree.
+pub fn resolve_exe(app: &AppHandle) -> Option<PathBuf> {
+    override_exe(app).or_else(|| read_manifest(app).map(|m| m.exe_path))
+}
+
 /// Returns the manifest only when the exe it names is still there, so deleting
 /// the folder by hand self-heals into "not installed" rather than a confusing
 /// failure at spawn time.
@@ -217,14 +239,14 @@ fn model_present(app: &AppHandle, model: &str) -> bool {
 }
 
 pub fn status(app: &AppHandle, model: &str) -> EngineStatus {
-    let manifest = read_manifest(app);
+    let exe = resolve_exe(app);
     let partial = part_path(app)
         .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
         .unwrap_or(0);
     EngineStatus {
-        installed: manifest.is_some(),
+        installed: exe.is_some(),
         engine_version: ENGINE_VERSION.to_string(),
-        exe_path: manifest.map(|m| m.exe_path.to_string_lossy().into_owned()),
+        exe_path: exe.map(|p| p.to_string_lossy().into_owned()),
         partial_bytes: partial,
         download_bytes: ENGINE_SIZE_BYTES,
         disk_free_bytes: local_dir(app).map(|d| free_space(&d)).unwrap_or(0),
@@ -250,27 +272,25 @@ fn free_space(path: &Path) -> u64 {
         .chain(std::iter::once(0))
         .collect();
     let mut free: u64 = 0;
-    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call, and
-    // the two output pointers are valid for the duration.
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call and
+    // `free` is a valid writable u64 for its duration; the two trailing
+    // out-parameters are explicitly null, which the API documents as allowed.
+    // The declaration comes from windows-sys rather than being written here:
+    // this function has four out-pointers, and a hand-written `extern` that
+    // omits one compiles cleanly and then corrupts memory at run time.
     let ok = unsafe {
-        windows_get_disk_free_space(wide.as_ptr(), &mut free as *mut u64, std::ptr::null_mut())
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free as *mut u64,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
     };
     if ok == 0 {
         0
     } else {
         free
     }
-}
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-extern "system" {
-    #[link_name = "GetDiskFreeSpaceExW"]
-    fn windows_get_disk_free_space(
-        directory: *const u16,
-        free_bytes_available_to_caller: *mut u64,
-        total_number_of_bytes: *mut u64,
-    ) -> i32;
 }
 
 #[cfg(not(windows))]
@@ -294,7 +314,7 @@ fn human_bytes(bytes: u64) -> String {
 /// Download, verify, unpack and locate the engine. Idempotent: returns straight
 /// away when a previous install is still intact.
 pub async fn install(app: &AppHandle, cancelled: Arc<AtomicBool>) -> AppResult<()> {
-    if read_manifest(app).is_some() {
+    if resolve_exe(app).is_some() {
         return Ok(());
     }
 
@@ -387,7 +407,7 @@ async fn download(app: &AppHandle, cancelled: &AtomicBool) -> AppResult<()> {
 
     let total = response
         .content_length()
-        .map(|len| len + written)
+        .and_then(|len| len.checked_add(written))
         .unwrap_or(0);
 
     let mut file = std::io::BufWriter::with_capacity(
@@ -418,7 +438,7 @@ async fn download(app: &AppHandle, cancelled: &AtomicBool) -> AppResult<()> {
             ))
         })?;
         file.write_all(&chunk).map_err(disk_error)?;
-        written += chunk.len() as u64;
+        written = written.saturating_add(chunk.len() as u64);
         if last_emit.elapsed() >= PROGRESS_INTERVAL {
             last_emit = Instant::now();
             let _ = app.emit(
@@ -500,113 +520,151 @@ fn sha256_file(path: &Path) -> AppResult<String> {
         .collect())
 }
 
-/// Reject anything that would escape the destination directory: absolute paths,
-/// drive prefixes, and `..`. 7z entry names come from the archive, so they are
-/// untrusted input.
-fn safe_relative(name: &str) -> Option<PathBuf> {
-    let normalised = name.replace('\\', "/");
-    let path = Path::new(&normalised);
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => out.push(part),
-            // A lone "." is harmless noise; everything else is an escape.
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
-        }
+
+/// bsdtar, shipped with Windows since 10 1803. The absolute path is deliberate:
+/// Git for Windows and MSYS both put a `tar` on PATH, and theirs is GNU tar,
+/// which cannot read 7z at all.
+fn tar_bin() -> String {
+    match std::env::var("SystemRoot") {
+        Ok(root) => format!("{root}\\System32\\tar.exe"),
+        Err(_) => "tar".to_string(),
     }
-    (!out.as_os_str().is_empty()).then_some(out)
 }
 
+/// Unpack the archive with bsdtar and return the path to the engine executable.
+///
+/// This does *not* use a Rust 7z crate. The archive is PyInstaller output, so
+/// its executables are BCJ2-filtered, and the only maintained pure-Rust decoder
+/// (`lzma-rust2`, via `sevenz-rust2`) overflows on that filter. In a debug build
+/// that panics; in a release build, where overflow checks are off, it would
+/// wrap silently and write a *corrupted engine* to disk — a far worse failure
+/// than not extracting at all. bsdtar's libarchive handles it correctly, and
+/// unpacks the whole 4 GB in about a minute.
 fn extract(
     app: &AppHandle,
     archive: &Path,
     dest: &Path,
     cancelled: &AtomicBool,
 ) -> AppResult<PathBuf> {
-    let unpack_failed = |e: String| {
+    let unpack_failed = |detail: String| {
         AppError::msg(format!(
-            "Could not unpack the transcription engine: {e}\n\nYou can download it \
-             yourself from {ENGINE_URL} and set the engine path in Settings."
+            "Could not unpack the transcription engine: {detail}\n\nYou can download it \
+             yourself from {ENGINE_URL}, unpack it, and set the engine path in Settings."
         ))
     };
 
     std::fs::create_dir_all(dest)?;
-    let mut reader = sevenz_rust2::ArchiveReader::open(archive, sevenz_rust2::Password::empty())
-        .map_err(|e| unpack_failed(e.to_string()))?;
+    let tar = tar_bin();
 
-    // Byte-weighted, not entry-counted: the archive is a handful of very large
-    // DLLs plus thousands of tiny files, so counting entries would sit at 90%
-    // almost immediately and then stall.
-    let total: u64 = reader.archive().files.iter().map(|f| f.size()).sum();
-    let mut done: u64 = 0;
-    let mut last_emit = Instant::now();
-    let mut cancelled_during = false;
-    // Writing to disk can fail for reasons sevenz-rust2 has no vocabulary for
-    // (a full disk, antivirus locking a file). Carry ours out separately rather
-    // than forcing it into the crate's error type.
-    let mut write_error: Option<AppError> = None;
+    // A header-only read: about 5,700 entries in a tenth of a second, so the
+    // progress bar gets a real denominator essentially for free. Entry-counted
+    // progress is not perfectly linear — a few large DLLs take longer than a
+    // thousand small files — but over a one-minute unpack that is fine, and it
+    // beats an empty bar.
+    let total = quiet_command(&tar)
+        .arg("-tf")
+        .arg(archive)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map(|out| out.stdout.iter().filter(|b| **b == b'\n').count() as u64)
+        .unwrap_or(0);
 
-    let result = reader.for_each_entries(|entry, stream| {
-        if cancelled.load(Ordering::SeqCst) {
-            cancelled_during = true;
-            return Ok(false);
-        }
-        let Some(relative) = safe_relative(entry.name()) else {
-            // Skip rather than fail: one hostile name should not cost the user
-            // the whole 1.4 GB download.
-            return Ok(true);
-        };
-        let out = dest.join(relative);
-        let written = (|| -> std::io::Result<()> {
-            if entry.is_directory() {
-                std::fs::create_dir_all(&out)?;
-            } else {
-                if let Some(parent) = out.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let mut file = std::io::BufWriter::new(std::fs::File::create(&out)?);
-                std::io::copy(stream, &mut file)?;
-                file.flush()?;
-            }
-            Ok(())
-        })();
-        if let Err(e) = written {
-            write_error = Some(if e.kind() == std::io::ErrorKind::StorageFull {
-                AppError::msg(
-                    "Ran out of disk space while unpacking the transcription engine. \
-                     About 4 GB is needed.",
-                )
-            } else {
+    let mut child = quiet_command(&tar)
+        // -v names each entry as it lands, which is what drives the progress.
+        .args(["-xvf"])
+        .arg(archive)
+        .arg("-C")
+        .arg(dest)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
                 AppError::msg(format!(
-                    "Could not write {}: {e}",
-                    out.file_name().unwrap_or_default().to_string_lossy()
+                    "Windows' built-in tar could not be found, so the engine cannot be \
+                     unpacked automatically. Download it from {ENGINE_URL}, unpack it, \
+                     and set the engine path in Settings."
                 ))
-            });
-            return Ok(false);
+            } else {
+                unpack_failed(e.to_string())
+            }
+        })?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    // bsdtar writes the verbose entry list to stderr and diagnostics to stdout;
+    // both are drained on their own threads so neither pipe can fill and
+    // deadlock the child.
+    let progress_app = app.clone();
+    let progress = std::thread::spawn(move || {
+        let mut done: u64 = 0;
+        let mut last_emit = Instant::now();
+        if let Some(stderr) = stderr {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let name = line.trim_start_matches('x').trim();
+                if name.is_empty() {
+                    continue;
+                }
+                done = done.saturating_add(1);
+                if last_emit.elapsed() >= PROGRESS_INTERVAL {
+                    last_emit = Instant::now();
+                    let _ = progress_app
+                        .emit("engine-progress", EngineProgress::extracting(done, total, name));
+                }
+            }
         }
-        done += entry.size();
-        if last_emit.elapsed() >= PROGRESS_INTERVAL {
-            last_emit = Instant::now();
-            let _ = app.emit(
-                "engine-progress",
-                EngineProgress::extracting(done, total, entry.name()),
-            );
+        done
+    });
+    let tail = std::thread::spawn(move || {
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(stdout) = stdout {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                lines.push(line);
+                if lines.len() > 20 {
+                    lines.remove(0);
+                }
+            }
         }
-        Ok(true)
+        lines.join("\n")
     });
 
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(_) => break None,
+        }
+        if cancelled.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    let _ = progress.join();
+    let tail = tail.join().unwrap_or_default();
+
     // A half-unpacked tree is worse than none: it would look installed to a
-    // casual glance and fail at spawn time.
-    if cancelled_during {
+    // casual glance and then fail at spawn time.
+    if cancelled.load(Ordering::SeqCst) {
         let _ = std::fs::remove_dir_all(dest);
         return Err(AppError::msg("Unpacking the engine was cancelled."));
     }
-    if let Some(e) = write_error {
-        let _ = std::fs::remove_dir_all(dest);
-        return Err(e);
+    match status {
+        Some(s) if s.success() => {}
+        Some(s) => {
+            let _ = std::fs::remove_dir_all(dest);
+            return Err(unpack_failed(format!("tar exited with {s}.\n{tail}")));
+        }
+        None => {
+            let _ = std::fs::remove_dir_all(dest);
+            return Err(unpack_failed(format!("tar stopped unexpectedly.\n{tail}")));
+        }
     }
-    result.map_err(|e| unpack_failed(e.to_string()))?;
 
     locate_exe(dest).ok_or_else(|| {
         AppError::msg(format!(
@@ -653,35 +711,25 @@ fn locate_exe(root: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+
+    /// Calls the real Win32 entry point. A wrong `extern` signature here is not
+    /// a compile error and not a panic — it is an access violation that takes
+    /// the whole app down, so it has to be exercised rather than reviewed.
     #[test]
-    fn safe_relative_keeps_ordinary_names() {
-        assert_eq!(
-            safe_relative("Faster-Whisper-XXL/faster-whisper-xxl.exe"),
-            Some(PathBuf::from("Faster-Whisper-XXL").join("faster-whisper-xxl.exe"))
-        );
-        // 7z archives built on Windows use backslashes.
-        assert_eq!(
-            safe_relative(r"Faster-Whisper-XXL\_xxl_data\lib.dll"),
-            Some(
-                PathBuf::from("Faster-Whisper-XXL")
-                    .join("_xxl_data")
-                    .join("lib.dll")
-            )
-        );
-        assert_eq!(
-            safe_relative("./a/./b.txt"),
-            Some(PathBuf::from("a").join("b.txt"))
-        );
+    fn free_space_reports_a_real_figure() {
+        let here = std::env::current_dir().expect("a working directory");
+        assert!(free_space(&here) > 0);
     }
 
     #[test]
-    fn safe_relative_rejects_escapes() {
-        assert_eq!(safe_relative(r"..\..\evil.exe"), None);
-        assert_eq!(safe_relative("../evil.exe"), None);
-        assert_eq!(safe_relative(r"C:\evil.exe"), None);
-        assert_eq!(safe_relative("/etc/passwd"), None);
-        assert_eq!(safe_relative("a/../../b"), None);
-        assert_eq!(safe_relative(""), None);
+    fn free_space_walks_up_to_a_directory_that_exists() {
+        // The engine directory does not exist before the first install, so the
+        // probe has to climb to a real parent rather than failing.
+        let missing = std::env::current_dir()
+            .expect("a working directory")
+            .join("no-such-dir")
+            .join("nor-this-one");
+        assert!(free_space(&missing) > 0);
     }
 
     #[test]

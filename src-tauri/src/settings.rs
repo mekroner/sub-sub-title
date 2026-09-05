@@ -46,6 +46,9 @@ pub struct Settings {
     pub dialect: String,
     /// Whisper model size used by the transcribe dialog, e.g. "medium".
     pub whisper_model: String,
+    /// Absolute path to a manually installed faster-whisper-xxl.exe. Empty means
+    /// use the copy the app downloads and manages itself.
+    pub whisper_engine_path: String,
     /// Whisper language code, or empty for auto-detect.
     pub whisper_language: String,
 }
@@ -73,6 +76,7 @@ impl Default for Settings {
             dialect: "american".to_string(),
             whisper_model: "medium".to_string(),
             whisper_language: String::new(),
+            whisper_engine_path: String::new(),
         }
     }
 }

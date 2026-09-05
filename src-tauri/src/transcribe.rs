@@ -89,7 +89,7 @@ pub async fn transcribe_video(
     language: Option<String>,
     model: Option<String>,
 ) -> AppResult<String> {
-    let manifest = engine::read_manifest(&app).ok_or_else(|| {
+    let exe = engine::resolve_exe(&app).ok_or_else(|| {
         AppError::msg("The transcription engine is not installed yet. Download it first.")
     })?;
     if !Path::new(&video_path).is_file() {
@@ -113,7 +113,7 @@ pub async fn transcribe_video(
         },
     );
 
-    let mut command = quiet_command(&manifest.exe_path.to_string_lossy());
+    let mut command = quiet_command(&exe.to_string_lossy());
     // The media path must come FIRST. --output_format is variadic, so a path
     // placed after it is silently swallowed as another format name.
     command.arg(&video_path).args(["--model", &model]);
@@ -268,7 +268,11 @@ fn watch_output<R: Read>(app: &AppHandle, source: R) -> Vec<String> {
     let mut tail: Vec<String> = Vec::new();
     let mut phase = Phase::Unknown;
     let mut fraction = -1.0;
-    let mut last_emit = Instant::now() - PROGRESS_INTERVAL;
+    // Backdated so the first record emits immediately rather than 250 ms in.
+    // `checked_sub` because an Instant cannot go before the platform's epoch.
+    let mut last_emit = Instant::now()
+        .checked_sub(PROGRESS_INTERVAL)
+        .unwrap_or_else(Instant::now);
 
     read_records(source, |record| {
         let record = record.trim();
@@ -354,15 +358,18 @@ fn read_records<R: Read>(source: R, mut on_record: impl FnMut(&str)) {
 fn parse_percent(record: &str) -> Option<f64> {
     let bytes = record.as_bytes();
     let end = bytes.iter().position(|&c| c == b'%')?;
+    // Accept a decimal point as well as digits. The engine prints whole numbers
+    // today, but stopping at the '.' in "43.5%" would read it as 5%, which is
+    // a worse failure than not parsing at all.
     let start = bytes[..end]
         .iter()
-        .rposition(|&c| !c.is_ascii_digit())
+        .rposition(|&c| !c.is_ascii_digit() && c != b'.')
         .map_or(0, |p| p + 1);
     if start == end {
         return None;
     }
     let value: f64 = record[start..end].parse().ok()?;
-    // Rejects a rate like "3.4%/s" reading as 4% as well as outright nonsense.
+    // Rejects a rate like "250% faster" as well as outright nonsense.
     (value <= 100.0).then_some(value / 100.0)
 }
 
@@ -377,8 +384,8 @@ fn classify(record: &str) -> Phase {
     } else if lower.contains("vad") || lower.contains("silero") {
         Phase::Vad
     } else if lower.contains("transcrib")
-        || lower.contains("it/s")
-        || lower.contains("s/it")
+        || lower.contains("inference")
+        || lower.contains("audio seconds/s")
         || record.contains('|')
     {
         Phase::Transcribing
@@ -391,36 +398,93 @@ fn classify(record: &str) -> Phase {
 mod tests {
     use super::*;
 
+    /// Captured verbatim from `faster-whisper-xxl.exe r245.4 … -pp`. Every line
+    /// arrives on stdout — stderr stays empty — and each ends `\r\n`, with the
+    /// progress line ending `\r\r\n`.
+    const REAL_OUTPUT: &str = concat!(
+        "\r\n",
+        "Standalone Faster-Whisper-XXL r245.4 running on: CUDA\r\n",
+        "\r\n",
+        "Starting to process: C:/tmp/probe.wav\r\n",
+        "\r\n",
+        "Starting sequential faster-whisper inference.\r\n",
+        "\r\n",
+        "100% | 45/45 | 00:00<<00:00 | 111.58 audio seconds/s\r\r\n",
+        "\r\n",
+        "Transcription speed: 106.8 audio seconds/s\r\n",
+        "\r\n",
+        "Operation finished in:  0:00:02.825 \r\n",
+    );
+
     #[test]
-    fn parses_a_progress_bar_percentage() {
+    fn parses_the_engines_real_progress_line() {
+        // Note the ` | ` separators — not a tqdm `|####|` bar, which is what
+        // this parser was originally written against.
         assert_eq!(
-            parse_percent("Transcribe:  43%|####      | 129/300 [00:31<00:41,  4.1s/it]"),
+            parse_percent("100% | 45/45 | 00:00<<00:00 | 111.58 audio seconds/s"),
+            Some(1.0)
+        );
+        assert_eq!(
+            parse_percent(" 43% | 129/300 | 00:31<<00:41 | 4.1 audio seconds/s"),
             Some(0.43)
         );
-        assert_eq!(parse_percent("  0%|          | 0/300"), Some(0.0));
-        assert_eq!(parse_percent("100%|##########| 300/300"), Some(1.0));
+        assert_eq!(parse_percent("  0% | 0/300"), Some(0.0));
+        // A decimal must not be truncated to its fractional digits.
+        assert_eq!(parse_percent("43.5% | 130/300"), Some(0.435));
     }
 
     #[test]
     fn ignores_records_without_a_usable_percentage() {
+        assert_eq!(parse_percent("Transcription speed: 106.8 audio seconds/s"), None);
         assert_eq!(parse_percent("Detected language 'en'"), None);
         assert_eq!(parse_percent("no digits here %"), None);
-        // A bare rate must not be mistaken for progress.
         assert_eq!(parse_percent("speed 250% faster"), None);
     }
 
     #[test]
-    fn classifies_the_engine_phases() {
+    fn classifies_the_engines_real_output() {
         assert_eq!(
-            classify("Downloading model.bin: 12%|# | 180M/1.5G"),
-            Phase::ModelDownload
+            classify("100% | 45/45 | 00:00<<00:00 | 111.58 audio seconds/s"),
+            Phase::Transcribing
+        );
+        assert_eq!(
+            classify("Starting sequential faster-whisper inference."),
+            Phase::Transcribing
+        );
+        assert_eq!(
+            classify("Transcription speed: 106.8 audio seconds/s"),
+            Phase::Transcribing
+        );
+        assert_eq!(
+            classify("Standalone Faster-Whisper-XXL r245.4 running on: CUDA"),
+            Phase::Unknown
         );
         assert_eq!(classify("VAD filter removed 00:12.340 of audio"), Phase::Vad);
         assert_eq!(
-            classify("Transcribe:  43%|####      | 129/300"),
-            Phase::Transcribing
+            classify("Downloading model.bin: 12% | 180M/1.5G"),
+            Phase::ModelDownload
         );
-        assert_eq!(classify("Detected language 'en' with probability"), Phase::Unknown);
+    }
+
+    #[test]
+    fn drives_progress_from_the_engines_real_output() {
+        let mut phase = Phase::Unknown;
+        let mut fraction = -1.0;
+        read_records(REAL_OUTPUT.as_bytes(), |record| {
+            let record = record.trim();
+            if record.is_empty() {
+                return;
+            }
+            match classify(record) {
+                Phase::Unknown => {}
+                next => phase = next,
+            }
+            if let Some(parsed) = parse_percent(record) {
+                fraction = parsed;
+            }
+        });
+        assert_eq!(phase, Phase::Transcribing);
+        assert_eq!(fraction, 1.0);
     }
 
     #[test]

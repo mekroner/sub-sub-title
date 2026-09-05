@@ -105,6 +105,7 @@ const DEFAULT_SETTINGS: Settings = {
   dialect: "american",
   whisperModel: DEFAULT_WHISPER_MODEL,
   whisperLanguage: "",
+  whisperEnginePath: "",
 };
 
 interface FindState {
@@ -727,7 +728,14 @@ export default function App() {
     (raw: string, verb: "Imported" | "Transcribed") => {
       const { cues: parsed, warnings } = parseSrt(raw);
       if (parsed.length === 0) {
-        return notify("No cues could be read from that file.", "error");
+        // The engine exits cleanly with an empty .srt when it hears no speech,
+        // so blaming "that file" would be wrong on the transcription path.
+        return notify(
+          verb === "Transcribed"
+            ? "The transcription produced no cues — no speech was detected in the audio."
+            : "No cues could be read from that file.",
+          "error",
+        );
       }
       update((current) => ({ ...current, cues: parsed }));
       selectOnly(parsed[0].id);

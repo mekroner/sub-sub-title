@@ -23,10 +23,15 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 encoding_rs = "0.8"
 thiserror = "2"
 harper-core = "2.8.0"
-# Speech to text: streaming the engine download and unpacking its .7z.
-sevenz-rust2 = "0.22"
+# Speech to text: streaming the engine download.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+# Only for GetDiskFreeSpaceExW. Hand-writing that `extern` declaration is a
+# memory-safety bug waiting to happen — the signature has four out-pointers and
+# omitting one is not a compile error.
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [profile.release]
 codegen-units = 1

@@ -113,6 +113,11 @@ export interface Settings {
   whisperModel: string;
   /** Whisper language code, or "" for auto-detect. */
   whisperLanguage: string;
+  /**
+   * Absolute path to a faster-whisper-xxl.exe installed by hand; "" to use the
+   * copy the app downloads and manages itself.
+   */
+  whisperEnginePath: string;
 }
 
 export interface ModelInfo {

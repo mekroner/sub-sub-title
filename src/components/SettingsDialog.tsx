@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { ModelInfo, Settings } from "../types";
 import {
   clearApiKey,
@@ -334,6 +335,40 @@ export function SettingsDialog({
               flagged cue to fix it, or to add the word to a dictionary. “Proofread with
               AI” in the Edit menu is a separate, optional pass that does send cue text
               to OpenRouter.
+            </p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Transcription</legend>
+            <label className="field">
+              <span>Engine path (optional)</span>
+              <div className="field-row">
+                <input
+                  value={draft.whisperEnginePath}
+                  placeholder="Downloaded and managed by the app"
+                  onChange={(e) => set("whisperEnginePath", e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const picked = await openDialog({
+                      multiple: false,
+                      filters: [
+                        { name: "Faster-Whisper-XXL", extensions: ["exe"] },
+                      ],
+                    });
+                    if (typeof picked === "string") set("whisperEnginePath", picked);
+                  }}
+                >
+                  Browse…
+                </button>
+              </div>
+            </label>
+            <p className="hint">
+              Leave this empty and File ▸ Transcribe… will download Faster-Whisper-XXL
+              for you. Set it only if you have unpacked the engine yourself — point it
+              at <code>faster-whisper-xxl.exe</code>. A path set here wins over the
+              downloaded copy.
             </p>
           </fieldset>
 
