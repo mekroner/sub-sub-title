@@ -18,10 +18,12 @@ import type { Menu, MenuEntry } from "./components/MenuBar";
 import { ContextMenu } from "./components/ContextMenu";
 import type { ContextMenuState } from "./components/ContextMenu";
 import { FindBar } from "./components/FindBar";
+import { ProofreadDialog } from "./components/ProofreadDialog";
 
 import { emptyProject, useProjectHistory } from "./state/useProjectHistory";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useCueSelection } from "./hooks/useCueSelection";
+import { useSpellcheck } from "./hooks/useSpellcheck";
 
 import * as api from "./lib/api";
 import { errorMessage } from "./lib/api";
@@ -61,9 +63,16 @@ import {
   matchesQuery,
   replaceIn,
 } from "./lib/text";
+import {
+  applyReplacement,
+  isSingleWord,
+  issueSeverity,
+  replacementLabel,
+} from "./lib/issues";
 import type {
   AppState,
   Cue,
+  CueIssue,
   MediaInfo,
   Project,
   ProjectPaths,
@@ -90,6 +99,8 @@ const DEFAULT_SETTINGS: Settings = {
   minGap: DEFAULT_MIN_GAP,
   maxCharsPerLine: DEFAULT_MAX_CHARS_PER_LINE,
   maxLines: DEFAULT_MAX_LINES,
+  spellcheck: true,
+  dialect: "american",
 };
 
 interface FindState {
@@ -158,6 +169,9 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showRender, setShowRender] = useState(false);
+  const [showProofread, setShowProofread] = useState(false);
+  /** The user's personal word list, shared by every project. */
+  const [userDictionary, setUserDictionary] = useState<string[]>([]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [find, setFind] = useState<FindState | null>(null);
   const [toast, setToast] = useState<{ text: string; kind: "info" | "error" } | null>(
@@ -201,6 +215,7 @@ export default function App() {
   useEffect(() => {
     api.loadSettings().then(setSettings).catch(() => undefined);
     api.hasApiKey().then(setApiKeySet).catch(() => undefined);
+    api.loadUserDictionary().then(setUserDictionary).catch(() => undefined);
     api
       .checkTools()
       .then((status) => {
@@ -911,6 +926,58 @@ export default function App() {
     notify(`Separated ${overlapping.length} overlapping cue${overlapping.length === 1 ? "" : "s"}.`);
   }, [cues, minGap, setCues, notify]);
 
+  // --- Spelling -----------------------------------------------------------
+  /** The project's own vocabulary plus the user's, as one list. */
+  const ignoredWords = useMemo(
+    () => [...(project.dictionary ?? []), ...userDictionary],
+    [project.dictionary, userDictionary],
+  );
+
+  const spellcheck = useSpellcheck({
+    cues,
+    enabled: settings.spellcheck,
+    dialect: settings.dialect,
+    ignored: ignoredWords,
+  });
+
+  /** Splice one suggestion into its cue. One undo entry, like any other edit. */
+  const applyIssue = useCallback(
+    (cueId: string, issue: CueIssue, replacement: string) => {
+      setCues((list) =>
+        list.map((c) =>
+          c.id === cueId ? { ...c, text: applyReplacement(c.text, issue, replacement) } : c,
+        ),
+      );
+    },
+    [setCues],
+  );
+
+  /** Excuse a word for this project only — character names, invented places. */
+  const ignoreWordInProject = useCallback(
+    (word: string) => {
+      update((current) => {
+        const existing = current.dictionary ?? [];
+        if (existing.some((w) => w.toLowerCase() === word.toLowerCase())) return current;
+        return { ...current, dictionary: [...existing, word] };
+      });
+      notify(`“${word}” will be ignored in this project. Save to keep it.`);
+    },
+    [update, notify],
+  );
+
+  /** Excuse a word everywhere, in every project on this machine. */
+  const addWordToDictionary = useCallback(
+    (word: string) => {
+      const next = [...userDictionary, word];
+      setUserDictionary(next);
+      api
+        .saveUserDictionary(next)
+        .then(() => notify(`“${word}” added to your dictionary.`))
+        .catch((e) => notify(errorMessage(e), "error"));
+    },
+    [userDictionary, notify],
+  );
+
   // --- Find and replace ---------------------------------------------------
   const matches = useMemo(() => {
     if (!find || find.query === "") return [];
@@ -989,7 +1056,7 @@ export default function App() {
   }, [confirmDiscard]);
 
   // --- Shortcuts ----------------------------------------------------------
-  const modalOpen = showSettings || showHelp || showRender;
+  const modalOpen = showSettings || showHelp || showRender || showProofread;
 
   useShortcuts(
     {
@@ -1074,7 +1141,75 @@ export default function App() {
       const cue = cues.find((c) => c.id === cueId) ?? null;
       const suffix = many ? ` ${targets.size} cues` : "";
 
+      // Spelling comes first: it is what the badge was clicked for, and what
+      // the eye goes to when the row is flagged.
+      const issues = cue && !many ? spellcheck.issuesFor(cue) : [];
+      const spellingEntries: MenuEntry[] = issues.flatMap((issue) => {
+        const fixes: MenuEntry[] = issue.replacements.slice(0, 4).map((replacement) => ({
+          kind: "item" as const,
+          label: replacementLabel(issue, replacement),
+          detail: issue.source === "ai" ? replacement : issue.message,
+          onSelect: () => cue && applyIssue(cue.id, issue, replacement),
+        }));
+
+        if (fixes.length === 0) {
+          // A lint with no fix still deserves to be visible and dismissable.
+          fixes.push({
+            kind: "item",
+            label: `${issue.text}: ${issue.message}`,
+            disabled: true,
+            onSelect: () => undefined,
+          });
+        }
+
+        if (issue.source === "harper" && isSingleWord(issue)) {
+          fixes.push({
+            kind: "item",
+            label: `Ignore “${issue.text}” in this project`,
+            onSelect: () => ignoreWordInProject(issue.text),
+          });
+          fixes.push({
+            kind: "item",
+            label: `Add “${issue.text}” to dictionary`,
+            onSelect: () => addWordToDictionary(issue.text),
+          });
+        }
+        return fixes;
+      });
+
       const entries: MenuEntry[] = [
+        // More than one issue would make a long flat menu; nest them.
+        ...(issues.length === 1
+          ? spellingEntries
+          : issues.length > 1
+            ? issues.map((issue) => ({
+                kind: "submenu" as const,
+                label: `${issueSeverity(issue) === "suggestion" ? "Correction" : issue.text}: ${issue.message}`,
+                entries: [
+                  ...issue.replacements.slice(0, 4).map((replacement) => ({
+                    kind: "item" as const,
+                    label: replacementLabel(issue, replacement),
+                    detail: issue.source === "ai" ? replacement : undefined,
+                    onSelect: () => cue && applyIssue(cue.id, issue, replacement),
+                  })),
+                  ...(issue.source === "harper" && isSingleWord(issue)
+                    ? [
+                        {
+                          kind: "item" as const,
+                          label: `Ignore “${issue.text}” in this project`,
+                          onSelect: () => ignoreWordInProject(issue.text),
+                        },
+                        {
+                          kind: "item" as const,
+                          label: `Add “${issue.text}” to dictionary`,
+                          onSelect: () => addWordToDictionary(issue.text),
+                        },
+                      ]
+                    : []),
+                ],
+              }))
+            : []),
+        ...(issues.length > 0 ? [{ kind: "separator" as const }] : []),
         {
           kind: "item",
           label: "Play from here",
@@ -1159,6 +1294,10 @@ export default function App() {
       duplicateSelected,
       assignSpeakerToSelection,
       deleteSelected,
+      spellcheck,
+      applyIssue,
+      ignoreWordInProject,
+      addWordToDictionary,
     ],
   );
 
@@ -1201,6 +1340,7 @@ export default function App() {
             kind: "item" as const,
             label: projectName(entry.path),
             detail: entry.path,
+            detailIsPath: true,
             checked: entry.path === projectPath,
             disabled: entry.path === projectPath,
             onSelect: () => void openRecent(entry.path),
@@ -1329,6 +1469,14 @@ export default function App() {
           disabled: cues.length < 2,
           onSelect: fixOverlaps,
         },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Proofread with AI…",
+          detail: apiKeySet ? undefined : "Add an OpenRouter key in Settings",
+          disabled: cues.length === 0 || !apiKeySet,
+          onSelect: () => setShowProofread(true),
+        },
       ],
     },
     {
@@ -1343,6 +1491,21 @@ export default function App() {
           accelerator: "F",
           checked: follow,
           onSelect: () => setFollow((f) => !f),
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Check spelling",
+          detail:
+            settings.spellcheck && spellcheck.totalIssues > 0
+              ? `${spellcheck.totalIssues} in ${spellcheck.cuesWithIssues} cues`
+              : undefined,
+          checked: settings.spellcheck,
+          onSelect: () => {
+            const next = { ...settings, spellcheck: !settings.spellcheck };
+            setSettings(next);
+            api.saveSettings(next).catch((e) => notify(errorMessage(e), "error"));
+          },
         },
       ],
     },
@@ -1506,6 +1669,7 @@ export default function App() {
             follow={follow && playing}
             maxCharsPerLine={settings.maxCharsPerLine}
             maxLines={settings.maxLines}
+            issuesFor={spellcheck.issuesFor}
             onSelect={select}
             onContextMenu={openCueContextMenu}
             onSeek={seek}
@@ -1545,6 +1709,16 @@ export default function App() {
       )}
 
       {showHelp && <ShortcutsDialog onClose={() => setShowHelp(false)} />}
+
+      {showProofread && (
+        <ProofreadDialog
+          cues={cues}
+          selectedIds={selectedIds}
+          model={settings.model}
+          onApply={spellcheck.addCorrections}
+          onClose={() => setShowProofread(false)}
+        />
+      )}
 
       {showRender && paths && (
         <RenderDialog

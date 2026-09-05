@@ -21,7 +21,12 @@ export interface UpdateOptions {
   replace?: boolean;
 }
 
-export const emptyProject: Project = { videoPath: "", cues: [], speakers: [] };
+export const emptyProject: Project = {
+  videoPath: "",
+  cues: [],
+  speakers: [],
+  dictionary: [],
+};
 
 export function useProjectHistory(initial: Project = emptyProject) {
   const [state, setState] = useState<HistoryState>({

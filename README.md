@@ -26,6 +26,9 @@ for this specific loop only.
   If they are installed somewhere off `PATH`, point at them with the
   `SUBSUBTITLE_FFMPEG` and `SUBSUBTITLE_FFPROBE` environment variables.
 
+Building it needs **Rust 1.98 or newer** — `harper-core`, the offline spellchecker,
+does not compile on older toolchains.
+
 Video playback uses the system webview, so stick to **MP4 / H.264 + AAC**. An
 `.mkv` container or HEVC video will probe and produce a waveform but will not
 play in the preview.
@@ -62,7 +65,11 @@ file can live anywhere.
   **Locate video…** to re-point it.
 
 `lastProject` and the recents list live in `state.json` in the app config
-directory, beside `settings.json` — they are per-machine, not part of any project.
+directory, beside `settings.json` and `dictionary.json` — all three are
+per-machine, not part of any project.
+
+The project file also carries the project's own spellcheck dictionary, so
+character names travel with the project rather than with the machine.
 
 ## Menu bar
 
@@ -139,6 +146,37 @@ in Settings, and neither rewrites anything — they only flag.
 
 `Ctrl+F` opens find and replace across cue text. Stepping through matches
 selects each cue and seeks to it; Replace and Replace-all are each one undo step.
+
+## Spelling
+
+Two checkers, both optional, both reporting into the same place — a badge at the
+right of the cue row, and the entries at the top of that cue's right-click menu.
+Nothing is ever corrected automatically.
+
+**Offline, as you type.** [Harper](https://writewithharper.com/) runs in the Rust
+backend: no network, no model, no setup. It flags misspellings (red), and grammar,
+agreement, capitalisation and punctuation errors (amber). Only error categories are
+reported — Harper's style, readability and word-choice advice is suppressed, because
+dialogue is *meant* to be colloquial, repetitive and full of fragments. A handful of
+rules that fight subtitling conventions are off for the same reason: sentence
+capitalisation (a cue often continues the previous cue's sentence), ellipsis and dash
+normalisation, and the advice against contractions, filler words and swearing.
+It is **English only**; American or British, chosen in Settings.
+
+**Optional AI pass.** `Edit ▸ Proofread with AI…` sends the cue text to OpenRouter in
+batches with a progress bar and a cancel button, and asks for corrections to spelling,
+grammar and punctuation only. Its findings land on the cues as blue suggestions
+offering the whole rewritten line. Unlike the offline checker it sees a cue's
+neighbours, so it catches what a single-cue check cannot — a homophone that is a real
+word, a name spelled two ways. It is the only part of spellcheck that sends anything
+anywhere.
+
+Two dictionaries hold the words neither checker should touch:
+
+| Where | For | Stored in |
+|---|---|---|
+| *Ignore in this project* | Character names, invented places, in-world terms | the `.sstproj` |
+| *Add to dictionary* | Your own vocabulary, every project | `dictionary.json` in the app config dir |
 
 ## Navigating the waveform
 

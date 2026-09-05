@@ -309,6 +309,35 @@ export function SettingsDialog({
           </fieldset>
 
           <fieldset>
+            <legend>Spelling</legend>
+            <label className="field checkbox">
+              <input
+                type="checkbox"
+                checked={draft.spellcheck}
+                onChange={(e) => set("spellcheck", e.target.checked)}
+              />
+              <span>Check spelling and grammar as I type</span>
+            </label>
+            <label className="field">
+              <span>Dialect</span>
+              <select
+                value={draft.dialect}
+                disabled={!draft.spellcheck}
+                onChange={(e) => set("dialect", e.target.value as Settings["dialect"])}
+              >
+                <option value="american">American English</option>
+                <option value="british">British English</option>
+              </select>
+            </label>
+            <p className="hint">
+              Runs offline on this machine; the checker is English-only. Right-click a
+              flagged cue to fix it, or to add the word to a dictionary. “Proofread with
+              AI” in the Edit menu is a separate, optional pass that does send cue text
+              to OpenRouter.
+            </p>
+          </fieldset>
+
+          <fieldset>
             <legend>Waveform</legend>
             <label className="field">
               <span>

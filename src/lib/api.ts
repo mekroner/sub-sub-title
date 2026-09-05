@@ -4,11 +4,14 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppState,
   ContinueRequest,
+  CueIssues,
   MediaInfo,
   ModelInfo,
   Peaks,
   ProjectPaths,
+  ProofreadCorrection,
   Settings,
+  SpellDialect,
   ToolStatus,
 } from "../types";
 
@@ -67,6 +70,24 @@ export const renderBurnIn = (args: {
 }) => invoke<void>("render_burn_in", args);
 
 export const cancelRender = () => invoke<void>("cancel_render");
+
+export const checkCues = (request: {
+  cues: Array<{ id: string; text: string }>;
+  dialect: SpellDialect;
+  ignored: string[];
+}) => invoke<CueIssues[]>("check_cues", { request });
+
+export const aiProofread = (request: {
+  model: string;
+  cues: Array<{ id: string; text: string }>;
+}) => invoke<ProofreadCorrection[]>("ai_proofread", { request });
+
+export const cancelProofread = () => invoke<void>("cancel_proofread");
+
+export const loadUserDictionary = () => invoke<string[]>("load_user_dictionary");
+
+export const saveUserDictionary = (words: string[]) =>
+  invoke<void>("save_user_dictionary", { words });
 
 /** Tauri command errors arrive as plain strings; normalise for display. */
 export function errorMessage(e: unknown): string {

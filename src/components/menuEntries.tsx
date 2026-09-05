@@ -12,8 +12,10 @@ export type MenuEntry =
       /** Shown right-aligned, e.g. "Ctrl+S". Display only — the shortcut
        *  itself lives in `shortcutMatch`. */
       accelerator?: string;
-      /** Second, dimmed line under the label — used for recent projects' paths. */
+      /** Second, dimmed line under the label. */
       detail?: string;
+      /** Ellipsise the detail from the *left*, so a path's filename stays visible. */
+      detailIsPath?: boolean;
       disabled?: boolean;
       /** Renders a tick, for items that toggle a state. */
       checked?: boolean;
@@ -122,7 +124,11 @@ export function MenuEntries({ entries, depth = 0, onClose, className, style }: P
               <span className="menu-tick">{entry.checked ? "✓" : ""}</span>
               <span className="menu-label">
                 {entry.label}
-                {entry.detail && <span className="menu-detail">{entry.detail}</span>}
+                {entry.detail && (
+                  <span className={entry.detailIsPath ? "menu-detail path" : "menu-detail"}>
+                    {entry.detail}
+                  </span>
+                )}
               </span>
               {entry.accelerator && (
                 <span className="menu-accelerator">{entry.accelerator}</span>

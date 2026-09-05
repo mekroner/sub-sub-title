@@ -21,6 +21,11 @@ export interface Project {
   videoPath: string;
   cues: Cue[];
   speakers: Speaker[];
+  /**
+   * Words this project's spellchecker should leave alone — character names,
+   * invented places. Optional: files written before spellcheck existed have none.
+   */
+  dictionary?: string[];
 }
 
 /** The `.sstproj` project file. Versioned so the format can move later. */
@@ -102,6 +107,8 @@ export interface Settings {
   minGap: number;
   maxCharsPerLine: number;
   maxLines: number;
+  spellcheck: boolean;
+  dialect: SpellDialect;
 }
 
 export interface ModelInfo {
@@ -113,6 +120,41 @@ export interface RenderProgress {
   fraction: number;
   timeSeconds: number;
   speed: string;
+}
+
+export type SpellDialect = "american" | "british";
+
+/** One problem found in a cue's text, by either checker. */
+export interface CueIssue {
+  /** UTF-16 offsets into the cue's text, so `slice()` works directly. */
+  start: number;
+  end: number;
+  /** The offending text, for "Ignore <word>" and for display. */
+  text: string;
+  message: string;
+  /** Harper's lint kind, or "Correction" for an AI finding. */
+  kind: string;
+  /** Ready-to-apply replacements for the span, best guess first. */
+  replacements: string[];
+  source: "harper" | "ai";
+}
+
+export interface CueIssues {
+  id: string;
+  issues: CueIssue[];
+}
+
+export interface ProofreadProgress {
+  fraction: number;
+  done: number;
+  total: number;
+}
+
+export interface ProofreadCorrection {
+  id: string;
+  /** The whole cue text, rewritten. */
+  corrected: string;
+  reason: string;
 }
 
 export interface ContinueContextLine {

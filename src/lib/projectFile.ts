@@ -75,9 +75,19 @@ export function parseProjectFile(raw: string): Project {
     ? file.speakers.map(coerceSpeaker).filter((s): s is Speaker => s !== null)
     : [];
 
+  // Written only since spellcheck existed, and hand-editable, so anything that
+  // is not a non-empty string is dropped rather than failing the load.
+  const dictionary = Array.isArray(file.dictionary)
+    ? file.dictionary
+        .filter((word): word is string => typeof word === "string")
+        .map((word) => word.trim())
+        .filter(Boolean)
+    : [];
+
   return {
     videoPath: typeof file.videoPath === "string" ? file.videoPath : "",
     cues: sortCues(cues),
     speakers,
+    dictionary,
   };
 }

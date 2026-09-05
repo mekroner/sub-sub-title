@@ -241,7 +241,10 @@ kbd {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Long paths matter at the end, so keep the filename visible. */
+}
+/* Long paths matter at the end, so keep the filename visible. Only for paths:
+   this reorders ordinary prose. */
+.menu-detail.path {
   direction: rtl;
   text-align: left;
 }
@@ -709,7 +712,7 @@ kbd {
   left: 0;
   width: 100%;
   display: grid;
-  grid-template-columns: 46px 132px 128px minmax(0, 1fr) 30px 34px;
+  grid-template-columns: 46px 132px 128px minmax(0, 1fr) 30px 26px 34px;
   gap: 8px;
   align-items: start;
   padding: 6px 10px;
@@ -802,6 +805,40 @@ kbd {
   color: #ff6b6b;
 }
 
+/* Spelling and grammar. Nothing renders for a clean cue. */
+.cue-issues {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+.issue-badge {
+  min-width: 20px;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: #3a2b2b;
+  color: #ff8f8f;
+}
+.issue-badge.spelling {
+  background: #45262a;
+  color: #ff9b9b;
+  border-color: #7d3a3f;
+}
+.issue-badge.grammar {
+  background: #3f3524;
+  color: #ffc978;
+  border-color: #7a6231;
+}
+.issue-badge.suggestion {
+  background: #24313f;
+  color: #8fc4ff;
+  border-color: #375f8a;
+}
+
 /* --- Find bar ----------------------------------------------------------- */
 
 .find-bar {
@@ -843,6 +880,11 @@ kbd {
    already sits at the pointer. */
 .context-menu > .menu-list {
   position: static;
+}
+/* Near the right edge a flyout has nowhere to go, so it opens leftwards. */
+.context-menu.flip-submenus .menu-sublist {
+  left: auto;
+  right: 100%;
 }
 
 /* --- Colour picker ------------------------------------------------------ */

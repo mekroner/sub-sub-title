@@ -19,6 +19,8 @@ const settings: Settings = {
   minGap: 0.04,
   maxCharsPerLine: 42,
   maxLines: 2,
+  spellcheck: true,
+  dialect: "american",
 };
 
 const speakers: Speaker[] = [

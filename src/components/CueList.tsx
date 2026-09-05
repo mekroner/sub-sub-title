@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { Cue, Speaker } from "../types";
+import type { Cue, CueIssue, Speaker } from "../types";
 import { charsPerSecond, formatShort, parseTimecode } from "../lib/time";
 import { lineStats } from "../lib/text";
+import { issueSeverity, issueTooltip } from "../lib/issues";
 import { selectModeOf, type SelectMode } from "../hooks/useCueSelection";
 
 interface Props {
@@ -17,6 +18,8 @@ interface Props {
   follow: boolean;
   maxCharsPerLine: number;
   maxLines: number;
+  /** Spelling and grammar issues for a cue; empty while it is being re-checked. */
+  issuesFor: (cue: Cue) => CueIssue[];
   onSelect: (id: string, mode: SelectMode) => void;
   onContextMenu: (id: string, x: number, y: number) => void;
   onSeek: (time: number) => void;
@@ -38,6 +41,7 @@ export function CueList({
   follow,
   maxCharsPerLine,
   maxLines,
+  issuesFor,
   onSelect,
   onContextMenu,
   onSeek,
@@ -89,6 +93,13 @@ export function CueList({
           const speaker = speakers.find((s) => s.id === cue.speakerId) ?? null;
           const cps = charsPerSecond(cue.text, cue.start, cue.end);
           const stats = lineStats(cue.text, maxCharsPerLine, maxLines);
+          const issues = issuesFor(cue);
+          // The badge takes the loudest severity present.
+          const severity = issues.some((i) => issueSeverity(i) === "spelling")
+            ? "spelling"
+            : issues.some((i) => issueSeverity(i) === "grammar")
+              ? "grammar"
+              : "suggestion";
           const isSelected = selectedIds.has(cue.id);
           const isPrimary = cue.id === primaryId;
           const isActive = cue.id === activeCueId;
@@ -196,6 +207,25 @@ export function CueList({
                     {line.length}
                   </span>
                 ))}
+              </div>
+
+              <div className="cue-issues">
+                {issues.length > 0 && (
+                  <button
+                    type="button"
+                    className={`issue-badge ${severity}`}
+                    title={issueTooltip(issues)}
+                    // Same menu the right-click gives, anchored on the badge.
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      onSelect(cue.id, "replace");
+                      const box = e.currentTarget.getBoundingClientRect();
+                      onContextMenu(cue.id, box.left, box.bottom);
+                    }}
+                  >
+                    {issues.length}
+                  </button>
+                )}
               </div>
 
               <div

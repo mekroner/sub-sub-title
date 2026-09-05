@@ -20,25 +20,31 @@ interface Props {
 
 /** Keeps the panel on screen when the click lands near an edge. */
 const MARGIN = 6;
+/** `.menu-list`'s min-width: what a flyout needs to the side of its parent. */
+const SUBMENU_WIDTH = 230;
 
 export function ContextMenu({ state, onClose }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState({ left: state.x, top: state.y });
+  /** Flyouts open leftwards when there is no room for them on the right. */
+  const [flipSubmenus, setFlipSubmenus] = useState(false);
 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const { width, height } = el.getBoundingClientRect();
+    const left =
+      state.x + width + MARGIN > window.innerWidth
+        ? Math.max(MARGIN, state.x - width)
+        : state.x;
     setPosition({
-      left:
-        state.x + width + MARGIN > window.innerWidth
-          ? Math.max(MARGIN, state.x - width)
-          : state.x,
+      left,
       top:
         state.y + height + MARGIN > window.innerHeight
           ? Math.max(MARGIN, window.innerHeight - height - MARGIN)
           : state.y,
     });
+    setFlipSubmenus(left + width + SUBMENU_WIDTH > window.innerWidth);
   }, [state]);
 
   useEffect(() => {
@@ -70,7 +76,7 @@ export function ContextMenu({ state, onClose }: Props) {
 
   return (
     <div
-      className="context-menu"
+      className={flipSubmenus ? "context-menu flip-submenus" : "context-menu"}
       ref={ref}
       style={{ left: position.left, top: position.top }}
       onContextMenu={(e) => e.preventDefault()}

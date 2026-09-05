@@ -39,6 +39,11 @@ pub struct Settings {
     /// Readability limits flagged in the cue list.
     pub max_chars_per_line: u32,
     pub max_lines: u32,
+    /// Whether the offline spellchecker runs at all.
+    pub spellcheck: bool,
+    /// "american" or "british". A string, so an unknown value degrades to the
+    /// default rather than refusing to load the file.
+    pub dialect: String,
 }
 
 impl Default for Settings {
@@ -60,6 +65,8 @@ impl Default for Settings {
             min_gap: 0.04,
             max_chars_per_line: 42,
             max_lines: 2,
+            spellcheck: true,
+            dialect: "american".to_string(),
         }
     }
 }
