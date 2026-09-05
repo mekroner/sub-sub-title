@@ -13,7 +13,11 @@ export interface ShortcutActions {
   selectNext: () => void;
   jumpToSelected: () => void;
   newCueAtPlayhead: () => void;
+  duplicateSelected: () => void;
   deleteSelected: () => void;
+  selectAll: () => void;
+  clearSelection: () => void;
+  openFind: () => void;
   generateContinuation: () => void;
   save: () => void;
   saveAs: () => void;
@@ -84,8 +88,20 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
         case "newCue":
           a.newCueAtPlayhead();
           break;
+        case "duplicate":
+          a.duplicateSelected();
+          break;
         case "deleteSelected":
           a.deleteSelected();
+          break;
+        case "selectAll":
+          a.selectAll();
+          break;
+        case "clearSelection":
+          a.clearSelection();
+          break;
+        case "find":
+          a.openFind();
           break;
         case "generate":
           a.generateContinuation();

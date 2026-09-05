@@ -10,9 +10,20 @@ const settings: Settings = {
   styleNotes: "",
   fontName: "Arial",
   fontSize: 48,
+  bold: false,
   outline: 2,
+  outlineColor: "#000000",
   shadow: 0,
+  shadowColor: "#000000",
   peaksResolution: 80,
+  minGap: 0.04,
+  maxCharsPerLine: 42,
+  maxLines: 2,
+  spellcheck: true,
+  dialect: "american",
+  whisperModel: "medium",
+  whisperLanguage: "",
+  whisperEnginePath: "",
 };
 
 const speakers: Speaker[] = [

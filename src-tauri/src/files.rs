@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// are frequently not UTF-8. Sniff the BOM, then fall back to Windows-1252 —
 /// which never fails to decode and is the usual culprit for stray accented
 /// characters in Latin-script subtitles.
-fn decode_text(bytes: &[u8]) -> String {
+pub(crate) fn decode_text(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return UTF_16LE.decode(&bytes[2..]).0.into_owned();
     }

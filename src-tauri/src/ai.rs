@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 const APP_TITLE: &str = "sub-sub-title";
 const APP_URL: &str = "https://github.com/local/sub-sub-title";
+/// Long enough for a slow model on a long batch, short enough that a stalled
+/// request eventually gives up instead of pinning the UI forever.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,16 +33,17 @@ pub struct ContinueRequest {
     pub context: Vec<ContextLine>,
 }
 
+/// One turn of a chat request. Shared with the proofreader.
 #[derive(Serialize)]
-struct ChatMessage<'a> {
-    role: &'a str,
-    content: String,
+pub struct ChatTurn {
+    pub role: &'static str,
+    pub content: String,
 }
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
-    messages: Vec<ChatMessage<'a>>,
+    messages: &'a [ChatTurn],
     temperature: f32,
     max_tokens: u32,
 }
@@ -170,32 +174,35 @@ fn parse_candidates(content: &str, wanted: usize) -> Vec<String> {
         .collect()
 }
 
-#[tauri::command]
-pub async fn ai_continue(request: ContinueRequest) -> AppResult<Vec<String>> {
-    let key = read_api_key()?;
-    let wanted = request.candidate_count.clamp(1, 6) as usize;
-
-    if request.model.trim().is_empty() {
+/// A single chat completion, returning the assistant's text.
+///
+/// Shared by the continue-feature and the proofreader so the two cannot drift
+/// apart in how they authenticate, time out, or report an OpenRouter failure.
+pub async fn chat_completion(
+    key: &str,
+    model: &str,
+    messages: &[ChatTurn],
+    temperature: f32,
+    max_tokens: u32,
+) -> AppResult<String> {
+    if model.trim().is_empty() {
         return Err(AppError::msg("No model selected. Choose one in Settings."));
     }
 
     let body = ChatRequest {
-        model: request.model.trim(),
-        messages: vec![
-            ChatMessage {
-                role: "system",
-                content: build_system_prompt(&request),
-            },
-            ChatMessage {
-                role: "user",
-                content: build_user_prompt(&request),
-            },
-        ],
-        temperature: request.temperature.clamp(0.0, 2.0),
-        max_tokens: 600,
+        model: model.trim(),
+        messages,
+        temperature: temperature.clamp(0.0, 2.0),
+        max_tokens,
     };
 
-    let client = reqwest::Client::new();
+    // Without a timeout a stalled request hangs forever, and the proofreader's
+    // cancel button can only take effect between requests.
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(AppError::from)?;
+
     let resp = client
         .post(format!("{OPENROUTER_BASE}/chat/completions"))
         .bearer_auth(key)
@@ -225,12 +232,38 @@ pub async fn ai_continue(request: ContinueRequest) -> AppResult<Vec<String>> {
         return Err(AppError::msg(format!("OpenRouter returned HTTP {status}.")));
     }
 
-    let content = parsed
+    parsed
         .choices
         .and_then(|c| c.into_iter().next())
         .and_then(|c| c.message)
         .and_then(|m| m.content)
-        .ok_or_else(|| AppError::msg("OpenRouter returned no completion."))?;
+        .ok_or_else(|| AppError::msg("OpenRouter returned no completion."))
+}
+
+#[tauri::command]
+pub async fn ai_continue(request: ContinueRequest) -> AppResult<Vec<String>> {
+    let key = read_api_key()?;
+    let wanted = request.candidate_count.clamp(1, 6) as usize;
+
+    let messages = [
+        ChatTurn {
+            role: "system",
+            content: build_system_prompt(&request),
+        },
+        ChatTurn {
+            role: "user",
+            content: build_user_prompt(&request),
+        },
+    ];
+
+    let content = chat_completion(
+        &key,
+        &request.model,
+        &messages,
+        request.temperature,
+        600,
+    )
+    .await?;
 
     let candidates = parse_candidates(&content, wanted);
     if candidates.is_empty() {

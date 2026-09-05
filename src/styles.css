@@ -241,7 +241,10 @@ kbd {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Long paths matter at the end, so keep the filename visible. */
+}
+/* Long paths matter at the end, so keep the filename visible. Only for paths:
+   this reorders ordinary prose. */
+.menu-detail.path {
   direction: rtl;
   text-align: left;
 }
@@ -298,6 +301,13 @@ kbd {
   min-height: 0;
   background: var(--bg);
   overflow: hidden;
+  /* The find bar sits above the list and the list takes the rest. */
+  display: flex;
+  flex-direction: column;
+}
+.list-row .cue-list {
+  flex: 1;
+  min-height: 0;
 }
 
 /* --- Video ------------------------------------------------------------- */
@@ -376,12 +386,14 @@ kbd {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  font-weight: 600;
   line-height: 1.2;
-  max-width: 90%;
+  max-width: 100%;
 }
 .caption-line {
   display: block;
+  /* Keeps the stroke behind the fill, the way libass draws an outline. Without
+     it a wide stroke eats into thin letterforms from the outside in. */
+  paint-order: stroke fill;
 }
 
 /* --- Transport --------------------------------------------------------- */
@@ -700,7 +712,7 @@ kbd {
   left: 0;
   width: 100%;
   display: grid;
-  grid-template-columns: 46px 132px 128px minmax(0, 1fr) 34px;
+  grid-template-columns: 46px 132px 128px minmax(0, 1fr) 30px 26px 34px;
   gap: 8px;
   align-items: start;
   padding: 6px 10px;
@@ -711,7 +723,14 @@ kbd {
 }
 .cue-row.selected {
   background: #1d2c40;
+  box-shadow: inset 3px 0 0 rgb(91 127 166 / 70%);
+}
+/* The cue single-cue commands act on, within a wider selection. */
+.cue-row.primary {
   box-shadow: inset 3px 0 0 var(--accent);
+}
+.cue-row.match .cue-text {
+  border-color: var(--accent);
 }
 .cue-index {
   color: var(--text-dim);
@@ -763,6 +782,176 @@ kbd {
 .cue-cps.warn {
   color: #ffb44d;
   font-weight: 700;
+}
+/* One character count per line of the cue, stacked to line up with the text. */
+.cue-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.cue-lines .over {
+  color: #ffb44d;
+  font-weight: 700;
+}
+.cue-lines.too-many {
+  color: #ff6b6b;
+}
+.cue-lines.too-many .over {
+  color: #ff6b6b;
+}
+
+/* Spelling and grammar. Nothing renders for a clean cue. */
+.cue-issues {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+.issue-badge {
+  min-width: 20px;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: #3a2b2b;
+  color: #ff8f8f;
+}
+.issue-badge.spelling {
+  background: #45262a;
+  color: #ff9b9b;
+  border-color: #7d3a3f;
+}
+.issue-badge.grammar {
+  background: #3f3524;
+  color: #ffc978;
+  border-color: #7a6231;
+}
+.issue-badge.suggestion {
+  background: #24313f;
+  color: #8fc4ff;
+  border-color: #375f8a;
+}
+
+/* --- Find bar ----------------------------------------------------------- */
+
+.find-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+.find-input {
+  flex: 1 1 0;
+  min-width: 140px;
+  padding: 3px 6px;
+}
+.find-count {
+  flex: none;
+  min-width: 72px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.find-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* --- Context menu ------------------------------------------------------- */
+
+.context-menu {
+  position: fixed;
+  z-index: 60;
+}
+/* The list positions itself against the bar in a menu bar; here the wrapper
+   already sits at the pointer. */
+.context-menu > .menu-list {
+  position: static;
+}
+/* Near the right edge a flyout has nowhere to go, so it opens leftwards. */
+.context-menu.flip-submenus .menu-sublist {
+  left: auto;
+  right: 100%;
+}
+
+/* --- Colour picker ------------------------------------------------------ */
+
+.color-picker {
+  position: relative;
+}
+.color-swatch {
+  width: 30px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+.color-popover {
+  /* Portalled to the body, so the scrolling speaker list cannot clip it. */
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  width: 188px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+.color-heading {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.swatch-button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+.swatch-button.current {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.color-custom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.color-custom input {
+  width: 40px;
+  height: 24px;
+  padding: 1px;
+}
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
 }
 
 /* --- Modals ------------------------------------------------------------ */

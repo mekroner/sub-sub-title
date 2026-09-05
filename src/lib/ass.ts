@@ -9,6 +9,10 @@ import { formatAssTime } from "./time";
 const DEFAULT_STYLE = "Default";
 const DEFAULT_COLOR = "#ffffff";
 
+/** Margins in PlayRes units. Exported so the preview can place text identically. */
+export const ASS_MARGIN_V = 40;
+export const ASS_MARGIN_H = 40;
+
 /** ASS colours are `&HAABBGGRR` — byte-reversed from hex, alpha 00 = opaque. */
 export function hexToAssColor(hex: string, alpha = 0): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
@@ -88,9 +92,10 @@ export function buildAss(cues: Cue[], speakers: Speaker[], options: AssOptions):
       String(settings.fontSize),
       hexToAssColor(color),
       hexToAssColor(color),
-      hexToAssColor("#000000"),
-      "&H80000000",
-      "0", // Bold
+      hexToAssColor(settings.outlineColor),
+      // BackColour doubles as the shadow colour, half-transparent as usual.
+      hexToAssColor(settings.shadowColor, 0x80),
+      settings.bold ? "-1" : "0", // Bold
       "0", // Italic
       "0", // Underline
       "0", // StrikeOut
@@ -102,9 +107,9 @@ export function buildAss(cues: Cue[], speakers: Speaker[], options: AssOptions):
       String(settings.outline),
       String(settings.shadow),
       "2", // Alignment: bottom centre
-      "40", // MarginL
-      "40", // MarginR
-      "40", // MarginV
+      String(ASS_MARGIN_H), // MarginL
+      String(ASS_MARGIN_H), // MarginR
+      String(ASS_MARGIN_V), // MarginV
       "1", // Encoding
     ].join(",");
 

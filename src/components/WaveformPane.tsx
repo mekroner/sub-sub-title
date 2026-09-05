@@ -4,6 +4,7 @@ import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.e
 import type { Cue, Speaker } from "../types";
 import { contrastText, withAlpha } from "../lib/colors";
 import { clamp } from "../lib/time";
+import { selectModeOf, type SelectMode } from "../hooks/useCueSelection";
 
 interface Props {
   videoEl: HTMLVideoElement | null;
@@ -11,13 +12,18 @@ interface Props {
   duration: number;
   cues: Cue[];
   speakers: Speaker[];
-  selectedCueId: string | null;
+  selectedIds: Set<string>;
   zoom: number;
   /** When off, playback stops dragging the view along, so a pan sticks. */
   follow: boolean;
-  onSelectCue: (id: string) => void;
-  onRetimeCue: (id: string, start: number, end: number, final: boolean) => void;
+  onSelectCue: (id: string, mode: SelectMode) => void;
+  /**
+   * `kind` says which gesture produced the times: a resize clamps against the
+   * neighbours, a move may travel across them.
+   */
+  onRetimeCue: (id: string, start: number, end: number, kind: "move" | "resize") => void;
   onCreateCue: (start: number, end: number) => void;
+  onContextMenuCue: (id: string, x: number, y: number) => void;
   onSeek: (time: number) => void;
   onZoomChange: (zoom: number) => void;
 }
@@ -46,12 +52,13 @@ export function WaveformPane({
   duration,
   cues,
   speakers,
-  selectedCueId,
+  selectedIds,
   zoom,
   follow,
   onSelectCue,
   onRetimeCue,
   onCreateCue,
+  onContextMenuCue,
   onSeek,
   onZoomChange,
 }: Props) {
@@ -64,6 +71,8 @@ export function WaveformPane({
   const syncing = useRef(false);
   const [visible, setVisible] = useState<[number, number]>([0, 60]);
   const [ready, setReady] = useState(false);
+  /** Bumped after every drag, so a refused move still re-syncs the regions. */
+  const [syncTick, setSyncTick] = useState(0);
   /**
    * Scroll position to restore once a wheel-driven zoom has been applied, so the
    * moment under the pointer stays put instead of the view jumping.
@@ -71,8 +80,22 @@ export function WaveformPane({
   const pendingScroll = useRef<number | null>(null);
 
   // Latest props, so the wavesurfer event handlers never close over stale state.
-  const handlers = useRef({ onSelectCue, onRetimeCue, onCreateCue, onSeek, cues });
-  handlers.current = { onSelectCue, onRetimeCue, onCreateCue, onSeek, cues };
+  const handlers = useRef({
+    onSelectCue,
+    onRetimeCue,
+    onCreateCue,
+    onContextMenuCue,
+    onSeek,
+    cues,
+  });
+  handlers.current = {
+    onSelectCue,
+    onRetimeCue,
+    onCreateCue,
+    onContextMenuCue,
+    onSeek,
+    cues,
+  };
 
   // --- Create / destroy ---------------------------------------------------
   useEffect(() => {
@@ -127,14 +150,28 @@ export function WaveformPane({
       handlers.current.onCreateCue(start, end);
     });
 
-    regions.on("region-updated", (region: Region) => {
-      handlers.current.onRetimeCue(region.id, region.start, region.end, true);
+    // The plugin reports which handle ended the gesture: a side for a resize,
+    // nothing at all for a drag of the whole region.
+    regions.on("region-updated", (region: Region, side?: "start" | "end") => {
+      handlers.current.onRetimeCue(
+        region.id,
+        region.start,
+        region.end,
+        side ? "resize" : "move",
+      );
+      // A clamped or refused gesture leaves the cue where it was, so the cue
+      // list does not change and the sync effect would not re-run on its own.
+      // Bump a tick to make it re-run and snap the region back.
+      setSyncTick((t) => t + 1);
     });
 
     regions.on("region-clicked", (region: Region, event: MouseEvent) => {
       event.stopPropagation();
-      handlers.current.onSelectCue(region.id);
-      handlers.current.onSeek(region.start);
+      const mode = selectModeOf(event);
+      handlers.current.onSelectCue(region.id, mode);
+      // Ctrl/Shift-clicking builds a selection; moving the playhead then would
+      // fight the user, so only a plain click seeks.
+      if (mode === "replace") handlers.current.onSeek(region.start);
     });
 
     return () => {
@@ -227,6 +264,16 @@ export function WaveformPane({
     const hi = to + WINDOW_PADDING_SECONDS;
     const colorOf = new Map(speakers.map((s) => [s.id, s.color]));
 
+    // The regions plugin has no contextmenu event, so it is wired onto the
+    // element the plugin creates.
+    const attachContextMenu = (region: Region) => {
+      region.element?.addEventListener("contextmenu", (e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handlers.current.onContextMenuCue(region.id, e.clientX, e.clientY);
+      });
+    };
+
     const inWindow = cues.filter((c) => c.end >= lo && c.start <= hi);
     const wanted = new Set(inWindow.map((c) => c.id));
 
@@ -242,7 +289,7 @@ export function WaveformPane({
 
       for (const cue of inWindow) {
         const base = cue.speakerId ? colorOf.get(cue.speakerId) ?? "#8a94a6" : "#8a94a6";
-        const selected = cue.id === selectedCueId;
+        const selected = selectedIds.has(cue.id);
         const color = withAlpha(base, selected ? 0.45 : 0.22);
         const existing = regionMap.current.get(cue.id);
 
@@ -255,6 +302,7 @@ export function WaveformPane({
             drag: true,
             resize: true,
           });
+          attachContextMenu(region);
           styleRegion(region, base, selected, cue.text);
           regionMap.current.set(cue.id, region);
           continue;
@@ -273,7 +321,7 @@ export function WaveformPane({
     } finally {
       syncing.current = false;
     }
-  }, [cues, speakers, selectedCueId, visible, ready]);
+  }, [cues, speakers, selectedIds, visible, ready, syncTick]);
 
   const hasWaveform = Boolean(peaks && peaks.length > 0 && videoEl);
 
