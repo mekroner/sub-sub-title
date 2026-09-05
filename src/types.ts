@@ -45,6 +45,8 @@ export interface RecentProject {
   videoPath: string;
   /** Milliseconds since the epoch. */
   openedAt: number;
+  /** Seconds into the video when this project was last open. */
+  position: number;
 }
 
 export interface AppState {

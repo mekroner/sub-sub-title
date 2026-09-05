@@ -64,6 +64,10 @@ file can live anywhere.
   name and a `•` while there are unsaved changes.
 - If the video has moved, the project still opens with its cues and offers
   **Locate video…** to re-point it.
+- Reopening a project resumes at the playback position it was left at. That
+  position is per-machine state, not part of the project file — watching a video
+  is not an edit, and writing it there would leave every session with changes to
+  save. It is kept for the ten projects in the recents list.
 
 `lastProject` and the recents list live in `state.json` in the app config
 directory, beside `settings.json` and `dictionary.json` — all three are

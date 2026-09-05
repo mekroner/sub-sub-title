@@ -281,6 +281,36 @@ export default function App() {
     else video.pause();
   }, []);
 
+  // --- Playback position --------------------------------------------------
+  /**
+   * Where playback had reached, remembered per project so reopening one resumes
+   * where it was left. It lives in the app state file rather than the `.sstproj`
+   * on purpose: watching a video is not an edit, and writing it to the project
+   * would leave every session with unsaved changes to save.
+   */
+  const currentTimeRef = useRef(currentTime);
+  currentTimeRef.current = currentTime;
+  const projectPathRef = useRef(projectPath);
+  projectPathRef.current = projectPath;
+
+  // Read through refs so the callback is stable, and so callers can flush the
+  // outgoing project's position *before* a new video resets the clock to zero.
+  const flushPosition = useCallback(() => {
+    const path = projectPathRef.current;
+    if (!path) return;
+    api.rememberPosition(path, currentTimeRef.current).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!projectPath) return;
+    // `timeupdate` fires about four times a second; a timer keeps that off disk.
+    const timer = setInterval(flushPosition, 5000);
+    return () => clearInterval(timer);
+  }, [projectPath, flushPosition]);
+
+  /** Set when a project is opened; applied once the element can accept a seek. */
+  const [pendingPosition, setPendingPosition] = useState<number | null>(null);
+
   // --- Seeking ------------------------------------------------------------
   const seek = useCallback(
     (time: number) => {
@@ -291,6 +321,22 @@ export default function App() {
     },
     [duration],
   );
+
+  useEffect(() => {
+    if (pendingPosition === null || !videoEl) return;
+    const apply = () => {
+      seek(pendingPosition);
+      setPendingPosition(null);
+    };
+    // Setting `currentTime` before the element knows its duration is discarded,
+    // and the source may or may not have loaded by the time the project does.
+    if (videoEl.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      apply();
+      return;
+    }
+    videoEl.addEventListener("loadedmetadata", apply, { once: true });
+    return () => videoEl.removeEventListener("loadedmetadata", apply);
+  }, [pendingPosition, videoEl, seek]);
 
   // --- Opening a video ----------------------------------------------------
   /**
@@ -322,6 +368,7 @@ export default function App() {
 
   const openVideoAt = useCallback(
     async (path: string) => {
+      flushPosition(); // Before attachMedia resets the clock. See openProjectAt.
       try {
         const { info, derived } = await attachMedia(path);
         // A bare video starts an untitled project; Save As names it. A sibling
@@ -373,7 +420,17 @@ export default function App() {
         const stateCall = adopted
           ? api.rememberProject(adopted, path)
           : api.clearLastProject();
-        stateCall.then(setAppState).catch(() => undefined);
+        stateCall
+          .then((state) => {
+            setAppState(state);
+            // An adopted sibling project resumes where it was left, exactly as
+            // opening it by name would. A bare video has nothing to resume.
+            const saved = adopted
+              ? state.recentProjects.find((entry) => entry.path === adopted)
+              : undefined;
+            if (saved && saved.position > 0) setPendingPosition(saved.position);
+          })
+          .catch(() => undefined);
 
         if (!info.hasAudio) {
           notify("This file has no audio track, so there is no waveform.", "error");
@@ -382,7 +439,7 @@ export default function App() {
         notify(errorMessage(e), "error");
       }
     },
-    [attachMedia, load, notify, settings.minGap],
+    [attachMedia, load, notify, settings.minGap, flushPosition],
   );
 
   // --- Projects -----------------------------------------------------------
@@ -405,6 +462,9 @@ export default function App() {
 
   const openProjectAt = useCallback(
     async (path: string) => {
+      // Before attaching new media: loading a source resets the clock to zero,
+      // which would otherwise be what the outgoing project remembers.
+      flushPosition();
       try {
         const raw = await api.readTextFile(path);
         const loaded = parseProjectFile(raw);
@@ -427,14 +487,23 @@ export default function App() {
         load(loaded);
         setProjectPath(path);
         if (loaded.cues.length > 0) selectOnly(loaded.cues[0].id);
-        api.rememberProject(path, loaded.videoPath).then(setAppState).catch(() => undefined);
+        api
+          .rememberProject(path, loaded.videoPath)
+          .then((state) => {
+            setAppState(state);
+            // Read the position back from the state that was just written, not
+            // from the copy in memory, which is a session behind.
+            const saved = state.recentProjects.find((entry) => entry.path === path);
+            if (saved && saved.position > 0) setPendingPosition(saved.position);
+          })
+          .catch(() => undefined);
       } catch (e) {
         // A project that cannot be read is not worth offering again.
         api.forgetProject(path).then(setAppState).catch(() => undefined);
         notify(`Could not open ${path}: ${errorMessage(e)}`, "error");
       }
     },
-    [attachMedia, detachMedia, load, notify],
+    [attachMedia, detachMedia, load, notify, flushPosition],
   );
 
   const openProject = useCallback(async () => {
@@ -456,12 +525,13 @@ export default function App() {
 
   const newProject = useCallback(async () => {
     if (!(await confirmDiscard())) return;
+    flushPosition(); // Before detachMedia clears the outgoing project's clock.
     detachMedia();
     setProjectPath(null);
     load(emptyProject);
     api.clearLastProject().then(setAppState).catch(() => undefined);
     notify("New project. Open a video to get started.");
-  }, [confirmDiscard, detachMedia, load, notify]);
+  }, [confirmDiscard, detachMedia, load, notify, flushPosition]);
 
   // Opened via "Open with" in Explorer, a path on the command line, or — failing
   // that — the project that was open when the app last closed.
@@ -1106,12 +1176,15 @@ export default function App() {
       // Always take the close back: the confirmation is async, so the window
       // would otherwise be gone before the answer arrives.
       event.preventDefault();
-      if (await confirmDiscard()) await getCurrentWindow().destroy();
+      if (!(await confirmDiscard())) return;
+      // Nothing unmounts on destroy(), so the timer never gets a last tick.
+      flushPosition();
+      await getCurrentWindow().destroy();
     });
     return () => {
       void pending.then((unlisten) => unlisten());
     };
-  }, [confirmDiscard]);
+  }, [confirmDiscard, flushPosition]);
 
   // --- Shortcuts ----------------------------------------------------------
   const modalOpen =
