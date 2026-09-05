@@ -52,6 +52,9 @@ export const loadAppState = () => invoke<AppState>("load_app_state");
 export const rememberProject = (path: string, videoPath: string) =>
   invoke<AppState>("remember_project", { path, videoPath });
 
+export const rememberPosition = (path: string, position: number) =>
+  invoke<void>("remember_position", { path, position });
+
 export const forgetProject = (path: string) =>
   invoke<AppState>("forget_project", { path });
 

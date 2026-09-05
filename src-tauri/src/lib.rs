@@ -47,6 +47,7 @@ pub fn run() {
             settings::clear_api_key,
             project_state::load_app_state,
             project_state::remember_project,
+            project_state::remember_position,
             project_state::forget_project,
             project_state::clear_last_project,
             ai::ai_continue,

@@ -269,6 +269,23 @@ export function SettingsDialog({
           </fieldset>
 
           <fieldset>
+            <legend>Subtitle export</legend>
+            <label className="field checkbox">
+              <input
+                type="checkbox"
+                checked={draft.srtSpeakerColors}
+                onChange={(e) => set("srtSpeakerColors", e.target.checked)}
+              />
+              <span>Write speaker colours into exported .srt</span>
+            </label>
+            <p className="hint">
+              Wraps each cue in <code>&lt;font color="…"&gt;</code>, which most players
+              honour and this app reads back as speakers on import. Turn it off for a
+              plain .srt. The .ass export always carries speaker colours.
+            </p>
+          </fieldset>
+
+          <fieldset>
             <legend>Timing and readability</legend>
             <div className="field-grid">
               <label className="field">

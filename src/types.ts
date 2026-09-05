@@ -45,6 +45,8 @@ export interface RecentProject {
   videoPath: string;
   /** Milliseconds since the epoch. */
   openedAt: number;
+  /** Seconds into the video when this project was last open. */
+  position: number;
 }
 
 export interface AppState {
@@ -102,6 +104,8 @@ export interface Settings {
   shadow: number;
   /** Hex. The .ass BackColour, and the preview's drop shadow. */
   shadowColor: string;
+  /** Wrap each exported .srt cue in its speaker's `<font color=…>`. */
+  srtSpeakerColors: boolean;
   peaksResolution: number;
   /** Seconds of enforced silence between adjacent cues. */
   minGap: number;
