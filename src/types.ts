@@ -102,6 +102,8 @@ export interface Settings {
   shadow: number;
   /** Hex. The .ass BackColour, and the preview's drop shadow. */
   shadowColor: string;
+  /** Wrap each exported .srt cue in its speaker's `<font color=…>`. */
+  srtSpeakerColors: boolean;
   peaksResolution: number;
   /** Seconds of enforced silence between adjacent cues. */
   minGap: number;

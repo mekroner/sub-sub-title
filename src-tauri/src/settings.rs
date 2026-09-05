@@ -32,6 +32,8 @@ pub struct Settings {
     pub shadow: f32,
     /// Hex colour of the drop shadow.
     pub shadow_color: String,
+    /// Wrap each exported .srt cue in its speaker's `<font color=...>`.
+    pub srt_speaker_colors: bool,
     /// Waveform extraction resolution, in points per second.
     pub peaks_resolution: u32,
     /// Enforced silence between adjacent cues, in seconds.
@@ -68,6 +70,7 @@ impl Default for Settings {
             outline_color: "#000000".to_string(),
             shadow: 0.0,
             shadow_color: "#000000".to_string(),
+            srt_speaker_colors: true,
             peaks_resolution: 80,
             min_gap: 0.04,
             max_chars_per_line: 42,

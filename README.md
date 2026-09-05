@@ -15,7 +15,8 @@ for this specific loop only.
 2. Tag each line with a speaker (`1`–`9`), each speaker having a colour.
 3. Fine-tune timing by dragging regions on the waveform.
 4. Optionally ask an AI to propose the next line of dialogue.
-5. Export `.srt` (plain), `.ass` (coloured), or burn the subtitles into an MP4.
+5. Export `.srt` (coloured or plain), `.ass` (coloured), or burn the subtitles
+   into an MP4.
 
 ## Requirements
 
@@ -39,7 +40,7 @@ play in the preview.
 |---|---|
 | `<name>.sstproj` | The project file — cues, speakers, colours, and the path of the video. This is the native save format. |
 | `<name>.captions.json` | The legacy sidecar. Still read when opening a bare video; no longer written. |
-| `<name>.srt` | Import source, and a plain export with speaker data stripped for portability. |
+| `<name>.srt` | Import source, and an export that carries each speaker as a `<font color>` — or strips speaker data entirely, if you turn that off in Settings. |
 | `<name>.ass` | Styled export: one `Style` per speaker, `Actor` set per line. This is what renders colour on burn-in. |
 | `<name>.subtitled.mp4` | Default burn-in output. |
 
@@ -224,6 +225,18 @@ If the transcript already marks speakers inline (`ALEX: line`, `[Alex] line`),
 the speaker panel offers **"Detect N from 'NAME:' prefixes"**. That creates the
 speakers, assigns every matching cue, and strips the prefix from the text in one
 step. It only offers names appearing at least twice, and never runs on its own.
+
+An `.srt` that marks speakers by colour instead — `<font color="#ff0000">` around
+each cue, the convention most subtitle tools use — is translated on import
+without asking: one speaker per colour, named `Speaker 1`, `Speaker 2`… in order
+of first appearance, keeping the file's own colours. The tags are stripped from
+the cue text, `<i>` and friends are left alone, and a colour already used by a
+speaker in the project reuses that speaker rather than duplicating it — so
+re-importing a corrected export keeps the names and voice notes you typed.
+
+Exporting `.srt` writes those tags back out. To get a bare `.srt` with no speaker
+data, clear **Write speaker colours into exported .srt** under Settings ▸
+Subtitle export.
 
 ## The continue-feature
 

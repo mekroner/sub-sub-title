@@ -29,7 +29,13 @@ import { useSpellcheck } from "./hooks/useSpellcheck";
 import * as api from "./lib/api";
 import { errorMessage } from "./lib/api";
 import { buildAss } from "./lib/ass";
-import { parseSrt, serializeSrt, speakerNameOf, stripSpeakerPrefix } from "./lib/srt";
+import {
+  mergeImportedSpeakers,
+  parseSrt,
+  serializeSrt,
+  speakerNameOf,
+  stripSpeakerPrefix,
+} from "./lib/srt";
 import { nextPaletteColor } from "./lib/colors";
 import { classifyDrop, VIDEO_EXTENSIONS } from "./lib/dropPaths";
 import {
@@ -97,6 +103,7 @@ const DEFAULT_SETTINGS: Settings = {
   outlineColor: "#000000",
   shadow: 0,
   shadowColor: "#000000",
+  srtSpeakerColors: true,
   peaksResolution: 80,
   minGap: DEFAULT_MIN_GAP,
   maxCharsPerLine: DEFAULT_MAX_CHARS_PER_LINE,
@@ -342,11 +349,17 @@ export default function App() {
           notify(`Loaded ${loaded.cues.length} cues from the project sidecar.`);
         } else if (await api.fileExists(derived.srt)) {
           const raw = await api.readTextFile(derived.srt);
-          const { cues: parsed, warnings } = parseSrt(raw);
-          loaded = { videoPath: path, cues: parsed, speakers: [] };
+          const parsed = parseSrt(raw, { minGap: settings.minGap });
+          // Colour-coded files arrive with speakers already grouped; without the
+          // merge their cues would hold ids pointing at nothing.
+          const merged = mergeImportedSpeakers([], parsed);
+          loaded = { videoPath: path, cues: merged.cues, speakers: merged.speakers };
           notify(
-            `Imported ${parsed.length} cues from ${derived.stem}.srt` +
-              (warnings.length ? ` (${warnings.length} warnings).` : "."),
+            `Imported ${merged.cues.length} cues from ${derived.stem}.srt` +
+              (parsed.speakers.length
+                ? ` with ${parsed.speakers.length} speaker colours`
+                : "") +
+              (parsed.warnings.length ? ` (${parsed.warnings.length} warnings).` : "."),
           );
         } else {
           notify("Video opened. No matching project or .srt found.");
@@ -369,7 +382,7 @@ export default function App() {
         notify(errorMessage(e), "error");
       }
     },
-    [attachMedia, load, notify],
+    [attachMedia, load, notify, settings.minGap],
   );
 
   // --- Projects -----------------------------------------------------------
@@ -726,7 +739,9 @@ export default function App() {
    */
   const applyImportedSrt = useCallback(
     (raw: string, verb: "Imported" | "Transcribed") => {
-      const { cues: parsed, warnings } = parseSrt(raw);
+      const { cues: parsed, speakers: imported, split, warnings } = parseSrt(raw, {
+        minGap: settings.minGap,
+      });
       if (parsed.length === 0) {
         // The engine exits cleanly with an empty .srt when it hears no speech,
         // so blaming "that file" would be wrong on the transcription path.
@@ -737,7 +752,18 @@ export default function App() {
           "error",
         );
       }
-      update((current) => ({ ...current, cues: parsed }));
+      // Speakers merge rather than replace, so a file whose colours are already
+      // known lands on the speakers the user has named. Transcriptions declare
+      // no colours, which makes this a no-op on that path.
+      update((current) => {
+        const merged = mergeImportedSpeakers(current.speakers, {
+          cues: parsed,
+          speakers: imported,
+          split,
+          warnings,
+        });
+        return { ...current, cues: merged.cues, speakers: merged.speakers };
+      });
       selectOnly(parsed[0].id);
 
       // Other tools happily emit overlapping cues; say so rather than leaving
@@ -746,6 +772,12 @@ export default function App() {
       notify(
         `${verb} ${parsed.length} cues` +
           (warnings.length ? `; ${warnings.length} lines needed repair.` : ".") +
+          (imported.length > 0
+            ? ` ${imported.length} speaker ${imported.length === 1 ? "colour" : "colours"} recognised.`
+            : "") +
+          (split > 0
+            ? ` ${split} ${split === 1 ? "block held" : "blocks held"} two speakers and ${split === 1 ? "was" : "were"} split.`
+            : "") +
           (overlapping > 0
             ? ` ${overlapping} overlap — use Edit ▸ Fix overlapping cues.`
             : ""),
@@ -829,12 +861,15 @@ export default function App() {
     });
     if (!target) return;
     try {
-      await api.writeTextFile(target, serializeSrt(cues));
+      await api.writeTextFile(
+        target,
+        serializeSrt(cues, { speakers, speakerColors: settings.srtSpeakerColors }),
+      );
       notify(`Exported ${cues.length} cues to .srt`);
     } catch (e) {
       notify(errorMessage(e), "error");
     }
-  }, [cues, paths, notify]);
+  }, [cues, speakers, settings.srtSpeakerColors, paths, notify]);
 
   const assText = useMemo(
     () =>
