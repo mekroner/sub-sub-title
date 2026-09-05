@@ -21,6 +21,8 @@ const settings: Settings = {
   maxLines: 2,
   spellcheck: true,
   dialect: "american",
+  whisperModel: "medium",
+  whisperLanguage: "",
 };
 
 const speakers: Speaker[] = [

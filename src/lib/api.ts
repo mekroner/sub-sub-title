@@ -5,6 +5,7 @@ import type {
   AppState,
   ContinueRequest,
   CueIssues,
+  EngineStatus,
   MediaInfo,
   ModelInfo,
   Peaks,
@@ -70,6 +71,22 @@ export const renderBurnIn = (args: {
 }) => invoke<void>("render_burn_in", args);
 
 export const cancelRender = () => invoke<void>("cancel_render");
+
+/** Filesystem checks only — safe to call whenever the dialog opens. */
+export const transcribeStatus = (model: string) =>
+  invoke<EngineStatus>("transcribe_status", { model });
+
+export const installEngine = (model: string) =>
+  invoke<EngineStatus>("install_engine", { model });
+
+export const transcribeVideo = (args: {
+  videoPath: string;
+  language: string | null;
+  model: string;
+}) => invoke<string>("transcribe_video", args);
+
+/** Cancels an engine download, an unpack, or a transcription — whichever runs. */
+export const cancelTranscribe = () => invoke<void>("cancel_transcribe");
 
 export const checkCues = (request: {
   cues: Array<{ id: string; text: string }>;

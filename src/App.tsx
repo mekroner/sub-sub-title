@@ -19,6 +19,7 @@ import { ContextMenu } from "./components/ContextMenu";
 import type { ContextMenuState } from "./components/ContextMenu";
 import { FindBar } from "./components/FindBar";
 import { ProofreadDialog } from "./components/ProofreadDialog";
+import { TranscribeDialog } from "./components/TranscribeDialog";
 
 import { emptyProject, useProjectHistory } from "./state/useProjectHistory";
 import { useShortcuts } from "./hooks/useShortcuts";
@@ -38,6 +39,7 @@ import {
   serializeProjectFile,
 } from "./lib/projectFile";
 import { makeId } from "./lib/ids";
+import { DEFAULT_WHISPER_MODEL } from "./lib/whisper";
 import { clamp } from "./lib/time";
 import {
   DEFAULT_MIN_GAP,
@@ -101,6 +103,8 @@ const DEFAULT_SETTINGS: Settings = {
   maxLines: DEFAULT_MAX_LINES,
   spellcheck: true,
   dialect: "american",
+  whisperModel: DEFAULT_WHISPER_MODEL,
+  whisperLanguage: "",
 };
 
 interface FindState {
@@ -170,6 +174,7 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showRender, setShowRender] = useState(false);
   const [showProofread, setShowProofread] = useState(false);
+  const [showTranscribe, setShowTranscribe] = useState(false);
   /** The user's personal word list, shared by every project. */
   const [userDictionary, setUserDictionary] = useState<string[]>([]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -714,32 +719,42 @@ export default function App() {
     }
   }, [attachMedia, update, notify]);
 
+  /**
+   * Replace the cue list with the contents of an SRT. Shared by Import .srt and
+   * by the transcriber, so both land cues on identical terms.
+   */
+  const applyImportedSrt = useCallback(
+    (raw: string, verb: "Imported" | "Transcribed") => {
+      const { cues: parsed, warnings } = parseSrt(raw);
+      if (parsed.length === 0) {
+        return notify("No cues could be read from that file.", "error");
+      }
+      update((current) => ({ ...current, cues: parsed }));
+      selectOnly(parsed[0].id);
+
+      // Other tools happily emit overlapping cues; say so rather than leaving
+      // the editor in a state its own rules forbid.
+      const overlapping = findOverlaps(parsed, settings.minGap).length;
+      notify(
+        `${verb} ${parsed.length} cues` +
+          (warnings.length ? `; ${warnings.length} lines needed repair.` : ".") +
+          (overlapping > 0
+            ? ` ${overlapping} overlap — use Edit ▸ Fix overlapping cues.`
+            : ""),
+      );
+    },
+    [update, notify, selectOnly, settings.minGap],
+  );
+
   const importSrtFrom = useCallback(
     async (path: string) => {
       try {
-        const raw = await api.readTextFile(path);
-        const { cues: parsed, warnings } = parseSrt(raw);
-        if (parsed.length === 0) {
-          return notify("No cues could be read from that file.", "error");
-        }
-        update((current) => ({ ...current, cues: parsed }));
-        selectOnly(parsed[0].id);
-
-        // Other tools happily emit overlapping cues; say so rather than leaving
-        // the editor in a state its own rules forbid.
-        const overlapping = findOverlaps(parsed, settings.minGap).length;
-        notify(
-          `Imported ${parsed.length} cues` +
-            (warnings.length ? `; ${warnings.length} lines needed repair.` : ".") +
-            (overlapping > 0
-              ? ` ${overlapping} overlap — use Edit ▸ Fix overlapping cues.`
-              : ""),
-        );
+        applyImportedSrt(await api.readTextFile(path), "Imported");
       } catch (e) {
         notify(errorMessage(e), "error");
       }
     },
-    [update, notify, selectOnly, settings.minGap],
+    [applyImportedSrt, notify],
   );
 
   const importSrt = useCallback(async () => {
@@ -1056,7 +1071,8 @@ export default function App() {
   }, [confirmDiscard]);
 
   // --- Shortcuts ----------------------------------------------------------
-  const modalOpen = showSettings || showHelp || showRender || showProofread;
+  const modalOpen =
+    showSettings || showHelp || showRender || showProofread || showTranscribe;
 
   useShortcuts(
     {
@@ -1375,6 +1391,12 @@ export default function App() {
           label: "Import .srt…",
           disabled: !paths,
           onSelect: () => void importSrt(),
+        },
+        {
+          kind: "item",
+          label: "Transcribe…",
+          disabled: !project.videoPath,
+          onSelect: () => setShowTranscribe(true),
         },
         {
           kind: "item",
@@ -1717,6 +1739,26 @@ export default function App() {
           model={settings.model}
           onApply={spellcheck.addCorrections}
           onClose={() => setShowProofread(false)}
+        />
+      )}
+
+      {showTranscribe && project.videoPath && (
+        <TranscribeDialog
+          videoPath={project.videoPath}
+          cueCount={cues.length}
+          model={settings.whisperModel || DEFAULT_WHISPER_MODEL}
+          language={settings.whisperLanguage}
+          onChoiceChange={({ model, language }) => {
+            const next = {
+              ...settings,
+              whisperModel: model,
+              whisperLanguage: language,
+            };
+            setSettings(next);
+            api.saveSettings(next).catch((e) => notify(errorMessage(e), "error"));
+          }}
+          onDone={(srt) => applyImportedSrt(srt, "Transcribed")}
+          onClose={() => setShowTranscribe(false)}
         />
       )}
 

@@ -109,6 +109,10 @@ export interface Settings {
   maxLines: number;
   spellcheck: boolean;
   dialect: SpellDialect;
+  /** Whisper model size used by the transcribe dialog, e.g. "medium". */
+  whisperModel: string;
+  /** Whisper language code, or "" for auto-detect. */
+  whisperLanguage: string;
 }
 
 export interface ModelInfo {
@@ -120,6 +124,41 @@ export interface RenderProgress {
   fraction: number;
   timeSeconds: number;
   speed: string;
+}
+
+/** Progress while the transcription engine is being downloaded and unpacked. */
+export interface EngineProgress {
+  phase: "downloading" | "verifying" | "extracting" | "locating" | "done";
+  /** 0..1, or -1 when unknown. */
+  fraction: number;
+  bytesDone: number;
+  bytesTotal: number;
+  /** Bytes per second, or 0 when not applicable. */
+  speedBps: number;
+  /** Seconds remaining, or -1 when unknown. */
+  etaSeconds: number;
+  /** The archive entry being written, while extracting. */
+  detail: string;
+}
+
+export interface TranscribeProgress {
+  phase: "starting" | "modelDownload" | "vad" | "transcribing";
+  /** 0..1, or -1 when unknown. */
+  fraction: number;
+  message: string;
+}
+
+export interface EngineStatus {
+  installed: boolean;
+  engineVersion: string;
+  exePath: string | null;
+  /** Bytes of an interrupted download still on disk, ready to resume. */
+  partialBytes: number;
+  downloadBytes: number;
+  /** 0 when the free space could not be determined. */
+  diskFreeBytes: number;
+  /** Whether the chosen model has already been fetched by a previous run. */
+  modelPresent: boolean;
 }
 
 export type SpellDialect = "american" | "british";

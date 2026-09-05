@@ -44,6 +44,10 @@ pub struct Settings {
     /// "american" or "british". A string, so an unknown value degrades to the
     /// default rather than refusing to load the file.
     pub dialect: String,
+    /// Whisper model size used by the transcribe dialog, e.g. "medium".
+    pub whisper_model: String,
+    /// Whisper language code, or empty for auto-detect.
+    pub whisper_language: String,
 }
 
 impl Default for Settings {
@@ -67,6 +71,8 @@ impl Default for Settings {
             max_lines: 2,
             spellcheck: true,
             dialect: "american".to_string(),
+            whisper_model: "medium".to_string(),
+            whisper_language: String::new(),
         }
     }
 }

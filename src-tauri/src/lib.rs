@@ -1,5 +1,6 @@
 mod ai;
 mod dictionary;
+mod engine;
 mod error;
 mod files;
 mod media;
@@ -8,6 +9,7 @@ mod proofread;
 mod render;
 mod settings;
 mod spelling;
+mod transcribe;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +19,7 @@ pub fn run() {
         .manage(render::RenderState::default())
         .manage(spelling::SpellState::default())
         .manage(proofread::ProofreadState::default())
+        .manage(transcribe::TranscribeState::default())
         .setup(|app| {
             #[cfg(debug_assertions)]
             {
@@ -55,6 +58,10 @@ pub fn run() {
             proofread::cancel_proofread,
             dictionary::load_user_dictionary,
             dictionary::save_user_dictionary,
+            transcribe::transcribe_status,
+            transcribe::install_engine,
+            transcribe::transcribe_video,
+            transcribe::cancel_transcribe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
