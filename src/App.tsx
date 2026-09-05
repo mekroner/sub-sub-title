@@ -14,10 +14,14 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { RenderDialog } from "./components/RenderDialog";
 import { MenuBar } from "./components/MenuBar";
-import type { Menu } from "./components/MenuBar";
+import type { Menu, MenuEntry } from "./components/MenuBar";
+import { ContextMenu } from "./components/ContextMenu";
+import type { ContextMenuState } from "./components/ContextMenu";
+import { FindBar } from "./components/FindBar";
 
 import { emptyProject, useProjectHistory } from "./state/useProjectHistory";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useCueSelection } from "./hooks/useCueSelection";
 
 import * as api from "./lib/api";
 import { errorMessage } from "./lib/api";
@@ -34,16 +38,29 @@ import {
 import { makeId } from "./lib/ids";
 import { clamp } from "./lib/time";
 import {
+  DEFAULT_MIN_GAP,
+  duplicateCue,
   findActiveCueIndex,
+  findOverlaps,
   insertCue,
+  insertCueClamped,
+  joinCues,
   mergeWithNext,
+  moveCueTo,
+  moveCuesBy,
   newCue,
-  nudgeCue,
-  setCueTiming,
+  resizeCue,
+  resolveOverlaps,
   slotAfter,
   sortCues,
   splitCueAt,
 } from "./lib/cues";
+import {
+  DEFAULT_MAX_CHARS_PER_LINE,
+  DEFAULT_MAX_LINES,
+  matchesQuery,
+  replaceIn,
+} from "./lib/text";
 import type {
   AppState,
   Cue,
@@ -64,10 +81,22 @@ const DEFAULT_SETTINGS: Settings = {
   styleNotes: "",
   fontName: "Arial",
   fontSize: 48,
+  bold: false,
   outline: 2,
+  outlineColor: "#000000",
   shadow: 0,
+  shadowColor: "#000000",
   peaksResolution: 80,
+  minGap: DEFAULT_MIN_GAP,
+  maxCharsPerLine: DEFAULT_MAX_CHARS_PER_LINE,
+  maxLines: DEFAULT_MAX_LINES,
 };
+
+interface FindState {
+  query: string;
+  replacement: string;
+  matchCase: boolean;
+}
 
 const STORAGE_PREFIX = "sub-sub-title:";
 
@@ -114,7 +143,6 @@ export default function App() {
 
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(50);
   const [dropActive, setDropActive] = useState(false);
   // Transport preferences are per-machine UI state, so they live in
@@ -130,6 +158,8 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showRender, setShowRender] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [find, setFind] = useState<FindState | null>(null);
   const [toast, setToast] = useState<{ text: string; kind: "info" | "error" } | null>(
     null,
   );
@@ -147,6 +177,15 @@ export default function App() {
 
   const cues = project.cues;
   const speakers = project.speakers;
+
+  const {
+    selectedIds,
+    primaryId,
+    select,
+    selectOnly,
+    selectAll,
+    clear: clearSelection,
+  } = useCueSelection(cues);
 
   const notify = useCallback((text: string, kind: "info" | "error" = "info") => {
     setToast({ text, kind });
@@ -182,8 +221,8 @@ export default function App() {
   );
   const activeCue = activeIndex >= 0 ? cues[activeIndex] : null;
   const selectedCue = useMemo(
-    () => cues.find((c) => c.id === selectedCueId) ?? null,
-    [cues, selectedCueId],
+    () => cues.find((c) => c.id === primaryId) ?? null,
+    [cues, primaryId],
   );
   const frameStep = media && media.fps > 0 ? 1 / media.fps : 0.04;
   const duration = media?.duration ?? 0;
@@ -239,7 +278,7 @@ export default function App() {
     setVideoUrl(convertFileSrc(path));
     setPeaks(null);
     setCurrentTime(0);
-    setSelectedCueId(null);
+    clearSelection();
     return { info, derived };
   }, []);
 
@@ -250,7 +289,7 @@ export default function App() {
     setVideoUrl(null);
     setPeaks(null);
     setCurrentTime(0);
-    setSelectedCueId(null);
+    clearSelection();
   }, []);
 
   const openVideoAt = useCallback(
@@ -294,7 +333,7 @@ export default function App() {
 
         load(loaded);
         setProjectPath(adopted);
-        if (loaded.cues.length > 0) setSelectedCueId(loaded.cues[0].id);
+        if (loaded.cues.length > 0) selectOnly(loaded.cues[0].id);
 
         // One write to the app state, so the two calls cannot race each other.
         const stateCall = adopted
@@ -353,7 +392,7 @@ export default function App() {
 
         load(loaded);
         setProjectPath(path);
-        if (loaded.cues.length > 0) setSelectedCueId(loaded.cues[0].id);
+        if (loaded.cues.length > 0) selectOnly(loaded.cues[0].id);
         api.rememberProject(path, loaded.videoPath).then(setAppState).catch(() => undefined);
       } catch (e) {
         // A project that cannot be read is not worth offering again.
@@ -473,19 +512,32 @@ export default function App() {
     [setCues],
   );
 
+  const minGap = settings.minGap;
+
+  /** Typed timecodes are always a resize: they name both edges explicitly. */
   const editTiming = useCallback(
     (id: string, start: number, end: number) =>
-      setCues((list) => sortCues(setCueTiming(list, id, start, end, duration))),
-    [setCues, duration],
+      setCues((list) => resizeCue(list, id, start, end, duration, minGap)),
+    [setCues, duration, minGap],
   );
 
+  /**
+   * A waveform gesture. Resizing clamps against the neighbours; dragging a
+   * whole cue may cross them, and drags a multi-selection along as one block.
+   */
   const retimeFromWaveform = useCallback(
-    (id: string, start: number, end: number) =>
-      setCues(
-        (list) => sortCues(setCueTiming(list, id, start, end, duration)),
-        `drag:${id}`,
-      ),
-    [setCues, duration],
+    (id: string, start: number, end: number, kind: "move" | "resize") =>
+      setCues((list) => {
+        if (kind === "resize") return resizeCue(list, id, start, end, duration, minGap);
+
+        const cue = list.find((c) => c.id === id);
+        if (!cue) return list;
+        if (selectedIds.has(id) && selectedIds.size > 1) {
+          return moveCuesBy(list, selectedIds, start - cue.start, duration, minGap);
+        }
+        return moveCueTo(list, id, start, duration, minGap);
+      }, `drag:${id}`),
+    [setCues, duration, minGap, selectedIds],
   );
 
   const assignSpeaker = useCallback(
@@ -494,13 +546,30 @@ export default function App() {
     [setCues],
   );
 
+  /** Tag every selected cue at once; the whole change is one undo step. */
+  const assignSpeakerToSelection = useCallback(
+    (speakerId: string | null) => {
+      if (selectedIds.size === 0) return;
+      setCues((list) =>
+        list.map((c) => (selectedIds.has(c.id) ? { ...c, speakerId } : c)),
+      );
+    },
+    [setCues, selectedIds],
+  );
+
   const createCue = useCallback(
     (start: number, end: number) => {
       const cue = newCue(start, end, selectedCue?.speakerId ?? null);
-      setCues((list) => insertCue(list, cue));
-      setSelectedCueId(cue.id);
+      let placed = false;
+      setCues((list) => {
+        const next = insertCueClamped(list, cue, duration, minGap);
+        placed = next !== null;
+        return next ?? list;
+      });
+      if (placed) selectOnly(cue.id);
+      else notify("There is no room for a cue there.", "error");
     },
-    [setCues, selectedCue],
+    [setCues, selectedCue, duration, minGap, selectOnly, notify],
   );
 
   // --- Speakers -----------------------------------------------------------
@@ -639,16 +708,23 @@ export default function App() {
           return notify("No cues could be read from that file.", "error");
         }
         update((current) => ({ ...current, cues: parsed }));
-        setSelectedCueId(parsed[0].id);
+        selectOnly(parsed[0].id);
+
+        // Other tools happily emit overlapping cues; say so rather than leaving
+        // the editor in a state its own rules forbid.
+        const overlapping = findOverlaps(parsed, settings.minGap).length;
         notify(
           `Imported ${parsed.length} cues` +
-            (warnings.length ? `; ${warnings.length} lines needed repair.` : "."),
+            (warnings.length ? `; ${warnings.length} lines needed repair.` : ".") +
+            (overlapping > 0
+              ? ` ${overlapping} overlap — use Edit ▸ Fix overlapping cues.`
+              : ""),
         );
       } catch (e) {
         notify(errorMessage(e), "error");
       }
     },
-    [update, notify],
+    [update, notify, selectOnly, settings.minGap],
   );
 
   const importSrt = useCallback(async () => {
@@ -750,13 +826,13 @@ export default function App() {
   // --- Continue-feature ---------------------------------------------------
   const acceptGenerated = useCallback(
     (text: string, speakerId: string | null) => {
-      const { start, end } = slotAfter(cues, selectedCueId, duration);
+      const { start, end } = slotAfter(cues, primaryId, duration);
       const cue: Cue = { id: makeId(), start, end, text, speakerId };
       setCues((list) => insertCue(list, cue));
-      setSelectedCueId(cue.id);
+      selectOnly(cue.id);
       notify("Added the line. Set its timing on the waveform.");
     },
-    [cues, selectedCueId, duration, setCues, notify],
+    [cues, primaryId, duration, setCues, notify],
   );
 
   const registerGenerate = useCallback((fn: (() => void) | null) => {
@@ -767,32 +843,124 @@ export default function App() {
   // Shared by the Edit menu and the keyboard shortcuts, so the two can never
   // drift apart.
   const splitAtPlayhead = useCallback(() => {
-    if (!selectedCueId) return;
-    const result = splitCueAt(cues, selectedCueId, currentTime);
+    if (!primaryId) return;
+    const result = splitCueAt(cues, primaryId, currentTime);
     if (!result.newCueId) {
-      return notify("Move the playhead inside the selected cue to split it.", "error");
+      return notify(
+        "Move the playhead inside the selected cue, at least a tenth of a second from either end, to split it.",
+        "error",
+      );
     }
     setCues(() => result.cues);
-    setSelectedCueId(result.newCueId);
-  }, [cues, selectedCueId, currentTime, setCues, notify]);
+    selectOnly(result.newCueId);
+  }, [cues, primaryId, currentTime, setCues, notify, selectOnly]);
 
-  const mergeSelectedWithNext = useCallback(() => {
-    if (!selectedCueId) return;
-    setCues((list) => mergeWithNext(list, selectedCueId));
-  }, [selectedCueId, setCues]);
+  /**
+   * Joins the whole selection when there is one, and otherwise falls back to
+   * merging the selected cue with the one after it.
+   */
+  const joinSelected = useCallback(() => {
+    if (!primaryId) return;
+
+    if (selectedIds.size > 1) {
+      const joined = joinCues(cues, selectedIds);
+      if (!joined) {
+        return notify("Only neighbouring cues can be joined.", "error");
+      }
+      setCues(() => joined);
+      selectOnly(primaryId);
+      return;
+    }
+
+    const merged = mergeWithNext(cues, primaryId);
+    if (merged === cues) return notify("There is no cue after this one.", "error");
+    setCues(() => merged);
+  }, [cues, primaryId, selectedIds, setCues, notify, selectOnly]);
 
   const newCueAtPlayhead = useCallback(() => {
     const end = Math.min(currentTime + 2, duration || currentTime + 2);
     createCue(currentTime, end);
   }, [currentTime, duration, createCue]);
 
+  const duplicateSelected = useCallback(() => {
+    if (!primaryId) return;
+    const result = duplicateCue(cues, primaryId, duration, minGap);
+    if (!result.newCueId) {
+      return notify("There is no room for a copy after this cue.", "error");
+    }
+    setCues(() => result.cues);
+    selectOnly(result.newCueId);
+  }, [cues, primaryId, duration, minGap, setCues, notify, selectOnly]);
+
   const deleteSelected = useCallback(() => {
-    if (!selectedCueId) return;
-    const index = cues.findIndex((c) => c.id === selectedCueId);
-    setCues((list) => list.filter((c) => c.id !== selectedCueId));
-    const nextSelection = cues[index + 1] ?? cues[index - 1] ?? null;
-    setSelectedCueId(nextSelection?.id ?? null);
-  }, [cues, selectedCueId, setCues]);
+    if (selectedIds.size === 0) return;
+    const last = cues.findIndex((c) => c.id === primaryId);
+    setCues((list) => list.filter((c) => !selectedIds.has(c.id)));
+    // Land on the nearest survivor, so a run of deletes keeps working.
+    const after = cues.slice(last + 1).find((c) => !selectedIds.has(c.id));
+    const before = [...cues.slice(0, Math.max(0, last))]
+      .reverse()
+      .find((c) => !selectedIds.has(c.id));
+    selectOnly(after?.id ?? before?.id ?? null);
+  }, [cues, primaryId, selectedIds, setCues, selectOnly]);
+
+  const fixOverlaps = useCallback(() => {
+    const overlapping = findOverlaps(cues, minGap);
+    if (overlapping.length === 0) return notify("No overlapping cues.");
+    setCues((list) => resolveOverlaps(list, minGap));
+    notify(`Separated ${overlapping.length} overlapping cue${overlapping.length === 1 ? "" : "s"}.`);
+  }, [cues, minGap, setCues, notify]);
+
+  // --- Find and replace ---------------------------------------------------
+  const matches = useMemo(() => {
+    if (!find || find.query === "") return [];
+    return cues.filter((c) => matchesQuery(c.text, find.query, find.matchCase));
+  }, [cues, find]);
+
+  const matchIds = useMemo(
+    () => (matches.length > 0 ? new Set(matches.map((c) => c.id)) : null),
+    [matches],
+  );
+
+  const stepMatch = useCallback(
+    (direction: 1 | -1) => {
+      if (matches.length === 0) return;
+      const at = matches.findIndex((c) => c.id === primaryId);
+      const next =
+        at === -1
+          ? matches[direction === 1 ? 0 : matches.length - 1]
+          : matches[(at + direction + matches.length) % matches.length];
+      selectOnly(next.id);
+      seek(next.start);
+    },
+    [matches, primaryId, selectOnly, seek],
+  );
+
+  const replaceOne = useCallback(() => {
+    if (!find || matches.length === 0) return;
+    const target = matches.find((c) => c.id === primaryId) ?? matches[0];
+    setCues((list) =>
+      list.map((c) =>
+        c.id === target.id
+          ? { ...c, text: replaceIn(c.text, find.query, find.replacement, find.matchCase) }
+          : c,
+      ),
+    );
+    selectOnly(target.id);
+  }, [find, matches, primaryId, setCues, selectOnly]);
+
+  const replaceAll = useCallback(() => {
+    if (!find || matches.length === 0) return;
+    const count = matches.length;
+    setCues((list) =>
+      list.map((c) =>
+        matchesQuery(c.text, find.query, find.matchCase)
+          ? { ...c, text: replaceIn(c.text, find.query, find.replacement, find.matchCase) }
+          : c,
+      ),
+    );
+    notify(`Replaced in ${count} cue${count === 1 ? "" : "s"}.`);
+  }, [find, matches, setCues, notify]);
 
   const zoomBy = useCallback((direction: number) => {
     setZoom((z) =>
@@ -828,36 +996,52 @@ export default function App() {
       togglePlay,
       assignSpeakerIndex: (index) => {
         const speaker = speakers[index];
-        if (!speaker || !selectedCueId) return;
-        assignSpeaker(selectedCueId, speaker.id);
+        if (speaker) assignSpeakerToSelection(speaker.id);
       },
-      clearSpeaker: () => {
-        if (selectedCueId) assignSpeaker(selectedCueId, null);
-      },
+      clearSpeaker: () => assignSpeakerToSelection(null),
       splitAtPlayhead,
-      mergeWithNext: mergeSelectedWithNext,
+      mergeWithNext: joinSelected,
       nudge: (edge, direction) => {
-        if (!selectedCueId) return;
-        setCues(
-          (list) => nudgeCue(list, selectedCueId, edge, direction * frameStep, duration),
-          `nudge:${selectedCueId}:${edge}`,
-        );
+        if (!primaryId) return;
+        const delta = direction * frameStep;
+        setCues((list) => {
+          // Moving the whole cue carries the rest of the selection with it;
+          // an edge belongs to the one cue that owns it.
+          if (edge === "both") {
+            return moveCuesBy(list, selectedIds, delta, duration, minGap);
+          }
+          const cue = list.find((c) => c.id === primaryId);
+          if (!cue) return list;
+          const start = edge === "start" ? cue.start + delta : cue.start;
+          const end = edge === "end" ? cue.end + delta : cue.end;
+          return resizeCue(list, primaryId, start, end, duration, minGap);
+        }, `nudge:${primaryId}:${edge}`);
       },
       selectPrevious: () => {
-        const index = cues.findIndex((c) => c.id === selectedCueId);
+        const index = cues.findIndex((c) => c.id === primaryId);
         const target = index > 0 ? cues[index - 1] : cues[0];
-        if (target) setSelectedCueId(target.id);
+        if (target) selectOnly(target.id);
       },
       selectNext: () => {
-        const index = cues.findIndex((c) => c.id === selectedCueId);
+        const index = cues.findIndex((c) => c.id === primaryId);
         const target = index >= 0 ? cues[index + 1] : cues[0];
-        if (target) setSelectedCueId(target.id);
+        if (target) selectOnly(target.id);
       },
       jumpToSelected: () => {
         if (selectedCue) seek(selectedCue.start);
       },
       newCueAtPlayhead,
+      duplicateSelected,
       deleteSelected,
+      selectAll,
+      clearSelection: () => {
+        // Escape backs out of whatever is in the way, innermost first.
+        if (contextMenu) setContextMenu(null);
+        else if (find) setFind(null);
+        else clearSelection();
+      },
+      openFind: () =>
+        setFind((current) => current ?? { query: "", replacement: "", matchCase: false }),
       generateContinuation: () => {
         if (generateRef.current) generateRef.current();
         else notify("Add an OpenRouter API key in Settings first.", "error");
@@ -872,14 +1056,131 @@ export default function App() {
       toggleFollow: () => setFollow((f) => !f),
       showHelp: () => setShowHelp(true),
     },
-    !modalOpen && !menuOpen,
+    !modalOpen && !menuOpen && !contextMenu,
   );
+
+  // --- Context menu -------------------------------------------------------
+  /**
+   * Right-clicking a cue that is not in the selection selects it first, so the
+   * menu always acts on what the user is looking at.
+   */
+  const openCueContextMenu = useCallback(
+    (cueId: string, x: number, y: number) => {
+      const inSelection = selectedIds.has(cueId);
+      if (!inSelection) selectOnly(cueId);
+
+      const targets = inSelection ? selectedIds : new Set([cueId]);
+      const many = targets.size > 1;
+      const cue = cues.find((c) => c.id === cueId) ?? null;
+      const suffix = many ? ` ${targets.size} cues` : "";
+
+      const entries: MenuEntry[] = [
+        {
+          kind: "item",
+          label: "Play from here",
+          onSelect: () => cue && seek(cue.start),
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Set start to playhead",
+          disabled: many || !cue,
+          onSelect: () => cue && editTiming(cue.id, currentTime, cue.end),
+        },
+        {
+          kind: "item",
+          label: "Set end to playhead",
+          disabled: many || !cue,
+          onSelect: () => cue && editTiming(cue.id, cue.start, currentTime),
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Split at playhead",
+          accelerator: "S",
+          disabled: many,
+          onSelect: splitAtPlayhead,
+        },
+        {
+          kind: "item",
+          label: many ? `Join${suffix}` : "Join with next",
+          accelerator: "M",
+          onSelect: joinSelected,
+        },
+        {
+          kind: "item",
+          label: "Duplicate",
+          accelerator: "Ctrl+D",
+          disabled: many,
+          onSelect: duplicateSelected,
+        },
+        { kind: "separator" },
+        {
+          kind: "submenu",
+          label: many ? `Assign speaker to${suffix}` : "Assign speaker",
+          entries: [
+            ...speakers.map((speaker, index) => ({
+              kind: "item" as const,
+              label: speaker.name,
+              accelerator: index < 9 ? String(index + 1) : undefined,
+              checked: cue?.speakerId === speaker.id,
+              onSelect: () => assignSpeakerToSelection(speaker.id),
+            })),
+            ...(speakers.length > 0 ? [{ kind: "separator" as const }] : []),
+            {
+              kind: "item" as const,
+              label: "None",
+              accelerator: "0",
+              onSelect: () => assignSpeakerToSelection(null),
+            },
+          ],
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: many ? `Delete${suffix}` : "Delete cue",
+          accelerator: "Del",
+          onSelect: deleteSelected,
+        },
+      ];
+
+      setContextMenu({ x, y, entries });
+    },
+    [
+      cues,
+      speakers,
+      selectedIds,
+      selectOnly,
+      seek,
+      currentTime,
+      editTiming,
+      splitAtPlayhead,
+      joinSelected,
+      duplicateSelected,
+      assignSpeakerToSelection,
+      deleteSelected,
+    ],
+  );
+
+  // The webview's own menu is a browser menu (Reload, Inspect) that has no
+  // place in an editor — except inside text fields, where Cut/Paste earn it.
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", onContextMenu);
+    return () => window.removeEventListener("contextmenu", onContextMenu);
+  }, []);
 
   // --- Render -------------------------------------------------------------
   const activeSpeaker =
     speakers.find((s) => s.id === activeCue?.speakerId) ?? null;
   /** There is something worth writing to disk. */
   const hasProject = Boolean(paths) || cues.length > 0 || speakers.length > 0;
+  const selectionLabel = selectedIds.size > 1 ? ` ${selectedIds.size} cues` : " cue";
 
   const menus: Menu[] = [
     {
@@ -980,22 +1281,53 @@ export default function App() {
           kind: "item",
           label: "Split at playhead",
           accelerator: "S",
-          disabled: !selectedCueId,
+          disabled: !primaryId,
           onSelect: splitAtPlayhead,
         },
         {
           kind: "item",
-          label: "Merge with next",
+          label: selectedIds.size > 1 ? `Join${selectionLabel}` : "Join with next",
           accelerator: "M",
-          disabled: !selectedCueId,
-          onSelect: mergeSelectedWithNext,
+          disabled: !primaryId,
+          onSelect: joinSelected,
         },
         {
           kind: "item",
-          label: "Delete cue",
+          label: "Duplicate cue",
+          accelerator: "Ctrl+D",
+          disabled: !primaryId,
+          onSelect: duplicateSelected,
+        },
+        {
+          kind: "item",
+          label: `Delete${selectionLabel}`,
           accelerator: "Del",
-          disabled: !selectedCueId,
+          disabled: !primaryId,
           onSelect: deleteSelected,
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Select all cues",
+          accelerator: "Ctrl+A",
+          disabled: cues.length === 0,
+          onSelect: selectAll,
+        },
+        {
+          kind: "item",
+          label: "Find and replace…",
+          accelerator: "Ctrl+F",
+          disabled: cues.length === 0,
+          onSelect: () =>
+            setFind(
+              (current) => current ?? { query: "", replacement: "", matchCase: false },
+            ),
+        },
+        {
+          kind: "item",
+          label: "Fix overlapping cues",
+          disabled: cues.length < 2,
+          onSelect: fixOverlaps,
         },
       ],
     },
@@ -1107,12 +1439,13 @@ export default function App() {
             duration={duration}
             cues={cues}
             speakers={speakers}
-            selectedCueId={selectedCueId}
+            selectedIds={selectedIds}
             zoom={zoom}
             follow={follow}
-            onSelectCue={setSelectedCueId}
-            onRetimeCue={(id, start, end) => retimeFromWaveform(id, start, end)}
+            onSelectCue={select}
+            onRetimeCue={retimeFromWaveform}
             onCreateCue={createCue}
+            onContextMenuCue={openCueContextMenu}
             // Clicking a region must move the video, not just the app's clock.
             onSeek={seek}
             onZoomChange={setZoom}
@@ -1123,20 +1456,18 @@ export default function App() {
           <SpeakerPanel
             speakers={speakers}
             cues={cues}
-            selectedCueId={selectedCueId}
+            selectedCount={selectedIds.size}
             onAdd={addSpeaker}
             onUpdate={updateSpeaker}
             onRemove={removeSpeaker}
-            onAssignToSelected={(speakerId) =>
-              selectedCueId && assignSpeaker(selectedCueId, speakerId)
-            }
+            onAssignToSelected={assignSpeakerToSelection}
             onApplyDetected={applyDetectedSpeakers}
           />
 
           <ContinuePanel
             cues={cues}
             speakers={speakers}
-            selectedCueId={selectedCueId}
+            selectedCueId={primaryId}
             settings={settings}
             apiKeySet={apiKeySet}
             onAccept={acceptGenerated}
@@ -1146,13 +1477,37 @@ export default function App() {
         </aside>
 
         <section className="list-row">
+          {find && (
+            <FindBar
+              query={find.query}
+              replacement={find.replacement}
+              matchCase={find.matchCase}
+              matchCount={matches.length}
+              position={Math.max(0, matches.findIndex((c) => c.id === primaryId) + 1)}
+              onQueryChange={(query) => setFind((f) => f && { ...f, query })}
+              onReplacementChange={(replacement) =>
+                setFind((f) => f && { ...f, replacement })
+              }
+              onMatchCaseChange={(matchCase) => setFind((f) => f && { ...f, matchCase })}
+              onStep={stepMatch}
+              onReplaceOne={replaceOne}
+              onReplaceAll={replaceAll}
+              onClose={() => setFind(null)}
+            />
+          )}
+
           <CueList
             cues={cues}
             speakers={speakers}
-            selectedCueId={selectedCueId}
+            selectedIds={selectedIds}
+            primaryId={primaryId}
             activeCueId={activeCue?.id ?? null}
+            matchIds={matchIds}
             follow={follow && playing}
-            onSelect={setSelectedCueId}
+            maxCharsPerLine={settings.maxCharsPerLine}
+            maxLines={settings.maxLines}
+            onSelect={select}
+            onContextMenu={openCueContextMenu}
             onSeek={seek}
             onEditText={editText}
             onEditTiming={editTiming}
@@ -1168,6 +1523,10 @@ export default function App() {
             <span>A video replaces the project; an .srt imports cues into it.</span>
           </div>
         </div>
+      )}
+
+      {contextMenu && (
+        <ContextMenu state={contextMenu} onClose={() => setContextMenu(null)} />
       )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}

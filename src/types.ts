@@ -90,9 +90,18 @@ export interface Settings {
   styleNotes: string;
   fontName: string;
   fontSize: number;
+  bold: boolean;
   outline: number;
+  /** Hex. The .ass OutlineColour, and the preview's stroke. */
+  outlineColor: string;
   shadow: number;
+  /** Hex. The .ass BackColour, and the preview's drop shadow. */
+  shadowColor: string;
   peaksResolution: number;
+  /** Seconds of enforced silence between adjacent cues. */
+  minGap: number;
+  maxCharsPerLine: number;
+  maxLines: number;
 }
 
 export interface ModelInfo {

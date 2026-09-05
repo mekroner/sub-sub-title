@@ -191,3 +191,265 @@ export function insertCue(cues: Cue[], cue: Cue): Cue[] {
 export function newCue(start: number, end: number, speakerId: string | null = null): Cue {
   return { id: makeId(), start, end, text: "", speakerId };
 }
+
+// --- Overlap-free timing --------------------------------------------------
+// A cue may never overlap its neighbours. Resizes clamp against them; a whole
+// cue drag, by contrast, may travel across a neighbour and change the order,
+// which is decided by where the dragged cue's midpoint lands.
+
+/** Default breathing space between adjacent cues, in seconds. */
+export const DEFAULT_MIN_GAP = 0.04;
+
+const EPSILON = 0.0005;
+
+function unchanged(cue: Cue, start: number, end: number): boolean {
+  return Math.abs(cue.start - start) < EPSILON && Math.abs(cue.end - end) < EPSILON;
+}
+
+/**
+ * The free intervals left by `others` (start-sorted and non-overlapping), with
+ * `minGap` shaved off each side.
+ */
+function freeGaps(others: Cue[], limit: number, minGap: number): Array<[number, number]> {
+  const gaps: Array<[number, number]> = [];
+  let cursor = 0;
+  for (const other of others) {
+    gaps.push([cursor, other.start - minGap]);
+    cursor = Math.max(cursor, other.end + minGap);
+  }
+  gaps.push([cursor, limit]);
+  return gaps;
+}
+
+/**
+ * Move one edge (or both, when the caller passes an explicit window), clamped
+ * so the cue stays inside the space its neighbours leave it.
+ */
+export function resizeCue(
+  cues: Cue[],
+  cueId: string,
+  start: number,
+  end: number,
+  duration: number,
+  minGap = DEFAULT_MIN_GAP,
+): Cue[] {
+  const sorted = sortCues(cues);
+  const index = sorted.findIndex((c) => c.id === cueId);
+  if (index === -1) return cues;
+
+  const cue = sorted[index];
+  const limit = duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
+  const lower = index > 0 ? sorted[index - 1].end + minGap : 0;
+  const upper = index < sorted.length - 1 ? sorted[index + 1].start - minGap : limit;
+
+  // Neighbours can leave less room than a cue is allowed to occupy (a tight
+  // import, say); refuse rather than produce something illegal.
+  if (upper - lower < MIN_CUE_DURATION) return cues;
+
+  const nextStart = clamp(start, lower, upper - MIN_CUE_DURATION);
+  const nextEnd = clamp(end, nextStart + MIN_CUE_DURATION, upper);
+  if (unchanged(cue, nextStart, nextEnd)) return cues;
+
+  return sorted.map((c) =>
+    c.id === cueId ? { ...c, start: nextStart, end: nextEnd } : c,
+  );
+}
+
+/**
+ * Move a whole cue, keeping its duration. The cue lands in whichever free gap
+ * its midpoint falls into, so dragging past a neighbour's middle carries it
+ * across and reorders the two. A gap too small to hold the cue is refused, and
+ * the cue stays where it was.
+ */
+export function moveCueTo(
+  cues: Cue[],
+  cueId: string,
+  start: number,
+  duration: number,
+  minGap = DEFAULT_MIN_GAP,
+): Cue[] {
+  const cue = cues.find((c) => c.id === cueId);
+  if (!cue) return cues;
+
+  const width = cue.end - cue.start;
+  const limit = duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
+  const others = sortCues(cues.filter((c) => c.id !== cueId));
+
+  const desired = clamp(start, 0, Math.max(0, limit - width));
+  const midpoint = desired + width / 2;
+
+  // The gap holding the midpoint; when the midpoint is over another cue, the
+  // nearer gap wins, which is what makes a drag flip sides at the halfway mark.
+  const gaps = freeGaps(others, limit, minGap).filter(([lo, hi]) => hi - lo >= width);
+  if (gaps.length === 0) return cues;
+
+  const distance = ([lo, hi]: [number, number]) =>
+    midpoint < lo ? lo - midpoint : midpoint > hi ? midpoint - hi : 0;
+  const target = gaps.reduce((best, gap) => (distance(gap) < distance(best) ? gap : best));
+
+  const nextStart = clamp(desired, target[0], target[1] - width);
+  if (unchanged(cue, nextStart, nextStart + width)) return cues;
+
+  return sortCues(
+    cues.map((c) =>
+      c.id === cueId ? { ...c, start: nextStart, end: nextStart + width } : c,
+    ),
+  );
+}
+
+/**
+ * Shift a whole selection in time, keeping the cues' spacing. The selection
+ * moves as one block and is clamped against the cues that are not selected; a
+ * block never jumps over anything, unlike a single-cue drag.
+ */
+export function moveCuesBy(
+  cues: Cue[],
+  ids: Iterable<string>,
+  delta: number,
+  duration: number,
+  minGap = DEFAULT_MIN_GAP,
+): Cue[] {
+  const set = new Set(ids);
+  const selected = cues.filter((c) => set.has(c.id));
+  if (selected.length === 0 || delta === 0) return cues;
+
+  const blockStart = Math.min(...selected.map((c) => c.start));
+  const blockEnd = Math.max(...selected.map((c) => c.end));
+  const width = blockEnd - blockStart;
+  const limit = duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
+  const others = sortCues(cues.filter((c) => !set.has(c.id)));
+
+  const desired = clamp(blockStart + delta, 0, Math.max(0, limit - width));
+  const home = freeGaps(others, limit, minGap).find(
+    ([lo, hi]) =>
+      hi - lo >= width && lo <= blockStart + EPSILON && hi >= blockEnd - EPSILON,
+  );
+  if (!home) return cues;
+
+  const actual = clamp(desired, home[0], home[1] - width) - blockStart;
+  if (Math.abs(actual) < EPSILON) return cues;
+
+  return sortCues(
+    cues.map((c) =>
+      set.has(c.id) ? { ...c, start: c.start + actual, end: c.end + actual } : c,
+    ),
+  );
+}
+
+/**
+ * Insert a new cue, trimmed to the room its neighbours leave. Returns null when
+ * there is no room at all, so the caller can say so instead of creating a cue
+ * that overlaps.
+ */
+export function insertCueClamped(
+  cues: Cue[],
+  cue: Cue,
+  duration: number,
+  minGap = DEFAULT_MIN_GAP,
+): Cue[] | null {
+  const inserted = insertCue(cues, cue);
+  const clamped = resizeCue(inserted, cue.id, cue.start, cue.end, duration, minGap);
+  // Any overlaps the list already had are none of this function's business;
+  // introducing a new one means there was no room.
+  const before = findOverlaps(cues, minGap).length;
+  return findOverlaps(clamped, minGap).length > before ? null : clamped;
+}
+
+/** Cues that start before their predecessor has finished. */
+export function findOverlaps(cues: Cue[], minGap = 0): Cue[] {
+  const sorted = sortCues(cues);
+  const bad: Cue[] = [];
+  for (let i = 1; i < sorted.length; i += 1) {
+    if (sorted[i].start < sorted[i - 1].end + minGap - EPSILON) bad.push(sorted[i]);
+  }
+  return bad;
+}
+
+/**
+ * Pull overlapping cues apart, for material that arrives overlapped (an .srt
+ * from another tool). The earlier cue is trimmed where that leaves it long
+ * enough to read; otherwise the later cue is pushed back.
+ */
+export function resolveOverlaps(cues: Cue[], minGap = DEFAULT_MIN_GAP): Cue[] {
+  const out = sortCues(cues);
+  let changed = false;
+
+  for (let i = 1; i < out.length; i += 1) {
+    const prev = out[i - 1];
+    const cur = out[i];
+    if (cur.start >= prev.end + minGap - EPSILON) continue;
+
+    const trimmed = cur.start - minGap;
+    if (trimmed - prev.start >= MIN_CUE_DURATION) {
+      out[i - 1] = { ...prev, end: trimmed };
+    } else {
+      const start = prev.end + minGap;
+      out[i] = { ...cur, start, end: Math.max(cur.end, start + MIN_CUE_DURATION) };
+    }
+    changed = true;
+  }
+
+  return changed ? sortCues(out) : cues;
+}
+
+// --- Join and duplicate ---------------------------------------------------
+
+/**
+ * Merge a contiguous run of cues into one. Returns null when the selection is
+ * not contiguous, since joining across a cue that stays behind would reorder
+ * the dialogue silently.
+ */
+export function joinCues(cues: Cue[], ids: Iterable<string>): Cue[] | null {
+  const set = new Set(ids);
+  const sorted = sortCues(cues);
+  const indices = sorted.map((c, i) => (set.has(c.id) ? i : -1)).filter((i) => i !== -1);
+
+  if (indices.length < 2) return null;
+  const first = indices[0];
+  const last = indices[indices.length - 1];
+  if (last - first + 1 !== indices.length) return null;
+
+  const run = sorted.slice(first, last + 1);
+  const merged: Cue = {
+    ...run[0],
+    start: Math.min(...run.map((c) => c.start)),
+    end: Math.max(...run.map((c) => c.end)),
+    text: run.map((c) => c.text.trim()).filter(Boolean).join("\n"),
+    speakerId: run.find((c) => c.speakerId)?.speakerId ?? null,
+  };
+
+  const next = [...sorted];
+  next.splice(first, run.length, merged);
+  return next;
+}
+
+export interface DuplicateResult {
+  cues: Cue[];
+  /** The copy, to select afterwards; null when there was no room for it. */
+  newCueId: string | null;
+}
+
+/** Copy a cue into the free space after it, keeping its text and speaker. */
+export function duplicateCue(
+  cues: Cue[],
+  cueId: string,
+  duration: number,
+  minGap = DEFAULT_MIN_GAP,
+): DuplicateResult {
+  const cue = cues.find((c) => c.id === cueId);
+  if (!cue) return { cues, newCueId: null };
+
+  const width = cue.end - cue.start;
+  const limit = duration > 0 ? duration : cue.end + width + 1;
+  const following = sortCues(cues.filter((c) => c.id !== cue.id)).find(
+    (c) => c.start >= cue.end,
+  );
+
+  const start = cue.end + minGap;
+  const roomEnd = following ? following.start - minGap : limit;
+  const end = Math.min(start + width, roomEnd);
+  if (end - start < MIN_CUE_DURATION) return { cues, newCueId: null };
+
+  const copy: Cue = { ...cue, id: makeId(), start, end };
+  return { cues: insertCue(cues, copy), newCueId: copy.id };
+}

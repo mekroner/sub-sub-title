@@ -71,7 +71,11 @@ export function SettingsDialog({
       <div
         className="modal"
         onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          // Escape abandons the draft, the same as Cancel.
+          if (e.key === "Escape") onClose();
+        }}
       >
         <header className="modal-header">
           <h2>Settings</h2>
@@ -212,7 +216,7 @@ export function SettingsDialog({
                 />
               </label>
               <label className="field">
-                <span>Outline</span>
+                <span>Outline (0 draws none)</span>
                 <input
                   type="number"
                   min={0}
@@ -220,6 +224,14 @@ export function SettingsDialog({
                   step={0.5}
                   value={draft.outline}
                   onChange={(e) => set("outline", Number(e.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span>Outline colour</span>
+                <input
+                  type="color"
+                  value={draft.outlineColor}
+                  onChange={(e) => set("outlineColor", e.target.value)}
                 />
               </label>
               <label className="field">
@@ -233,7 +245,67 @@ export function SettingsDialog({
                   onChange={(e) => set("shadow", Number(e.target.value))}
                 />
               </label>
+              <label className="field">
+                <span>Shadow colour</span>
+                <input
+                  type="color"
+                  value={draft.shadowColor}
+                  onChange={(e) => set("shadowColor", e.target.value)}
+                />
+              </label>
+              <label className="field checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.bold}
+                  onChange={(e) => set("bold", e.target.checked)}
+                />
+                <span>Bold</span>
+              </label>
             </div>
+            <p className="hint">
+              Text colour comes from each speaker; captions with no speaker are white.
+            </p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Timing and readability</legend>
+            <div className="field-grid">
+              <label className="field">
+                <span>Minimum gap between cues (seconds)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={draft.minGap}
+                  onChange={(e) => set("minGap", Number(e.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span>Characters per line</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={120}
+                  value={draft.maxCharsPerLine}
+                  onChange={(e) => set("maxCharsPerLine", Number(e.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span>Lines per cue</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={6}
+                  value={draft.maxLines}
+                  onChange={(e) => set("maxLines", Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <p className="hint">
+              Cues may not overlap: edits are clamped to leave the gap above. The two
+              limits only flag a cue in the list; nothing is rewritten for you.
+            </p>
           </fieldset>
 
           <fieldset>

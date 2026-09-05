@@ -20,7 +20,11 @@ export type ShortcutCommand =
   | { type: "selectNext" }
   | { type: "jumpToSelected" }
   | { type: "newCue" }
+  | { type: "duplicate" }
   | { type: "deleteSelected" }
+  | { type: "selectAll" }
+  | { type: "clearSelection" }
+  | { type: "find" }
   | { type: "generate" }
   | { type: "save" }
   | { type: "saveAs" }
@@ -55,6 +59,7 @@ function effectiveCode(event: KeyLike): string {
     Spacebar: "Space",
     Enter: "Enter",
     Delete: "Delete",
+    Escape: "Escape",
     ArrowUp: "ArrowUp",
     ArrowDown: "ArrowDown",
     "[": "BracketLeft",
@@ -86,6 +91,12 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
         return { type: "newProject" };
       case "KeyO":
         return { type: "openProject" };
+      case "KeyA":
+        return { type: "selectAll" };
+      case "KeyD":
+        return { type: "duplicate" };
+      case "KeyF":
+        return { type: "find" };
       case "KeyZ":
         return shift ? { type: "redo" } : { type: "undo" };
       case "KeyY":
@@ -135,6 +146,8 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
       return { type: "jumpToSelected" };
     case "Delete":
       return { type: "deleteSelected" };
+    case "Escape":
+      return { type: "clearSelection" };
     case "Equal":
     case "NumpadAdd":
       return { type: "zoom", direction: 1 };

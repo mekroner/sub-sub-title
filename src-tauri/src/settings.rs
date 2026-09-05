@@ -25,10 +25,20 @@ pub struct Settings {
     /// Default .ass styling used for export and the preview overlay.
     pub font_name: String,
     pub font_size: u32,
+    pub bold: bool,
     pub outline: f32,
+    /// Hex colour of the outline drawn around the glyphs.
+    pub outline_color: String,
     pub shadow: f32,
+    /// Hex colour of the drop shadow.
+    pub shadow_color: String,
     /// Waveform extraction resolution, in points per second.
     pub peaks_resolution: u32,
+    /// Enforced silence between adjacent cues, in seconds.
+    pub min_gap: f32,
+    /// Readability limits flagged in the cue list.
+    pub max_chars_per_line: u32,
+    pub max_lines: u32,
 }
 
 impl Default for Settings {
@@ -41,9 +51,15 @@ impl Default for Settings {
             style_notes: String::new(),
             font_name: "Arial".to_string(),
             font_size: 48,
+            bold: false,
             outline: 2.0,
+            outline_color: "#000000".to_string(),
             shadow: 0.0,
+            shadow_color: "#000000".to_string(),
             peaks_resolution: 80,
+            min_gap: 0.04,
+            max_chars_per_line: 42,
+            max_lines: 2,
         }
     }
 }

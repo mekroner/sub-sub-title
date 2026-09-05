@@ -68,7 +68,11 @@ export function RenderDialog({
       <div
         className="modal narrow"
         onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          // A render in flight owns the dialog until it finishes or fails.
+          if (e.key === "Escape" && !busy) onClose();
+        }}
       >
         <header className="modal-header">
           <h2>Burn subtitles into video</h2>

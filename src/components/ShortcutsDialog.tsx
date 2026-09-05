@@ -1,16 +1,21 @@
 const SHORTCUTS: Array<[string, string]> = [
   ["Space", "Play / pause"],
-  ["1 – 9", "Assign speaker N to the selected cue"],
-  ["0", "Clear the selected cue's speaker"],
+  ["Click", "Select a cue — Ctrl+click adds, Shift+click extends"],
+  ["Ctrl + A / Esc", "Select every cue / clear the selection"],
+  ["Right-click", "Cue commands for the clicked cue or the selection"],
+  ["1 – 9", "Assign speaker N to the selected cues"],
+  ["0", "Clear the selected cues' speaker"],
   ["S", "Split the selected cue at the playhead"],
-  ["M", "Merge the selected cue with the next"],
+  ["M", "Join the selected cues (or merge with the next)"],
+  ["Ctrl + D", "Duplicate the selected cue"],
+  ["Ctrl + F", "Find and replace across cues"],
   ["[  /  ]", "Nudge cue start earlier / later by one frame"],
   ["Shift + [  /  ]", "Nudge cue end earlier / later by one frame"],
-  ["Alt + [  /  ]", "Move the whole cue earlier / later by one frame"],
+  ["Alt + [  /  ]", "Move the whole selection earlier / later by one frame"],
   ["↑ / ↓", "Select previous / next cue"],
   ["Enter", "Jump video and waveform to the selected cue"],
   ["N", "New cue at the playhead"],
-  ["Delete", "Delete the selected cue"],
+  ["Delete", "Delete the selected cues"],
   ["Ctrl + G", "Generate a continuation for the selected cue"],
   ["Ctrl + N", "New project"],
   ["Ctrl + O", "Open a project"],
@@ -27,7 +32,17 @@ const SHORTCUTS: Array<[string, string]> = [
 export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal narrow" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        className="modal narrow"
+        tabIndex={-1}
+        // Autofocus, so Escape reaches the dialog rather than the editor.
+        ref={(el) => el?.focus()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Escape") onClose();
+        }}
+      >
         <header className="modal-header">
           <h2>Keyboard shortcuts</h2>
           <button type="button" className="icon-button" onClick={onClose}>

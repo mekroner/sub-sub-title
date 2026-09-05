@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Cue, Settings, Speaker } from "../types";
+import { ASS_MARGIN_H, ASS_MARGIN_V } from "../lib/ass";
 
 interface Props {
   src: string | null;
@@ -70,10 +71,17 @@ export const VideoPane = forwardRef<HTMLVideoElement, Props>(function VideoPane(
     return { left: 0, top: (height - h) / 2, width, height: h };
   })();
 
-  // .ass sizes are in source-video pixels; scale to the rendered box.
-  const scale = videoHeight > 0 && box.height > 0 ? box.height / videoHeight : 0;
-  const fontSize = Math.max(8, settings.fontSize * (scale || 0.09));
-  const outline = Math.max(1, settings.outline * (scale || 0.09) * 1.4);
+  // .ass sizes are in source-video pixels; scale to the rendered box. Until
+  // ffprobe reports the real height, assume 1080p rather than a magic factor.
+  const sourceHeight = videoHeight > 0 ? videoHeight : 1080;
+  const scale = box.height > 0 ? box.height / sourceHeight : 0;
+  const fontSize = settings.fontSize * scale;
+  // ASS draws the outline `Outline` pixels *outwards*; -webkit-text-stroke
+  // centres its stroke on the glyph edge, so it needs twice the width to cover
+  // the same ground. `paint-order` keeps the stroke behind the fill, which is
+  // what stops it eating into thin letterforms.
+  const stroke = settings.outline * scale * 2;
+  const shadow = settings.shadow * scale;
 
   return (
     <div className="video-pane">
@@ -106,7 +114,10 @@ export const VideoPane = forwardRef<HTMLVideoElement, Props>(function VideoPane(
                 top: box.top,
                 width: box.width,
                 height: box.height,
-                paddingBottom: box.height * 0.045,
+                // The same margins the .ass style declares, in PlayRes units.
+                paddingBottom: ASS_MARGIN_V * scale,
+                paddingLeft: ASS_MARGIN_H * scale,
+                paddingRight: ASS_MARGIN_H * scale,
               }}
             >
               <span
@@ -115,19 +126,27 @@ export const VideoPane = forwardRef<HTMLVideoElement, Props>(function VideoPane(
                   color,
                   fontFamily: `"${settings.fontName}", Arial, sans-serif`,
                   fontSize: `${fontSize}px`,
-                  // Four offsets approximate the .ass outline; text-stroke
-                  // renders inconsistently in WebView2.
-                  textShadow: [
-                    `-${outline}px -${outline}px 0 #000`,
-                    `${outline}px -${outline}px 0 #000`,
-                    `-${outline}px ${outline}px 0 #000`,
-                    `${outline}px ${outline}px 0 #000`,
-                    `0 ${outline * 1.5}px ${outline * 2}px rgba(0,0,0,0.6)`,
-                  ].join(", "),
+                  fontWeight: settings.bold ? 700 : 400,
+                  // ASS puts the shadow down and to the right, at no blur.
+                  textShadow:
+                    shadow > 0
+                      ? `${shadow}px ${shadow}px 0 ${settings.shadowColor}`
+                      : "none",
                 }}
               >
                 {activeCue.text.split("\n").map((line, i) => (
-                  <span key={i} className="caption-line">
+                  <span
+                    key={i}
+                    className="caption-line"
+                    style={
+                      stroke > 0
+                        ? {
+                            WebkitTextStrokeWidth: `${stroke}px`,
+                            WebkitTextStrokeColor: settings.outlineColor,
+                          }
+                        : undefined
+                    }
+                  >
                     {line}
                   </span>
                 ))}

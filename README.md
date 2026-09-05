@@ -81,17 +81,20 @@ project/cue-count label, the zoom slider, and the Follow toggle.
 | Key | Action |
 |---|---|
 | `Space` | Play / pause |
-| `1`–`9` | Assign speaker N to the selected cue |
-| `0` | Clear the selected cue's speaker |
+| `1`–`9` | Assign speaker N to the selected cues |
+| `0` | Clear the selected cues' speaker |
 | `S` | Split the selected cue at the playhead |
-| `M` | Merge the selected cue with the next |
+| `M` | Join the selected cues, or merge with the next |
 | `[` / `]` or `,` / `.` | Nudge cue start earlier / later by one frame |
 | `Shift` + those | Nudge cue **end** |
-| `Alt` + those | Move the whole cue, keeping its duration |
+| `Alt` + those | Move the whole selection, keeping each duration |
 | `↑` / `↓` | Select previous / next cue |
 | `Enter` | Jump video and waveform to the selected cue |
 | `N` | New cue at the playhead |
-| `Delete` | Delete the selected cue |
+| `Delete` | Delete the selected cues |
+| `Ctrl+A` / `Esc` | Select every cue / clear the selection |
+| `Ctrl+D` | Duplicate the selected cue |
+| `Ctrl+F` | Find and replace across cues |
 | `Ctrl+G` | Generate a continuation for the selected cue |
 | `Ctrl+N` | New project |
 | `Ctrl+O` | Open a project |
@@ -108,6 +111,34 @@ Shortcuts are matched on **physical key position**, so `[` and `]` work on a
 Norwegian layout (where they need AltGr) by pressing the keys where `[` and `]`
 sit on a US board. `,` and `.` are bound to the same nudge actions as an
 easier-to-reach alternative. Shortcuts are inert while a text box has focus.
+
+## Selecting and editing cues
+
+Click a cue in the list or on the waveform to select it. `Ctrl`+click adds or
+removes one, `Shift`+click extends the run, and `Ctrl+A` takes all of them.
+Delete, speaker assignment, join, and whole-cue nudges act on the entire
+selection in a single undo step; splitting and duplicating act on the last cue
+touched, which carries a brighter accent in the list.
+
+Right-click a cue — in the list or on its waveform region — for the same
+commands the Edit menu offers, aimed at what is under the pointer. Inside the
+text and timecode fields the webview's own Cut/Copy/Paste menu appears instead.
+
+**Cues may not overlap.** Dragging an edge stops at the neighbour, leaving the
+minimum gap from Settings (0.04 s by default). Dragging a *whole* cue is freer:
+it travels across a neighbour once its midpoint passes, which is how two cues
+swap places. A drag with nowhere to land leaves the cue where it was. Material
+imported from elsewhere can still arrive overlapped; **Edit ▸ Fix overlapping
+cues** pulls it apart in one step, trimming the earlier cue where that leaves it
+long enough to read and pushing the later one back otherwise.
+
+The two numbers at the right of each row are the per-line character counts and
+the reading speed. A line past the limit (42 characters) turns amber; a cue with
+more lines than fit on screen (2) turns the whole column red. Both limits live
+in Settings, and neither rewrites anything — they only flag.
+
+`Ctrl+F` opens find and replace across cue text. Stepping through matches
+selects each cue and seeks to it; Replace and Replace-all are each one undo step.
 
 ## Navigating the waveform
 
@@ -144,7 +175,12 @@ which is what ffmpeg needs.
 
 ## Speaker tagging
 
-Fastest path: select a cue and press a number key.
+Fastest path: select one or more cues and press a number key.
+
+Each speaker's colour opens a small palette — the nine built-in hues, the
+colours already used in this project, and the ones picked recently — with the
+system colour dialog behind **Custom** for anything else. The colour is the
+caption's text colour in both the preview and the burn-in.
 
 If the transcript already marks speakers inline (`ALEX: line`, `[Alex] line`),
 the speaker panel offers **"Detect N from 'NAME:' prefixes"**. That creates the
@@ -172,7 +208,12 @@ mid-encode.
 
 The caption overlay in the preview is positioned over the video's real
 letterboxed rectangle and scaled from the source resolution, so it previews the
-burned-in result rather than approximating it.
+burned-in result rather than approximating it. Font, size, bold, outline width
+and colour, shadow depth and colour, and the bottom margin all come from the
+same settings the `.ass` style is written from: the preview draws the outline
+with a real text stroke behind the fill, at twice the `.ass` outline width
+because libass measures outwards and CSS strokes from the centre. An outline of
+0 draws none, in both.
 
 ## Development
 

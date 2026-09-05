@@ -2,14 +2,23 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Cue, Speaker } from "../types";
 import { charsPerSecond, formatShort, parseTimecode } from "../lib/time";
+import { lineStats } from "../lib/text";
+import { selectModeOf, type SelectMode } from "../hooks/useCueSelection";
 
 interface Props {
   cues: Cue[];
   speakers: Speaker[];
-  selectedCueId: string | null;
+  selectedIds: Set<string>;
+  /** The cue single-cue commands act on; accented more strongly than the rest. */
+  primaryId: string | null;
   activeCueId: string | null;
+  /** Cues matching the find bar's query, highlighted in place. */
+  matchIds: Set<string> | null;
   follow: boolean;
-  onSelect: (id: string) => void;
+  maxCharsPerLine: number;
+  maxLines: number;
+  onSelect: (id: string, mode: SelectMode) => void;
+  onContextMenu: (id: string, x: number, y: number) => void;
   onSeek: (time: number) => void;
   onEditText: (id: string, text: string) => void;
   onEditTiming: (id: string, start: number, end: number) => void;
@@ -22,10 +31,15 @@ const CPS_WARNING = 21;
 export function CueList({
   cues,
   speakers,
-  selectedCueId,
+  selectedIds,
+  primaryId,
   activeCueId,
+  matchIds,
   follow,
+  maxCharsPerLine,
+  maxLines,
   onSelect,
+  onContextMenu,
   onSeek,
   onEditText,
   onEditTiming,
@@ -43,7 +57,7 @@ export function CueList({
 
   // Keep the playing cue on screen, and keep a keyboard-selected cue on screen.
   const activeIndex = activeCueId ? cues.findIndex((c) => c.id === activeCueId) : -1;
-  const selectedIndex = selectedCueId ? cues.findIndex((c) => c.id === selectedCueId) : -1;
+  const primaryIndex = primaryId ? cues.findIndex((c) => c.id === primaryId) : -1;
 
   useEffect(() => {
     if (!follow || activeIndex < 0) return;
@@ -51,9 +65,9 @@ export function CueList({
   }, [activeIndex, follow, virtualizer]);
 
   useLayoutEffect(() => {
-    if (selectedIndex < 0) return;
-    virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
-  }, [selectedIndex, virtualizer]);
+    if (primaryIndex < 0) return;
+    virtualizer.scrollToIndex(primaryIndex, { align: "auto" });
+  }, [primaryIndex, virtualizer]);
 
   if (cues.length === 0) {
     return (
@@ -74,19 +88,44 @@ export function CueList({
           if (!cue) return null;
           const speaker = speakers.find((s) => s.id === cue.speakerId) ?? null;
           const cps = charsPerSecond(cue.text, cue.start, cue.end);
-          const isSelected = cue.id === selectedCueId;
+          const stats = lineStats(cue.text, maxCharsPerLine, maxLines);
+          const isSelected = selectedIds.has(cue.id);
+          const isPrimary = cue.id === primaryId;
           const isActive = cue.id === activeCueId;
+          const isMatch = matchIds?.has(cue.id) ?? false;
+
+          const className = [
+            "cue-row",
+            isSelected && "selected",
+            isPrimary && "primary",
+            isActive && "active",
+            isMatch && "match",
+          ]
+            .filter(Boolean)
+            .join(" ");
 
           return (
             <div
               key={item.key}
               ref={virtualizer.measureElement}
               data-index={item.index}
-              className={`cue-row${isSelected ? " selected" : ""}${
-                isActive ? " active" : ""
-              }`}
+              className={className}
               style={{ transform: `translateY(${item.start}px)` }}
-              onMouseDown={() => onSelect(cue.id)}
+              onMouseDown={(e) => {
+                // Right-click is handled by onContextMenu, which needs to know
+                // whether the row was already part of the selection.
+                if (e.button === 2) return;
+                onSelect(cue.id, selectModeOf(e));
+              }}
+              onContextMenu={(e) => {
+                // Inside the text and timecode fields the webview's own
+                // Cut/Copy/Paste menu is the useful one.
+                const target = e.target as HTMLElement;
+                const tag = target.tagName;
+                if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") return;
+                e.preventDefault();
+                onContextMenu(cue.id, e.clientX, e.clientY);
+              }}
             >
               <div className="cue-index">{item.index + 1}</div>
 
@@ -104,7 +143,7 @@ export function CueList({
                   className="cue-jump"
                   title="Jump to this cue"
                   onClick={() => {
-                    onSelect(cue.id);
+                    onSelect(cue.id, "replace");
                     onSeek(cue.start);
                   }}
                 >
@@ -138,11 +177,26 @@ export function CueList({
                 rows={Math.min(4, cue.text.split("\n").length || 1)}
                 spellCheck={false}
                 onChange={(e) => onEditText(cue.id, e.target.value)}
-                onFocus={() => onSelect(cue.id)}
+                onFocus={() => onSelect(cue.id, "replace")}
                 // Let the textarea own its keys; the global shortcuts must not
                 // steal Space, digits, arrows or Enter while typing.
                 onKeyDown={(e) => e.stopPropagation()}
               />
+
+              <div
+                className={`cue-lines${stats.tooManyLines ? " too-many" : ""}`}
+                title={
+                  stats.tooManyLines
+                    ? `${stats.lineCount} lines — at most ${maxLines} fit on screen`
+                    : `Characters per line (limit ${maxCharsPerLine})`
+                }
+              >
+                {stats.lines.map((line, i) => (
+                  <span key={i} className={line.over ? "over" : undefined}>
+                    {line.length}
+                  </span>
+                ))}
+              </div>
 
               <div
                 className={`cue-cps${cps > CPS_WARNING ? " warn" : ""}`}
@@ -196,6 +250,10 @@ function TimeField({
           e.currentTarget.value = formatShort(value);
           return;
         }
+        // Show the stored value again: if the commit is clamped or refused
+        // outright, the field must not keep displaying what was typed. The
+        // effect above replaces this as soon as the value really changes.
+        e.currentTarget.value = formatShort(value);
         onCommit(parsed);
       }}
     />

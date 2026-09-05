@@ -2,11 +2,13 @@ import { useState } from "react";
 import type { Cue, Speaker } from "../types";
 import { contrastText } from "../lib/colors";
 import { detectSpeakerPrefixes } from "../lib/srt";
+import { ColorPicker } from "./ColorPicker";
 
 interface Props {
   speakers: Speaker[];
   cues: Cue[];
-  selectedCueId: string | null;
+  /** How many cues the assign buttons would tag. */
+  selectedCount: number;
   onAdd: () => void;
   onUpdate: (id: string, patch: Partial<Speaker>) => void;
   onRemove: (id: string) => void;
@@ -17,7 +19,7 @@ interface Props {
 export function SpeakerPanel({
   speakers,
   cues,
-  selectedCueId,
+  selectedCount,
   onAdd,
   onUpdate,
   onRemove,
@@ -59,11 +61,13 @@ export function SpeakerPanel({
                   color: contrastText(speaker.color),
                 }}
                 title={
-                  selectedCueId
-                    ? `Assign ${speaker.name} to the selected cue`
+                  selectedCount > 0
+                    ? `Assign ${speaker.name} to ${
+                        selectedCount === 1 ? "the selected cue" : `${selectedCount} cues`
+                      }`
                     : "Select a cue first"
                 }
-                disabled={!selectedCueId}
+                disabled={selectedCount === 0}
                 onClick={() => onAssignToSelected(speaker.id)}
               >
                 {index < 9 ? index + 1 : "•"}
@@ -81,12 +85,11 @@ export function SpeakerPanel({
                 </span>
               </div>
 
-              <input
-                type="color"
-                className="speaker-color"
+              <ColorPicker
                 value={speaker.color}
-                onChange={(e) => onUpdate(speaker.id, { color: e.target.value })}
-                title="Caption colour"
+                inUse={speakers.filter((s) => s.id !== speaker.id).map((s) => s.color)}
+                title={`Caption colour for ${speaker.name}`}
+                onChange={(color) => onUpdate(speaker.id, { color })}
               />
 
               <button
