@@ -118,6 +118,8 @@ export interface Settings {
   minGap: number;
   maxCharsPerLine: number;
   maxLines: number;
+  /** Reading speed, in characters per second, that the fit-timing command aims for. */
+  targetCps: number;
   spellcheck: boolean;
   dialect: SpellDialect;
   /** Whisper model size used by the transcribe dialog, e.g. "medium". */

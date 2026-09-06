@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lineStats, matchesQuery, replaceIn } from "./text";
+import { lineStats, matchesQuery, replaceIn, wrapText } from "./text";
 
 describe("lineStats", () => {
   it("counts each line separately", () => {
@@ -51,5 +51,46 @@ describe("replaceIn", () => {
 
   it("leaves text alone for an empty query", () => {
     expect(replaceIn("keep me", "", "x", false)).toBe("keep me");
+  });
+});
+
+describe("wrapText", () => {
+  it("leaves text that already fits on one line", () => {
+    expect(wrapText("Hello there.", 42, 2)).toBe("Hello there.");
+  });
+
+  it("collapses the clipboard's own line breaks before re-flowing", () => {
+    expect(wrapText("Hello there.\nHow are you?", 42, 2)).toBe(
+      "Hello there. How are you?",
+    );
+    expect(wrapText("  spaced \t out \n\n text  ", 42, 2)).toBe("spaced out text");
+  });
+
+  it("balances two lines instead of filling the first to the brim", () => {
+    // 50 characters: a brim-filling wrap would give 42 + 7.
+    const text = "one two three four five six seven eight nine ten ok";
+    const lines = wrapText(text, 42, 2).split("\n");
+    expect(lines).toHaveLength(2);
+    // Neither line runs away with the text.
+    expect(Math.abs(lines[0].length - lines[1].length)).toBeLessThanOrEqual(6);
+    expect(lines.join(" ")).toBe(text);
+  });
+
+  it("never exceeds the line budget, and keeps every word", () => {
+    const text = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+    const lines = wrapText(text, 42, 2).split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines.join(" ")).toBe(text);
+  });
+
+  it("does not break inside a word that is longer than the limit", () => {
+    expect(wrapText("antidisestablishmentarianism", 10, 2)).toBe(
+      "antidisestablishmentarianism",
+    );
+  });
+
+  it("returns an empty string for blank input", () => {
+    expect(wrapText("", 42, 2)).toBe("");
+    expect(wrapText("   \n  ", 42, 2)).toBe("");
   });
 });

@@ -2,7 +2,7 @@
 
 import type { Cue } from "../types";
 import { makeId } from "./ids";
-import { clamp } from "./time";
+import { clamp, durationForText } from "./time";
 
 export const MIN_CUE_DURATION = 0.08;
 
@@ -269,6 +269,36 @@ export function resizeCue(
   return sorted.map((c) =>
     c.id === cueId ? { ...c, start: nextStart, end: nextEnd } : c,
   );
+}
+
+/**
+ * Retime `ids` so each cue sits on screen exactly as long as its text needs at
+ * `targetCps` characters per second — lengthening one that reads too fast, and
+ * shortening one that lingers.
+ *
+ * Only the end edge moves: a cue's start is anchored to the audio it belongs
+ * to. Neighbours still win, so a boxed-in cue grows as far as the gap allows
+ * and no further. Empty cues have no reading speed and are left alone.
+ *
+ * Returns the same array when nothing could be changed, so a caller can tell
+ * a no-op from a real edit.
+ */
+export function fitCuesToReadingSpeed(
+  cues: Cue[],
+  ids: ReadonlySet<string>,
+  targetCps: number,
+  duration: number,
+  minGap = DEFAULT_MIN_GAP,
+): Cue[] {
+  let next = cues;
+  // Walk the original list, so the result does not depend on selection order.
+  for (const cue of cues) {
+    if (!ids.has(cue.id)) continue;
+    const target = durationForText(cue.text, targetCps);
+    if (target === 0) continue;
+    next = resizeCue(next, cue.id, cue.start, cue.start + target, duration, minGap);
+  }
+  return next;
 }
 
 /**

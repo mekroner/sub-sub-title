@@ -20,6 +20,7 @@ const settings: Settings = {
   minGap: 0.04,
   maxCharsPerLine: 42,
   maxLines: 2,
+  targetCps: 17,
   spellcheck: true,
   dialect: "american",
   whisperModel: "medium",

@@ -13,6 +13,7 @@ export interface ShortcutActions {
   selectNext: () => void;
   jumpToSelected: () => void;
   newCueAtPlayhead: () => void;
+  fitReadingSpeed: () => void;
   duplicateSelected: () => void;
   deleteSelected: () => void;
   selectAll: () => void;
@@ -31,7 +32,7 @@ export interface ShortcutActions {
 }
 
 /** Typing in a field must never trigger an editing shortcut. */
-function isTextEntry(target: EventTarget | null): boolean {
+export function isTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
   return (
@@ -87,6 +88,9 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
           break;
         case "newCue":
           a.newCueAtPlayhead();
+          break;
+        case "fitReadingSpeed":
+          a.fitReadingSpeed();
           break;
         case "duplicate":
           a.duplicateSelected();

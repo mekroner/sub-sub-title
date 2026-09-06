@@ -264,17 +264,27 @@ kbd {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  /*
+   * Three columns: the stage over the cue list, the drag handle, and the full
+   * height side column. The 1px middle track is the handle, which also draws
+   * the seam the column gap used to.
+   *
+   * clamp() keeps the width bounds in CSS, so a stale stored width — or a
+   * window that shrinks under it — can never crush the cue list. The upper
+   * bound reserves the width a cue row needs before its text column starts
+   * disappearing: its fixed columns and gaps come to 464px.
+   */
+  grid-template-columns:
+    minmax(0, 1fr)
+    1px
+    clamp(280px, var(--side-width, 360px), calc(100% - 560px));
   grid-template-rows: minmax(0, 1fr) minmax(200px, 0.6fr);
-  gap: 1px;
+  row-gap: 1px;
+  column-gap: 0;
   background: var(--border);
 }
 
-/*
- * Every child is placed explicitly. With only the side column carrying a
- * definite row, grid auto-placement positions it first and pushes the stage
- * column into the narrow second track.
- */
+/* Every child is placed explicitly, so none of this depends on source order. */
 .stage-column {
   grid-column: 1;
   grid-row: 1;
@@ -286,8 +296,8 @@ kbd {
 }
 
 .side-column {
-  grid-column: 2;
-  grid-row: 1;
+  grid-column: 3;
+  grid-row: 1 / -1;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -296,7 +306,7 @@ kbd {
 }
 
 .list-row {
-  grid-column: 1 / -1;
+  grid-column: 1;
   grid-row: 2;
   min-height: 0;
   background: var(--bg);
@@ -308,6 +318,38 @@ kbd {
 .list-row .cue-list {
   flex: 1;
   min-height: 0;
+}
+
+.side-resizer {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  background: var(--border);
+  cursor: col-resize;
+  position: relative;
+  /* The hit area below overhangs its neighbours, so it has to sit above them. */
+  z-index: 2;
+}
+/* A 1px line is too thin to grab: widen the hit area, not the line. */
+.side-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+.side-resizer:hover,
+.side-resizer:focus-visible,
+.side-resizer.dragging {
+  background: var(--accent);
+}
+.side-resizer:focus-visible {
+  outline: none;
+}
+/* While a drag is live the pointer must not select text under it. */
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 /* --- Video ------------------------------------------------------------- */
@@ -519,7 +561,13 @@ kbd {
 }
 .speaker-panel {
   flex: none;
-  max-height: 46%;
+  /*
+   * The side column now runs the full height of the window, where a plain
+   * percentage would grow the speaker list well past what it needs. The pixel
+   * cap holds it at the size it had before; the percentage still guards a short
+   * window, where 260px would leave the continue panel with nothing.
+   */
+  max-height: min(260px, 46%);
 }
 .continue-panel {
   flex: 1;

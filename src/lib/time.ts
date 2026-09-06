@@ -73,3 +73,23 @@ export function charsPerSecond(text: string, start: number, end: number): number
   if (duration <= 0) return Infinity;
   return text.replace(/\s+/g, " ").trim().length / duration;
 }
+
+/**
+ * Target reading speed in characters per second. 17 is the usual broadcast
+ * figure for adult viewers; the cue list starts warning above 21.
+ */
+export const DEFAULT_TARGET_CPS = 17;
+
+/** Shortest a cue should ever sit on screen, however little text it holds. */
+export const MIN_READABLE_DURATION = 1;
+
+/**
+ * The inverse of `charsPerSecond`: how long `text` needs in order to read at
+ * `cps` characters per second. Empty text needs no time at all; anything else
+ * gets at least a beat, so a two-word cue does not flash past.
+ */
+export function durationForText(text: string, cps: number): number {
+  const chars = text.replace(/\s+/g, " ").trim().length;
+  if (chars === 0 || cps <= 0) return 0;
+  return Math.max(chars / cps, MIN_READABLE_DURATION);
+}

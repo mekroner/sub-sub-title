@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -13,6 +14,12 @@ import { ContinuePanel } from "./components/ContinuePanel";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { RenderDialog } from "./components/RenderDialog";
+import {
+  DEFAULT_SIDE_WIDTH,
+  MAX_SIDE_WIDTH,
+  MIN_SIDE_WIDTH,
+  SideResizer,
+} from "./components/SideResizer";
 import { MenuBar } from "./components/MenuBar";
 import type { Menu, MenuEntry } from "./components/MenuBar";
 import { ContextMenu } from "./components/ContextMenu";
@@ -23,6 +30,7 @@ import { TranscribeDialog } from "./components/TranscribeDialog";
 
 import { emptyProject, useProjectHistory } from "./state/useProjectHistory";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { usePasteText } from "./hooks/usePasteText";
 import { useCueSelection } from "./hooks/useCueSelection";
 import { useSpellcheck } from "./hooks/useSpellcheck";
 
@@ -46,12 +54,13 @@ import {
 } from "./lib/projectFile";
 import { makeId } from "./lib/ids";
 import { DEFAULT_WHISPER_MODEL } from "./lib/whisper";
-import { clamp } from "./lib/time";
+import { DEFAULT_TARGET_CPS, clamp, durationForText } from "./lib/time";
 import {
   DEFAULT_MIN_GAP,
   duplicateCue,
   findActiveCueIndex,
   findOverlaps,
+  fitCuesToReadingSpeed,
   insertCue,
   insertCueClamped,
   joinCues,
@@ -71,6 +80,7 @@ import {
   DEFAULT_MAX_LINES,
   matchesQuery,
   replaceIn,
+  wrapText,
 } from "./lib/text";
 import {
   applyReplacement,
@@ -109,6 +119,7 @@ const DEFAULT_SETTINGS: Settings = {
   minGap: DEFAULT_MIN_GAP,
   maxCharsPerLine: DEFAULT_MAX_CHARS_PER_LINE,
   maxLines: DEFAULT_MAX_LINES,
+  targetCps: DEFAULT_TARGET_CPS,
   spellcheck: true,
   dialect: "american",
   whisperModel: DEFAULT_WHISPER_MODEL,
@@ -174,6 +185,10 @@ export default function App() {
   const [volume, setVolume] = useState(() => readStored("volume", 1));
   const [muted, setMuted] = useState(() => readStored("muted", 0) === 1);
   const [playbackRate, setPlaybackRate] = useState(() => readStored("playbackRate", 1));
+  // Stored widths are not clamped on write, so an older range cannot outlive it.
+  const [sideWidth, setSideWidth] = useState(() =>
+    clamp(readStored("sideWidth", DEFAULT_SIDE_WIDTH), MIN_SIDE_WIDTH, MAX_SIDE_WIDTH),
+  );
   const [follow, setFollow] = useState(true);
 
   // An open menu suspends the editor shortcuts, so `S` picks a menu item rather
@@ -274,6 +289,7 @@ export default function App() {
   useEffect(() => writeStored("volume", volume), [volume]);
   useEffect(() => writeStored("muted", muted ? 1 : 0), [muted]);
   useEffect(() => writeStored("playbackRate", playbackRate), [playbackRate]);
+  useEffect(() => writeStored("sideWidth", sideWidth), [sideWidth]);
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
@@ -690,19 +706,71 @@ export default function App() {
     [setCues, selectedIds],
   );
 
-  const createCue = useCallback(
-    (start: number, end: number) => {
-      const cue = newCue(start, end, selectedCue?.speakerId ?? null);
-      let placed = false;
-      setCues((list) => {
-        const next = insertCueClamped(list, cue, duration, minGap);
-        placed = next !== null;
-        return next ?? list;
-      });
-      if (placed) selectOnly(cue.id);
-      else notify("There is no room for a cue there.", "error");
+  /**
+   * Drop a cue into the timeline and leave it selected, so the speaker keys
+   * act on it straight away. Placement is decided here rather than inside the
+   * updater: React may not run that until the next render, and the caller
+   * needs to know now whether the cue found room.
+   */
+  const placeCue = useCallback(
+    (cue: Cue) => {
+      const next = insertCueClamped(cues, cue, duration, minGap);
+      if (!next) {
+        notify("There is no room for a cue there.", "error");
+        return;
+      }
+      setCues(() => next);
+      selectOnly(cue.id);
     },
-    [setCues, selectedCue, duration, minGap, selectOnly, notify],
+    [cues, setCues, duration, minGap, selectOnly, notify],
+  );
+
+  const createCue = useCallback(
+    (start: number, end: number) =>
+      placeCue(newCue(start, end, selectedCue?.speakerId ?? null)),
+    [placeCue, selectedCue],
+  );
+
+  const fitSelectionToReadingSpeed = useCallback(() => {
+    if (selectedIds.size === 0) return;
+
+    const next = fitCuesToReadingSpeed(
+      cues,
+      selectedIds,
+      settings.targetCps,
+      duration,
+      minGap,
+    );
+    if (next === cues) {
+      notify("Nothing to retime — the cues already fit.", "error");
+      return;
+    }
+    setCues(() => next);
+  }, [cues, selectedIds, setCues, settings.targetCps, duration, minGap, notify]);
+
+  /**
+   * Clipboard text becomes a cue at the playhead: re-flowed to the line limits
+   * and timed to the target reading speed, so it needs no further tidying.
+   */
+  const pasteCueAtPlayhead = useCallback(
+    (raw: string) => {
+      const text = wrapText(raw, settings.maxCharsPerLine, settings.maxLines);
+      if (text === "") return;
+
+      const start = currentTime;
+      const limit = duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
+      const end = Math.min(start + durationForText(text, settings.targetCps), limit);
+      placeCue({ ...newCue(start, end, selectedCue?.speakerId ?? null), text });
+    },
+    [
+      placeCue,
+      selectedCue,
+      currentTime,
+      duration,
+      settings.maxCharsPerLine,
+      settings.maxLines,
+      settings.targetCps,
+    ],
   );
 
   // --- Speakers -----------------------------------------------------------
@@ -1291,6 +1359,7 @@ export default function App() {
         if (selectedCue) seek(selectedCue.start);
       },
       newCueAtPlayhead,
+      fitReadingSpeed: fitSelectionToReadingSpeed,
       duplicateSelected,
       deleteSelected,
       selectAll,
@@ -1318,6 +1387,8 @@ export default function App() {
     },
     !modalOpen && !menuOpen && !contextMenu,
   );
+
+  usePasteText(pasteCueAtPlayhead, !modalOpen && !menuOpen && !contextMenu);
 
   // --- Context menu -------------------------------------------------------
   /**
@@ -1629,6 +1700,13 @@ export default function App() {
         },
         {
           kind: "item",
+          label: `Fit${selectionLabel} to reading speed`,
+          accelerator: "R",
+          disabled: !primaryId,
+          onSelect: fitSelectionToReadingSpeed,
+        },
+        {
+          kind: "item",
           label: selectedIds.size > 1 ? `Join${selectionLabel}` : "Join with next",
           accelerator: "M",
           disabled: !primaryId,
@@ -1763,7 +1841,10 @@ export default function App() {
         </div>
       </header>
 
-      <main className="layout">
+      <main
+        className="layout"
+        style={{ "--side-width": `${sideWidth}px` } as CSSProperties}
+      >
         <div className="stage-column">
           <VideoPane
             ref={attachVideo}
@@ -1817,6 +1898,8 @@ export default function App() {
             onZoomChange={setZoom}
           />
         </div>
+
+        <SideResizer width={sideWidth} onWidth={setSideWidth} />
 
         <aside className="side-column">
           <SpeakerPanel

@@ -66,6 +66,11 @@ describe("matchShortcut", () => {
     expect(matchShortcut({ code: "KeyO" })).toBeNull();
   });
 
+  it("fits the reading speed on R, and leaves Ctrl+R to the webview", () => {
+    expect(matchShortcut({ code: "KeyR" })).toEqual({ type: "fitReadingSpeed" });
+    expect(matchShortcut({ code: "KeyR", ctrlKey: true })).toBeNull();
+  });
+
   /**
    * Regression: injected and on-screen-keyboard events can leave `code` empty,
    * which made every shortcut silently inert.

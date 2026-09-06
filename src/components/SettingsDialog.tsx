@@ -319,10 +319,23 @@ export function SettingsDialog({
                   onChange={(e) => set("maxLines", Number(e.target.value))}
                 />
               </label>
+              <label className="field">
+                <span>Target reading speed (characters per second)</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={30}
+                  step={1}
+                  value={draft.targetCps}
+                  onChange={(e) => set("targetCps", Number(e.target.value))}
+                />
+              </label>
             </div>
             <p className="hint">
               Cues may not overlap: edits are clamped to leave the gap above. The two
-              limits only flag a cue in the list; nothing is rewritten for you.
+              limits only flag a cue in the list; nothing is rewritten for you. R
+              retimes the selected cues to the reading speed, and a pasted cue is
+              timed by it.
             </p>
           </fieldset>
 

@@ -103,6 +103,8 @@ project/cue-count label, the zoom slider, and the Follow toggle.
 | `↑` / `↓` | Select previous / next cue |
 | `Enter` | Jump video and waveform to the selected cue |
 | `N` | New cue at the playhead |
+| `Ctrl+V` | Paste clipboard text as a new cue at the playhead |
+| `R` | Fit the selected cues' length to the target reading speed |
 | `Delete` | Delete the selected cues |
 | `Ctrl+A` / `Esc` | Select every cue / clear the selection |
 | `Ctrl+D` | Duplicate the selected cue |
@@ -122,7 +124,14 @@ project/cue-count label, the zoom slider, and the Follow toggle.
 Shortcuts are matched on **physical key position**, so `[` and `]` work on a
 Norwegian layout (where they need AltGr) by pressing the keys where `[` and `]`
 sit on a US board. `,` and `.` are bound to the same nudge actions as an
-easier-to-reach alternative. Shortcuts are inert while a text box has focus.
+easier-to-reach alternative. Shortcuts are inert while a text box has focus —
+including `Ctrl+V`, which pastes into a cue's text field as usual rather than
+creating a cue.
+
+A new cue is always left selected, so `1`–`9` assign its speaker straight away.
+`R` and pasted cues both aim for the **target reading speed** set under
+Settings ▸ Timing and readability (17 characters per second by default); a cue
+boxed in by its neighbours grows only as far as the minimum gap allows.
 
 ## Selecting and editing cues
 

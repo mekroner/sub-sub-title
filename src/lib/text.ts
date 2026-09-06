@@ -46,6 +46,53 @@ export function lineStats(
   };
 }
 
+/**
+ * Re-flow `text` into at most `maxLines` lines of roughly `maxChars`. All
+ * existing whitespace collapses first, so pasted prose and hard-wrapped script
+ * lines both come out as one evenly balanced cue.
+ *
+ * Lines are balanced rather than filled to the brim: 50 characters over two
+ * lines reads better as 25 + 25 than as 42 + 8. Text too long to fit spreads
+ * across the lines it is allowed instead of being dropped or truncated — the
+ * cue list's own counters flag what is left over.
+ */
+export function wrapText(
+  text: string,
+  maxChars = DEFAULT_MAX_CHARS_PER_LINE,
+  maxLines = DEFAULT_MAX_LINES,
+): string {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "";
+
+  // Spaces count towards the width, so include the gaps between the words.
+  const total = words.reduce((n, w) => n + w.length, 0) + words.length - 1;
+  const limit = Math.max(1, Math.floor(maxLines));
+  const lineCount = Math.min(limit, Math.max(1, Math.ceil(total / Math.max(1, maxChars))));
+  const target = Math.ceil(total / lineCount);
+
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (current === "") {
+      // A word longer than the target still goes on its own line unbroken;
+      // hyphenating dialogue is worse than one over-long line.
+      current = word;
+      continue;
+    }
+    const candidate = `${current} ${word}`;
+    // The final line takes whatever remains, however long that makes it.
+    if (candidate.length > target && lines.length < lineCount - 1) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  lines.push(current);
+
+  return lines.join("\n");
+}
+
 // --- Find and replace -----------------------------------------------------
 // Plain substring search, not regex: cue text is dialogue, and a stray `.` or
 // `(` in a search box should find that character, not act as a pattern.

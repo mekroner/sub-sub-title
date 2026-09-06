@@ -3,6 +3,7 @@ import type { Cue } from "../types";
 import {
   contextBefore,
   findActiveCueIndex,
+  fitCuesToReadingSpeed,
   mergeWithNext,
   nudgeCue,
   slotAfter,
@@ -166,5 +167,53 @@ describe("contextBefore", () => {
 
   it("takes what there is when the script is shorter than the window", () => {
     expect(contextBefore(LIST, "a", 5).map((c) => c.id)).toEqual(["a"]);
+  });
+});
+
+describe("fitCuesToReadingSpeed", () => {
+  // 34 characters, so exactly 2s at 17 cps.
+  const LINE = "so this line is thirty-four chars.";
+
+  it("lengthens a cue that reads too fast", () => {
+    const list = [cue("a", 0, 0.5, LINE)];
+    const [fitted] = fitCuesToReadingSpeed(list, new Set(["a"]), 17, 100);
+    expect(fitted.start).toBe(0);
+    expect(fitted.end).toBeCloseTo(2, 6);
+  });
+
+  it("shortens a cue that lingers, keeping its start", () => {
+    const list = [cue("a", 1, 30, LINE)];
+    const [fitted] = fitCuesToReadingSpeed(list, new Set(["a"]), 17, 100);
+    expect(fitted.start).toBe(1);
+    expect(fitted.end).toBeCloseTo(3, 6);
+  });
+
+  it("grows only as far as the next cue's gap allows", () => {
+    const list = [cue("a", 0, 0.5, LINE), cue("b", 1, 5)];
+    const [fitted] = fitCuesToReadingSpeed(list, new Set(["a"]), 17, 100, 0.04);
+    expect(fitted.end).toBeCloseTo(0.96, 6);
+  });
+
+  it("leaves cues outside the selection alone", () => {
+    const list = [cue("a", 0, 0.5, LINE), cue("b", 10, 30, LINE)];
+    const fitted = fitCuesToReadingSpeed(list, new Set(["a"]), 17, 100);
+    expect(fitted[1]).toEqual(list[1]);
+  });
+
+  it("leaves an empty cue alone — it has no reading speed", () => {
+    const list = [cue("a", 0, 5, "")];
+    expect(fitCuesToReadingSpeed(list, new Set(["a"]), 17, 100)).toBe(list);
+  });
+
+  it("returns the same array when nothing can change", () => {
+    const list = [cue("a", 0, 2, LINE)];
+    expect(fitCuesToReadingSpeed(list, new Set(["a"]), 17, 100)).toBe(list);
+  });
+
+  it("retimes a whole selection in one pass", () => {
+    const list = [cue("a", 0, 0.5, LINE), cue("b", 10, 10.5, LINE)];
+    const fitted = fitCuesToReadingSpeed(list, new Set(["a", "b"]), 17, 100);
+    expect(fitted[0].end).toBeCloseTo(2, 6);
+    expect(fitted[1].end).toBeCloseTo(12, 6);
   });
 });

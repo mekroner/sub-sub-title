@@ -41,6 +41,8 @@ pub struct Settings {
     /// Readability limits flagged in the cue list.
     pub max_chars_per_line: u32,
     pub max_lines: u32,
+    /// Reading speed, in characters per second, that the fit-timing command aims for.
+    pub target_cps: f32,
     /// Whether the offline spellchecker runs at all.
     pub spellcheck: bool,
     /// "american" or "british". A string, so an unknown value degrades to the
@@ -75,6 +77,7 @@ impl Default for Settings {
             min_gap: 0.04,
             max_chars_per_line: 42,
             max_lines: 2,
+            target_cps: 17.0,
             spellcheck: true,
             dialect: "american".to_string(),
             whisper_model: "medium".to_string(),

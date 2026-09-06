@@ -15,6 +15,8 @@ const SHORTCUTS: Array<[string, string]> = [
   ["↑ / ↓", "Select previous / next cue"],
   ["Enter", "Jump video and waveform to the selected cue"],
   ["N", "New cue at the playhead"],
+  ["Ctrl + V", "Paste clipboard text as a new cue at the playhead"],
+  ["R", "Fit the selected cues' length to the target reading speed"],
   ["Delete", "Delete the selected cues"],
   ["Ctrl + G", "Generate a continuation — whichever Continue tab is showing"],
   ["Ctrl + Enter", "Generate from inside the Continue panel's direction field"],

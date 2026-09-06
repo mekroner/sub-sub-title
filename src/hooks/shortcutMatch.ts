@@ -20,6 +20,7 @@ export type ShortcutCommand =
   | { type: "selectNext" }
   | { type: "jumpToSelected" }
   | { type: "newCue" }
+  | { type: "fitReadingSpeed" }
   | { type: "duplicate" }
   | { type: "deleteSelected" }
   | { type: "selectAll" }
@@ -135,6 +136,8 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
       return { type: "merge" };
     case "KeyN":
       return { type: "newCue" };
+    case "KeyR":
+      return { type: "fitReadingSpeed" };
     case "KeyF":
       return { type: "toggleFollow" };
     case "ArrowUp":
