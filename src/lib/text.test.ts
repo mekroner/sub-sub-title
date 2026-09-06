@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { lineStats, matchesQuery, replaceIn, wrapText } from "./text";
+import {
+  lineStats,
+  matchesQuery,
+  replaceIn,
+  unwrapThought,
+  wrapText,
+  wrapThought,
+} from "./text";
 
 describe("lineStats", () => {
   it("counts each line separately", () => {
@@ -92,5 +99,37 @@ describe("wrapText", () => {
   it("returns an empty string for blank input", () => {
     expect(wrapText("", 42, 2)).toBe("");
     expect(wrapText("   \n  ", 42, 2)).toBe("");
+  });
+});
+
+describe("thought markers", () => {
+  it("wraps a whole cue once, however many lines", () => {
+    expect(wrapThought("I'm so happy")).toBe("*I'm so happy*");
+    expect(wrapThought("first line\nsecond line")).toBe("*first line\nsecond line*");
+  });
+
+  it("reads the text back out", () => {
+    expect(unwrapThought("*I'm so happy*")).toBe("I'm so happy");
+    expect(unwrapThought("*first line\nsecond line*")).toBe("first line\nsecond line");
+  });
+
+  it("round-trips", () => {
+    for (const text of ["Hi.", "two\nlines", "punctuation, and — dashes"]) {
+      expect(unwrapThought(wrapThought(text))).toBe(text);
+    }
+  });
+
+  it("leaves ordinary text with emphasis in it alone", () => {
+    expect(unwrapThought("*a* and *b*")).toBeNull();
+    expect(unwrapThought("Hello")).toBeNull();
+    expect(unwrapThought("*unclosed")).toBeNull();
+    expect(unwrapThought("unopened*")).toBeNull();
+  });
+
+  it("treats empty and marker-only input as nothing to wrap", () => {
+    expect(wrapThought("")).toBe("");
+    expect(wrapThought("   ")).toBe("");
+    expect(unwrapThought("**")).toBeNull();
+    expect(unwrapThought("* *")).toBeNull();
   });
 });

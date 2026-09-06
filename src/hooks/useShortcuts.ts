@@ -14,6 +14,7 @@ export interface ShortcutActions {
   jumpToSelected: () => void;
   newCueAtPlayhead: () => void;
   fitReadingSpeed: () => void;
+  toggleThought: () => void;
   duplicateSelected: () => void;
   deleteSelected: () => void;
   selectAll: () => void;
@@ -91,6 +92,9 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
           break;
         case "fitReadingSpeed":
           a.fitReadingSpeed();
+          break;
+        case "toggleThought":
+          a.toggleThought();
           break;
         case "duplicate":
           a.duplicateSelected();

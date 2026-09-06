@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.esm.js";
 import type { Cue, Speaker } from "../types";
-import { contrastText, withAlpha } from "../lib/colors";
+import { contrastText, thoughtColor, withAlpha } from "../lib/colors";
 import { clamp } from "../lib/time";
 import { selectModeOf, type SelectMode } from "../hooks/useCueSelection";
 
@@ -262,7 +262,10 @@ export function WaveformPane({
     const [from, to] = visible;
     const lo = from - WINDOW_PADDING_SECONDS;
     const hi = to + WINDOW_PADDING_SECONDS;
+    // Both colours per speaker, so a thought region reads differently on the
+    // timeline without a second lookup per cue.
     const colorOf = new Map(speakers.map((s) => [s.id, s.color]));
+    const thoughtOf = new Map(speakers.map((s) => [s.id, thoughtColor(s)]));
 
     // The regions plugin has no contextmenu event, so it is wired onto the
     // element the plugin creates.
@@ -288,7 +291,8 @@ export function WaveformPane({
       }
 
       for (const cue of inWindow) {
-        const base = cue.speakerId ? colorOf.get(cue.speakerId) ?? "#8a94a6" : "#8a94a6";
+        const palette = cue.mode === "thought" ? thoughtOf : colorOf;
+        const base = cue.speakerId ? palette.get(cue.speakerId) ?? "#8a94a6" : "#8a94a6";
         const selected = selectedIds.has(cue.id);
         const color = withAlpha(base, selected ? 0.45 : 0.22);
         const existing = regionMap.current.get(cue.id);

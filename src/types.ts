@@ -3,9 +3,21 @@ export interface Speaker {
   name: string;
   /** Hex, e.g. "#ff8800". Used for the region, list row, and caption overlay. */
   color: string;
+  /**
+   * Hex. Caption colour for this speaker's thought cues. Absent means a muted
+   * variant of `color` is derived instead, so a project made before modes
+   * existed needs no setting up.
+   */
+  thinkingColor?: string;
   /** Short persona/style description fed to the continue-feature. */
   voiceNotes?: string;
 }
+
+/**
+ * How a cue is voiced. Absent means ordinary spoken dialogue — a union rather
+ * than a boolean so a later "whisper" or "narration" costs nothing.
+ */
+export type CueMode = "thought";
 
 export interface Cue {
   id: string;
@@ -15,6 +27,12 @@ export interface Cue {
   end: number;
   text: string;
   speakerId: string | null;
+  /**
+   * Absent for spoken dialogue. A thought cue takes the speaker's thinking
+   * colour and exports wrapped in `*asterisks*`; the markers live only in the
+   * exported file, never in `text`.
+   */
+  mode?: CueMode;
 }
 
 export interface Project {

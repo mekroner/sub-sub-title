@@ -102,3 +102,69 @@ describe("buildAss", () => {
     expect(out).toContain("Style: Alex_2,");
   });
 });
+
+describe("thought cues", () => {
+  const mike: Speaker[] = [
+    { id: "m", name: "Mike", color: "#4fc3f7", thinkingColor: "#334455" },
+  ];
+  const build = (cue: Cue, who = mike) =>
+    buildAss([cue], who, { settings, width: 1920, height: 1080 });
+
+  const thought: Cue = {
+    id: "t",
+    start: 1,
+    end: 2,
+    text: "I'm so happy",
+    speakerId: "m",
+    mode: "thought",
+  };
+
+  it("gives each speaker a spoken and a thought style", () => {
+    const out = build(thought);
+    expect(out).toContain("Style: Mike,");
+    expect(out).toContain("Style: Mike_thought,");
+  });
+
+  it("draws a thought in the thinking colour, in italics", () => {
+    const line = build(thought)
+      .split("\n")
+      .find((l) => l.startsWith("Style: Mike_thought,"))!;
+    const fields = line.split(",");
+    // Name(0), Fontname, Fontsize, PrimaryColour(3), Secondary, Outline, Back, Bold, Italic(8)
+    expect(fields[3]).toBe(hexToAssColor("#334455"));
+    expect(fields[8]).toBe("-1");
+  });
+
+  it("falls back to a muted variant when the speaker picked no colour", () => {
+    const bare: Speaker[] = [{ id: "m", name: "Mike", color: "#4fc3f7" }];
+    const line = build(thought, bare)
+      .split("\n")
+      .find((l) => l.startsWith("Style: Mike_thought,"))!;
+    expect(line.split(",")[3]).not.toBe(hexToAssColor("#4fc3f7"));
+  });
+
+  it("points a thought cue's event at the thought style", () => {
+    const events = build(thought)
+      .split("\n")
+      .filter((l) => l.startsWith("Dialogue:"));
+    expect(events[0].split(",")[3]).toBe("Mike_thought");
+  });
+
+  it("leaves a spoken cue on the speaking style", () => {
+    const events = build({ ...thought, mode: undefined })
+      .split("\n")
+      .filter((l) => l.startsWith("Dialogue:"));
+    expect(events[0].split(",")[3]).toBe("Mike");
+  });
+
+  it("uses the default thought style for a thought with no speaker", () => {
+    const events = build({ ...thought, speakerId: null })
+      .split("\n")
+      .filter((l) => l.startsWith("Dialogue:"));
+    expect(events[0].split(",")[3]).toBe("Default_thought");
+  });
+
+  it("never writes the asterisks into the burned-in text", () => {
+    expect(build(thought)).not.toContain("*");
+  });
+});

@@ -5,8 +5,10 @@
 
 import type { Cue, Settings, Speaker } from "../types";
 import { formatAssTime } from "./time";
+import { thoughtColor } from "./colors";
 
 const DEFAULT_STYLE = "Default";
+const THOUGHT_STYLE = "Default_thought";
 const DEFAULT_COLOR = "#ffffff";
 
 /** Margins in PlayRes units. Exported so the preview can place text identically. */
@@ -27,21 +29,34 @@ export function hexToAssColor(hex: string, alpha = 0): string {
 /**
  * Style names may not contain commas (the format is comma-delimited) and must be
  * unique, since two speakers can legitimately share a display name.
+ *
+ * Each speaker gets two: one for their spoken lines and one for their thoughts,
+ * which differ in colour and italics.
  */
-function styleNames(speakers: Speaker[]): Map<string, string> {
-  const used = new Set<string>([DEFAULT_STYLE]);
-  const names = new Map<string, string>();
+interface SpeakerStyles {
+  speech: string;
+  thought: string;
+}
 
-  for (const speaker of speakers) {
-    const base =
-      speaker.name.replace(/[,\r\n{}]/g, " ").trim().replace(/\s+/g, "_") || "Speaker";
+function styleNames(speakers: Speaker[]): Map<string, SpeakerStyles> {
+  const used = new Set<string>([DEFAULT_STYLE, THOUGHT_STYLE]);
+  const names = new Map<string, SpeakerStyles>();
+
+  const unique = (base: string) => {
     let name = base;
     let n = 2;
     while (used.has(name)) {
       name = `${base}_${n++}`;
     }
     used.add(name);
-    names.set(speaker.id, name);
+    return name;
+  };
+
+  for (const speaker of speakers) {
+    const base =
+      speaker.name.replace(/[,\r\n{}]/g, " ").trim().replace(/\s+/g, "_") || "Speaker";
+    const speech = unique(base);
+    names.set(speaker.id, { speech, thought: unique(`${speech}_thought`) });
   }
   return names;
 }
@@ -85,7 +100,7 @@ export function buildAss(cues: Cue[], speakers: Speaker[], options: AssOptions):
   const names = styleNames(speakers);
   const byId = new Map(speakers.map((s) => [s.id, s]));
 
-  const styleLine = (name: string, color: string) =>
+  const styleLine = (name: string, color: string, italic = false) =>
     [
       `Style: ${name}`,
       settings.fontName,
@@ -96,7 +111,7 @@ export function buildAss(cues: Cue[], speakers: Speaker[], options: AssOptions):
       // BackColour doubles as the shadow colour, half-transparent as usual.
       hexToAssColor(settings.shadowColor, 0x80),
       settings.bold ? "-1" : "0", // Bold
-      "0", // Italic
+      italic ? "-1" : "0", // Italic
       "0", // Underline
       "0", // StrikeOut
       "100", // ScaleX
@@ -127,7 +142,17 @@ export function buildAss(cues: Cue[], speakers: Speaker[], options: AssOptions):
       "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, " +
       "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
     styleLine(DEFAULT_STYLE, DEFAULT_COLOR),
-    ...speakers.map((s) => styleLine(names.get(s.id) ?? DEFAULT_STYLE, s.color)),
+    styleLine(THOUGHT_STYLE, thoughtColor(null), true),
+    ...speakers.flatMap((s) => {
+      const style = names.get(s.id);
+      if (!style) return [];
+      // A thought line cannot show its asterisks once burned in, so the colour
+      // and the italics are what mark it.
+      return [
+        styleLine(style.speech, s.color),
+        styleLine(style.thought, thoughtColor(s), true),
+      ];
+    }),
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -137,7 +162,15 @@ export function buildAss(cues: Cue[], speakers: Speaker[], options: AssOptions):
     .sort((a, b) => a.start - b.start)
     .map((cue) => {
       const speaker = cue.speakerId ? byId.get(cue.speakerId) : undefined;
-      const style = speaker ? names.get(speaker.id) ?? DEFAULT_STYLE : DEFAULT_STYLE;
+      const thought = cue.mode === "thought";
+      const speakerStyle = speaker ? names.get(speaker.id) : undefined;
+      const style = speakerStyle
+        ? thought
+          ? speakerStyle.thought
+          : speakerStyle.speech
+        : thought
+          ? THOUGHT_STYLE
+          : DEFAULT_STYLE;
       const actor = speaker?.name.replace(/[,\r\n]/g, " ") ?? "";
       return [
         "Dialogue: 0",

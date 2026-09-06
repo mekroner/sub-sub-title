@@ -93,6 +93,38 @@ export function wrapText(
   return lines.join("\n");
 }
 
+// --- Thought markers ------------------------------------------------------
+// A thought cue exports wrapped in single asterisks, `*like this*`. The markers
+// live only in the exported file: `Cue.text` stays clean, so the line counters,
+// the reading-speed maths and the spellchecker all keep seeing real characters.
+
+/**
+ * `[^*]` matches newlines too, so a cue wrapped once across a line break is
+ * recognised, while `*a* and *b*` is correctly left alone as ordinary text with
+ * emphasis in it.
+ */
+const THOUGHT = /^\*([^*]+)\*$/;
+
+/** Wrap a whole cue once, however many lines it has. */
+export function wrapThought(text: string): string {
+  const trimmed = text.trim();
+  return trimmed === "" ? "" : `*${trimmed}*`;
+}
+
+/**
+ * The text inside a thought cue's markers, or null when the text is not a
+ * single wrapped run.
+ *
+ * Note a spoken cue that is *entirely* `*sigh*` reads as a thought here. That
+ * is inherent to a text-marker convention, and arguably the right call.
+ */
+export function unwrapThought(text: string): string | null {
+  const m = THOUGHT.exec(text.trim());
+  if (!m) return null;
+  const inner = m[1].trim();
+  return inner === "" ? null : inner;
+}
+
 // --- Find and replace -----------------------------------------------------
 // Plain substring search, not regex: cue text is dialogue, and a stray `.` or
 // `(` in a search box should find that character, not act as a pattern.

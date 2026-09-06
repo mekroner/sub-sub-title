@@ -626,7 +626,8 @@ button.tab.on {
 }
 .speaker-row {
   display: grid;
-  grid-template-columns: 26px 1fr 30px 24px 24px;
+  /* Two swatches: the speaking colour, then the thinking one. */
+  grid-template-columns: 26px 1fr 30px 30px 24px 24px;
   gap: 5px;
   align-items: center;
   padding: 3px 0;
@@ -834,7 +835,8 @@ button.tab.on {
   left: 0;
   width: 100%;
   display: grid;
-  grid-template-columns: 46px 132px 128px minmax(0, 1fr) 30px 26px 34px;
+  /* The speaker track also carries the spoken/thinking toggle. */
+  grid-template-columns: 46px 132px 150px minmax(0, 1fr) 30px 26px 34px;
   gap: 8px;
   align-items: start;
   padding: 6px 10px;
@@ -888,11 +890,38 @@ button.tab.on {
   font-size: 12px;
   padding: 3px 4px;
 }
+.cue-mode {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  /* Off is a hint, not a statement: only a thought cue's button reads as lit. */
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+.cue-mode:hover {
+  opacity: 0.9;
+}
+.cue-mode.on {
+  filter: none;
+  opacity: 1;
+  border-color: var(--border-strong);
+  background: var(--bg-raised);
+}
 .cue-text {
   width: 100%;
   min-height: 40px;
   line-height: 1.35;
   resize: vertical;
+}
+/* Matches how the cue is drawn over the video and burned into a render. */
+.cue-text.thought {
+  font-style: italic;
 }
 .cue-cps {
   color: var(--text-dim);

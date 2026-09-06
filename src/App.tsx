@@ -706,6 +706,40 @@ export default function App() {
     [setCues, selectedIds],
   );
 
+  const toggleThought = useCallback(
+    (cueId: string) =>
+      setCues((list) =>
+        list.map((c) => {
+          if (c.id !== cueId) return c;
+          if (c.mode !== "thought") return { ...c, mode: "thought" as const };
+          const { mode: _mode, ...rest } = c;
+          return rest;
+        }),
+      ),
+    [setCues],
+  );
+
+  /**
+   * Flip the selection between spoken and thought, as one undo step. Mixed
+   * selections become all thought, so a second press is what clears them —
+   * the toggle never leaves the selection half one and half the other.
+   */
+  const toggleThoughtOnSelection = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const selected = cues.filter((c) => selectedIds.has(c.id));
+    const allThought = selected.every((c) => c.mode === "thought");
+    setCues((list) =>
+      list.map((c) => {
+        if (!selectedIds.has(c.id)) return c;
+        if (allThought) {
+          const { mode: _mode, ...rest } = c;
+          return rest;
+        }
+        return { ...c, mode: "thought" as const };
+      }),
+    );
+  }, [cues, selectedIds, setCues]);
+
   /**
    * Drop a cue into the timeline and leave it selected, so the speaker keys
    * act on it straight away. Placement is decided here rather than inside the
@@ -725,9 +759,11 @@ export default function App() {
     [cues, setCues, duration, minGap, selectOnly, notify],
   );
 
+  // A new cue carries on from the selected one — same speaker, same mode — so a
+  // run of thoughts stays a run of thoughts.
   const createCue = useCallback(
     (start: number, end: number) =>
-      placeCue(newCue(start, end, selectedCue?.speakerId ?? null)),
+      placeCue(newCue(start, end, selectedCue?.speakerId ?? null, selectedCue?.mode)),
     [placeCue, selectedCue],
   );
 
@@ -760,7 +796,10 @@ export default function App() {
       const start = currentTime;
       const limit = duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
       const end = Math.min(start + durationForText(text, settings.targetCps), limit);
-      placeCue({ ...newCue(start, end, selectedCue?.speakerId ?? null), text });
+      placeCue({
+        ...newCue(start, end, selectedCue?.speakerId ?? null, selectedCue?.mode),
+        text,
+      });
     },
     [
       placeCue,
@@ -1360,6 +1399,7 @@ export default function App() {
       },
       newCueAtPlayhead,
       fitReadingSpeed: fitSelectionToReadingSpeed,
+      toggleThought: toggleThoughtOnSelection,
       duplicateSelected,
       deleteSelected,
       selectAll,
@@ -1534,6 +1574,13 @@ export default function App() {
             },
           ],
         },
+        {
+          kind: "item",
+          label: many ? `Thinking${suffix}` : "Thinking",
+          accelerator: "T",
+          checked: cue?.mode === "thought",
+          onSelect: toggleThoughtOnSelection,
+        },
         { kind: "separator" },
         {
           kind: "item",
@@ -1557,6 +1604,7 @@ export default function App() {
       joinSelected,
       duplicateSelected,
       assignSpeakerToSelection,
+      toggleThoughtOnSelection,
       deleteSelected,
       spellcheck,
       applyIssue,
@@ -1966,6 +2014,7 @@ export default function App() {
             onEditText={editText}
             onEditTiming={editTiming}
             onAssignSpeaker={assignSpeaker}
+            onToggleThought={toggleThought}
           />
         </section>
       </main>

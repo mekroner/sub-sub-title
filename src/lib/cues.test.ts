@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { Cue } from "../types";
 import {
   contextBefore,
+  duplicateCue,
   findActiveCueIndex,
   fitCuesToReadingSpeed,
+  joinCues,
   mergeWithNext,
+  newCue,
   nudgeCue,
   slotAfter,
   slotsAfter,
@@ -215,5 +218,40 @@ describe("fitCuesToReadingSpeed", () => {
     const fitted = fitCuesToReadingSpeed(list, new Set(["a", "b"]), 17, 100);
     expect(fitted[0].end).toBeCloseTo(2, 6);
     expect(fitted[1].end).toBeCloseTo(12, 6);
+  });
+});
+
+describe("cue modes through the edit operations", () => {
+  const thought = (id: string, start: number, end: number, text = "text"): Cue => ({
+    ...cue(id, start, end, text),
+    mode: "thought",
+  });
+
+  it("gives a new cue no mode unless one is asked for", () => {
+    expect(newCue(0, 1).mode).toBeUndefined();
+    expect(newCue(0, 1, null, "thought").mode).toBe("thought");
+  });
+
+  it("keeps both halves of a split in the same mode", () => {
+    const { cues } = splitCueAt([thought("a", 0, 4, "hello there world")], "a", 2);
+    expect(cues.map((c) => c.mode)).toEqual(["thought", "thought"]);
+  });
+
+  it("carries the mode onto a duplicate", () => {
+    const { cues, newCueId } = duplicateCue([thought("a", 0, 2)], "a", 60);
+    expect(cues.find((c) => c.id === newCueId)?.mode).toBe("thought");
+  });
+
+  it("lets the first cue's mode stand for a merge", () => {
+    const merged = mergeWithNext([thought("a", 0, 2), cue("b", 3, 5)], "a");
+    expect(merged[0].mode).toBe("thought");
+
+    const spokenFirst = mergeWithNext([cue("a", 0, 2), thought("b", 3, 5)], "a");
+    expect(spokenFirst[0].mode).toBeUndefined();
+  });
+
+  it("does the same for a join", () => {
+    const joined = joinCues([thought("a", 0, 2), cue("b", 3, 5)], ["a", "b"])!;
+    expect(joined[0].mode).toBe("thought");
   });
 });

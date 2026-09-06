@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Cue, Settings, Speaker } from "../types";
 import { ASS_MARGIN_H, ASS_MARGIN_V } from "../lib/ass";
+import { DEFAULT_CAPTION_COLOR, thoughtColor } from "../lib/colors";
 
 interface Props {
   src: string | null;
@@ -37,7 +38,13 @@ export const VideoPane = forwardRef<HTMLVideoElement, Props>(function VideoPane(
   },
   ref,
 ) {
-  const color = speaker?.color ?? "#ffffff";
+  // A thought line cannot show its asterisks here any more than in a burned-in
+  // render, so it takes the speaker's thinking colour and italics instead —
+  // matching what `buildAss` writes.
+  const thought = activeCue?.mode === "thought";
+  const color = thought
+    ? thoughtColor(speaker)
+    : speaker?.color ?? DEFAULT_CAPTION_COLOR;
 
   // A silent black frame is the worst failure mode, so a load failure stays on
   // screen (with the URL that failed) rather than passing by as a toast.
@@ -127,6 +134,7 @@ export const VideoPane = forwardRef<HTMLVideoElement, Props>(function VideoPane(
                   fontFamily: `"${settings.fontName}", Arial, sans-serif`,
                   fontSize: `${fontSize}px`,
                   fontWeight: settings.bold ? 700 : 400,
+                  fontStyle: thought ? "italic" : "normal",
                   // ASS puts the shadow down and to the right, at no blur.
                   textShadow:
                     shadow > 0

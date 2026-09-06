@@ -87,3 +87,48 @@ describe("projectName", () => {
     expect(projectName("bare")).toBe("bare");
   });
 });
+
+describe("cue modes and speaker colours", () => {
+  const withModes: Project = {
+    videoPath: "D:/clips/interview.mp4",
+    cues: [
+      { id: "a", start: 1, end: 2, text: "Hello there.", speakerId: "mike" },
+      {
+        id: "b",
+        start: 3,
+        end: 4,
+        text: "I'm so happy",
+        speakerId: "mike",
+        mode: "thought",
+      },
+    ],
+    speakers: [
+      { id: "mike", name: "Mike", color: "#4fc3f7", thinkingColor: "#334455" },
+    ],
+    dictionary: [],
+    beats: [],
+  };
+
+  it("survives a save and load", () => {
+    const back = parseProjectFile(serializeProjectFile(withModes));
+    expect(back.cues[0].mode).toBeUndefined();
+    expect(back.cues[1].mode).toBe("thought");
+    expect(back.speakers[0].thinkingColor).toBe("#334455");
+  });
+
+  /** A file written before modes existed must come back byte-identical. */
+  it("leaves the keys absent when a file has none", () => {
+    const back = parseProjectFile(serializeProjectFile(project));
+    expect(Object.keys(back.cues[0])).not.toContain("mode");
+    expect(Object.keys(back.speakers[0])).not.toContain("thinkingColor");
+  });
+
+  it("drops a mode it does not recognise rather than trusting the file", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      cues: [{ id: "a", start: 1, end: 2, text: "Hi", speakerId: null, mode: "shouting" }],
+      speakers: [],
+    });
+    expect(parseProjectFile(raw).cues[0].mode).toBeUndefined();
+  });
+});

@@ -1,6 +1,6 @@
 /** Pure operations on the cue list. Kept free of React so they stay testable. */
 
-import type { Cue } from "../types";
+import type { Cue, CueMode } from "../types";
 import { makeId } from "./ids";
 import { clamp, durationForText } from "./time";
 
@@ -112,6 +112,7 @@ export function mergeWithNext(cues: Cue[], cueId: string): Cue[] {
     end: Math.max(a.end, b.end),
     text: [a.text, b.text].map((t) => t.trim()).filter(Boolean).join("\n"),
     // The first cue's speaker wins; the second is usually the continuation.
+    // Its mode rides along on the spread above, for the same reason.
     speakerId: a.speakerId ?? b.speakerId,
   };
 
@@ -204,8 +205,13 @@ export function insertCue(cues: Cue[], cue: Cue): Cue[] {
   return sortCues([...cues, cue]);
 }
 
-export function newCue(start: number, end: number, speakerId: string | null = null): Cue {
-  return { id: makeId(), start, end, text: "", speakerId };
+export function newCue(
+  start: number,
+  end: number,
+  speakerId: string | null = null,
+  mode?: CueMode,
+): Cue {
+  return { id: makeId(), start, end, text: "", speakerId, ...(mode ? { mode } : {}) };
 }
 
 // --- Overlap-free timing --------------------------------------------------
@@ -500,6 +506,8 @@ export function joinCues(cues: Cue[], ids: Iterable<string>): Cue[] | null {
     end: Math.max(...run.map((c) => c.end)),
     text: run.map((c) => c.text.trim()).filter(Boolean).join("\n"),
     speakerId: run.find((c) => c.speakerId)?.speakerId ?? null,
+    // The mode comes from the spread of the first cue: a joined run reads as
+    // whatever it opened as.
   };
 
   const next = [...sorted];

@@ -105,6 +105,7 @@ project/cue-count label, the zoom slider, and the Follow toggle.
 | `N` | New cue at the playhead |
 | `Ctrl+V` | Paste clipboard text as a new cue at the playhead |
 | `R` | Fit the selected cues' length to the target reading speed |
+| `T` | Mark the selected cues as thinking, or spoken again |
 | `Delete` | Delete the selected cues |
 | `Ctrl+A` / `Esc` | Select every cue / clear the selection |
 | `Ctrl+D` | Duplicate the selected cue |

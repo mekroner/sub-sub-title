@@ -5,10 +5,11 @@
  * than assuming a rigid block structure.
  */
 
-import type { Cue, Speaker } from "../types";
+import type { Cue, CueMode, Speaker } from "../types";
 import { formatSrtTime, parseTimecode } from "./time";
 import { makeId } from "./ids";
 import { DEFAULT_MIN_GAP, MIN_CUE_DURATION } from "./cues";
+import { unwrapThought, wrapThought } from "./text";
 
 const TIMECODE_LINE =
   /^\s*(-?[\d:.,]+)\s*-->\s*(-?[\d:.,]+)(?:\s+.*)?\s*$/;
@@ -125,6 +126,17 @@ export function normalizeFontColor(value: string): string | null {
 interface ColorSegment {
   color: string | null;
   text: string;
+  mode?: CueMode;
+}
+
+/**
+ * Split a cleaned run into its text and, when the whole run is wrapped in
+ * asterisks, the mode those markers stand for. Runs after `cleanSegment`, so
+ * the font tags are already gone and the markers really are at the ends.
+ */
+function readMode(text: string): { text: string; mode?: CueMode } {
+  const inner = unwrapThought(text);
+  return inner === null ? { text } : { text: inner, mode: "thought" };
 }
 
 /**
@@ -172,8 +184,8 @@ function splitByColor(raw: string): ColorSegment[] {
   }
 
   if (opens.length === 0) {
-    const text = cleanSegment(raw, hadTags);
-    return text ? [{ color: null, text }] : [];
+    const segment = readMode(cleanSegment(raw, hadTags));
+    return segment.text ? [{ color: null, ...segment }] : [];
   }
 
   // Whatever precedes the first tag belongs to the run it introduces.
@@ -191,15 +203,20 @@ function splitByColor(raw: string): ColorSegment[] {
     lead = "";
   }
 
-  const segments = runs
-    .map((run) => ({ color: run.color, text: cleanSegment(run.text, hadTags) }))
+  const segments: ColorSegment[] = runs
+    .map((run) => ({ color: run.color, ...readMode(cleanSegment(run.text, hadTags)) }))
     .filter((run) => run.text !== "");
 
   // One speaker: keep the cue whole, so a partial wrap does not fragment prose.
   const colors = new Set(segments.map((s) => s.color));
   if (colors.size <= 1) {
     const text = segments.map((s) => s.text).join("\n");
-    return text ? [{ color: segments[0]?.color ?? null, text }] : [];
+    if (!text) return [];
+    // The first run's mode stands for the joined cue, the way its colour does.
+    const first = segments[0];
+    return [
+      { color: first?.color ?? null, text, ...(first?.mode ? { mode: first.mode } : {}) },
+    ];
   }
   return segments;
 }
@@ -281,7 +298,11 @@ export function parseSrt(input: string, options: ParseOptions = {}): ParseResult
     // own minimum, so those stay whole and keep the colour that opens them.
     if (segments.length > 1 && usable / segments.length < MIN_CUE_DURATION) {
       segments = [
-        { color: segments[0].color, text: segments.map((s) => s.text).join("\n") },
+        {
+          color: segments[0].color,
+          text: segments.map((s) => s.text).join("\n"),
+          ...(segments[0].mode ? { mode: segments[0].mode } : {}),
+        },
       ];
     }
 
@@ -305,6 +326,7 @@ export function parseSrt(input: string, options: ParseOptions = {}): ParseResult
         end: index === segments.length - 1 ? safeEnd : from + share,
         text: segment.text,
         speakerId,
+        ...(segment.mode ? { mode: segment.mode } : {}),
       });
     });
 
@@ -385,6 +407,9 @@ export function serializeSrt(cues: Cue[], options: SerializeOptions = {}): strin
   const ordered = [...cues].sort((a, b) => a.start - b.start);
   const blocks = ordered.map((cue, index) => {
     let text = cue.text.replace(/\n{2,}/g, "\n").trim();
+    // Before the colour, so the font tag stays outermost. The markers carry the
+    // mode by themselves, so it survives a plain .srt with the colours off too.
+    if (cue.mode === "thought") text = wrapThought(text);
     if (wrap) {
       const speaker = cue.speakerId ? byId.get(cue.speakerId) : undefined;
       const color = speaker ? normalizeFontColor(speaker.color) : null;

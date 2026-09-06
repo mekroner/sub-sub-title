@@ -489,3 +489,84 @@ ALEX: How are you`);
     expect(stripSpeakerPrefix(text)).toBe(text);
   });
 });
+
+describe("thought cues", () => {
+  const speakers: Speaker[] = [{ id: "mike", name: "Mike", color: "#4fc3f7" }];
+  const spoken: Cue = {
+    id: "a",
+    start: 1,
+    end: 2,
+    text: "Hello there.",
+    speakerId: "mike",
+  };
+  const thought: Cue = {
+    id: "b",
+    start: 3,
+    end: 4,
+    text: "I'm so happy",
+    speakerId: "mike",
+    mode: "thought",
+  };
+
+  it("exports a thought wrapped in asterisks, inside the speaker's colour", () => {
+    const out = serializeSrt([spoken, thought], { speakers, speakerColors: true });
+    // The colour still carries identity, so both cues share it.
+    expect(out).toContain('<font color="#4fc3f7">Hello there.</font>');
+    expect(out).toContain('<font color="#4fc3f7">*I\'m so happy*</font>');
+  });
+
+  it("wraps a multi-line thought once, around the line break", () => {
+    const out = serializeSrt([{ ...thought, text: "so happy\nright now" }], {});
+    expect(out).toContain("*so happy\nright now*");
+  });
+
+  /**
+   * The point of putting the mode in the text and not the colour: re-importing
+   * gives back one Mike, not one per mode.
+   */
+  it("round-trips through colour export as a single speaker", () => {
+    const out = serializeSrt([spoken, thought], { speakers, speakerColors: true });
+    const parsed = parseSrt(out);
+
+    expect(parsed.speakers).toHaveLength(1);
+    expect(parsed.cues.map((c) => c.text)).toEqual(["Hello there.", "I'm so happy"]);
+    expect(parsed.cues[0].mode).toBeUndefined();
+    expect(parsed.cues[1].mode).toBe("thought");
+    expect(parsed.cues[0].speakerId).toBe(parsed.cues[1].speakerId);
+  });
+
+  it("round-trips the mode on a plain .srt, with the colours off", () => {
+    const out = serializeSrt([spoken, thought], {});
+    expect(out).not.toContain("<font");
+    const parsed = parseSrt(out);
+    expect(parsed.cues.map((c) => c.text)).toEqual(["Hello there.", "I'm so happy"]);
+    expect(parsed.cues[0].mode).toBeUndefined();
+    expect(parsed.cues[1].mode).toBe("thought");
+  });
+
+  it("reads markers out of a hand-written file with no font tags", () => {
+    const parsed = parseSrt(
+      "1\n00:00:01,000 --> 00:00:02,000\n*Just thinking*\n\n" +
+        "2\n00:00:03,000 --> 00:00:04,000\nSaid aloud\n",
+    );
+    expect(parsed.cues[0].text).toBe("Just thinking");
+    expect(parsed.cues[0].mode).toBe("thought");
+    expect(parsed.cues[1].mode).toBeUndefined();
+  });
+
+  it("leaves a line that merely contains emphasis alone", () => {
+    const parsed = parseSrt("1\n00:00:01,000 --> 00:00:02,000\n*a* and *b*\n");
+    expect(parsed.cues[0].text).toBe("*a* and *b*");
+    expect(parsed.cues[0].mode).toBeUndefined();
+  });
+
+  it("keeps the mode when a two-colour block is too short to divide", () => {
+    const parsed = parseSrt(
+      "1\n00:00:01,000 --> 00:00:01,100\n" +
+        '<font color="#ff0000">*thinking*</font>\n' +
+        '<font color="#0000ff">aloud</font>\n',
+    );
+    expect(parsed.cues).toHaveLength(1);
+    expect(parsed.cues[0].mode).toBe("thought");
+  });
+});

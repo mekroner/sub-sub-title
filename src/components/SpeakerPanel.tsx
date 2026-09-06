@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Cue, Speaker } from "../types";
-import { contrastText } from "../lib/colors";
+import { contrastText, thoughtColor } from "../lib/colors";
 import { detectSpeakerPrefixes } from "../lib/srt";
 import { ColorPicker } from "./ColorPicker";
 
@@ -90,6 +90,13 @@ export function SpeakerPanel({
                 inUse={speakers.filter((s) => s.id !== speaker.id).map((s) => s.color)}
                 title={`Caption colour for ${speaker.name}`}
                 onChange={(color) => onUpdate(speaker.id, { color })}
+              />
+
+              <ColorPicker
+                value={thoughtColor(speaker)}
+                inUse={speakers.filter((s) => s.id !== speaker.id).map((s) => s.color)}
+                title={`Colour for ${speaker.name}'s thoughts (T)`}
+                onChange={(thinkingColor) => onUpdate(speaker.id, { thinkingColor })}
               />
 
               <button

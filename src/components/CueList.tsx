@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Cue, CueIssue, Speaker } from "../types";
 import { charsPerSecond, formatShort, parseTimecode } from "../lib/time";
 import { lineStats } from "../lib/text";
+import { thoughtColor } from "../lib/colors";
 import { issueSeverity, issueTooltip } from "../lib/issues";
 import { selectModeOf, type SelectMode } from "../hooks/useCueSelection";
 
@@ -26,6 +27,7 @@ interface Props {
   onEditText: (id: string, text: string) => void;
   onEditTiming: (id: string, start: number, end: number) => void;
   onAssignSpeaker: (id: string, speakerId: string | null) => void;
+  onToggleThought: (id: string) => void;
 }
 
 /** Above this characters-per-second a caption is hard to read; flag it. */
@@ -48,6 +50,7 @@ export function CueList({
   onEditText,
   onEditTiming,
   onAssignSpeaker,
+  onToggleThought,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -100,6 +103,7 @@ export function CueList({
             : issues.some((i) => issueSeverity(i) === "grammar")
               ? "grammar"
               : "suggestion";
+          const isThought = cue.mode === "thought";
           const isSelected = selectedIds.has(cue.id);
           const isPrimary = cue.id === primaryId;
           const isActive = cue.id === activeCueId;
@@ -165,7 +169,13 @@ export function CueList({
               <div className="cue-speaker">
                 <span
                   className="swatch"
-                  style={{ background: speaker?.color ?? "transparent" }}
+                  style={{
+                    background: speaker
+                      ? isThought
+                        ? thoughtColor(speaker)
+                        : speaker.color
+                      : "transparent",
+                  }}
                   aria-hidden
                 />
                 <select
@@ -180,10 +190,24 @@ export function CueList({
                     </option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  className={isThought ? "cue-mode on" : "cue-mode"}
+                  title={
+                    isThought
+                      ? "Thinking — click to make it spoken (T)"
+                      : "Spoken — click to make it a thought (T)"
+                  }
+                  aria-pressed={isThought}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => onToggleThought(cue.id)}
+                >
+                  💭
+                </button>
               </div>
 
               <textarea
-                className="cue-text"
+                className={isThought ? "cue-text thought" : "cue-text"}
                 value={cue.text}
                 rows={Math.min(4, cue.text.split("\n").length || 1)}
                 spellCheck={false}

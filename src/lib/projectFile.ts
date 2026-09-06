@@ -37,6 +37,9 @@ function coerceCue(raw: unknown): Cue | null {
     end,
     text: typeof c.text === "string" ? c.text : "",
     speakerId: typeof c.speakerId === "string" ? c.speakerId : null,
+    // Absent stays absent, so a file written before modes existed survives a
+    // load/save cycle unchanged.
+    ...(c.mode === "thought" ? { mode: "thought" as const } : {}),
   };
 }
 
@@ -48,6 +51,7 @@ function coerceSpeaker(raw: unknown): Speaker | null {
     id: typeof s.id === "string" && s.id ? s.id : makeId(),
     name: s.name,
     color: typeof s.color === "string" ? s.color : "#888888",
+    ...(typeof s.thinkingColor === "string" ? { thinkingColor: s.thinkingColor } : {}),
     ...(typeof s.voiceNotes === "string" ? { voiceNotes: s.voiceNotes } : {}),
   };
 }

@@ -17,6 +17,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ["N", "New cue at the playhead"],
   ["Ctrl + V", "Paste clipboard text as a new cue at the playhead"],
   ["R", "Fit the selected cues' length to the target reading speed"],
+  ["T", "Mark the selected cues as thinking, or spoken again"],
   ["Delete", "Delete the selected cues"],
   ["Ctrl + G", "Generate a continuation — whichever Continue tab is showing"],
   ["Ctrl + Enter", "Generate from inside the Continue panel's direction field"],

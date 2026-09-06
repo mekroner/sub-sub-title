@@ -71,6 +71,11 @@ describe("matchShortcut", () => {
     expect(matchShortcut({ code: "KeyR", ctrlKey: true })).toBeNull();
   });
 
+  it("toggles the thinking mode on T", () => {
+    expect(matchShortcut({ code: "KeyT" })).toEqual({ type: "toggleThought" });
+    expect(matchShortcut({ code: "KeyT", ctrlKey: true })).toBeNull();
+  });
+
   /**
    * Regression: injected and on-screen-keyboard events can leave `code` empty,
    * which made every shortcut silently inert.
