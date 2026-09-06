@@ -26,6 +26,13 @@ export interface Project {
    * invented places. Optional: files written before spellcheck existed have none.
    */
   dictionary?: string[];
+  /**
+   * The core story beats, one per entry, in story order. Written by hand or
+   * generated from the script, and used to steer the scene-continue feature.
+   * Blank entries are kept so the paragraph breaks the writer typed survive a
+   * round trip; they are filtered where the beats are used, not where stored.
+   */
+  beats: string[];
 }
 
 /** The `.sstproj` project file. Versioned so the format can move later. */
@@ -217,5 +224,35 @@ export interface ContinueRequest {
   styleNotes: string;
   speakerName: string;
   voiceNotes: string;
+  /** What the next line should get across. Empty when the user gave no direction. */
+  direction: string;
   context: ContinueContextLine[];
+}
+
+/** Distils the whole script into an outline. */
+export interface StoryBeatsRequest {
+  model: string;
+  cues: ContinueContextLine[];
+}
+
+export interface SceneSpeaker {
+  name: string;
+  voiceNotes: string;
+}
+
+/** Writes the next several lines as an exchange, steered by the story beats. */
+export interface SceneRequest {
+  model: string;
+  temperature: number;
+  lineCount: number;
+  styleNotes: string;
+  beats: string[];
+  speakers: SceneSpeaker[];
+  context: ContinueContextLine[];
+}
+
+/** One line of a generated exchange. The speaker is a name, not an id. */
+export interface GeneratedLine {
+  speaker: string;
+  text: string;
 }

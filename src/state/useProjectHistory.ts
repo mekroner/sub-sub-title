@@ -26,6 +26,7 @@ export const emptyProject: Project = {
   cues: [],
   speakers: [],
   dictionary: [],
+  beats: [],
 };
 
 export function useProjectHistory(initial: Project = emptyProject) {

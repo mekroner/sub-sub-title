@@ -6,13 +6,16 @@ import type {
   ContinueRequest,
   CueIssues,
   EngineStatus,
+  GeneratedLine,
   MediaInfo,
   ModelInfo,
   Peaks,
   ProjectPaths,
   ProofreadCorrection,
+  SceneRequest,
   Settings,
   SpellDialect,
+  StoryBeatsRequest,
   ToolStatus,
 } from "../types";
 
@@ -62,6 +65,12 @@ export const clearLastProject = () => invoke<AppState>("clear_last_project");
 
 export const aiContinue = (request: ContinueRequest) =>
   invoke<string[]>("ai_continue", { request });
+
+export const aiStoryBeats = (request: StoryBeatsRequest) =>
+  invoke<string[]>("ai_story_beats", { request });
+
+export const aiContinueScene = (request: SceneRequest) =>
+  invoke<GeneratedLine[]>("ai_continue_scene", { request });
 
 export const listModels = () => invoke<ModelInfo[]>("list_models");
 

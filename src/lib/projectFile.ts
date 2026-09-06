@@ -84,10 +84,18 @@ export function parseProjectFile(raw: string): Project {
         .filter(Boolean)
     : [];
 
+  // Unlike the dictionary, blank entries are kept: they are the paragraph
+  // breaks the writer typed between beats, and dropping them would rewrite the
+  // outline on every save. Blanks are filtered where the beats are used.
+  const beats = Array.isArray(file.beats)
+    ? file.beats.filter((beat): beat is string => typeof beat === "string")
+    : [];
+
   return {
     videoPath: typeof file.videoPath === "string" ? file.videoPath : "",
     cues: sortCues(cues),
     speakers,
     dictionary,
+    beats,
   };
 }

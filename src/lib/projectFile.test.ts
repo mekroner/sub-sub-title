@@ -15,6 +15,7 @@ const project: Project = {
   ],
   speakers: [{ id: "s1", name: "Ada", color: "#ff8800", voiceNotes: "dry" }],
   dictionary: ["Ada"],
+  beats: ["Ada asks for the truth", "", "Ada leaves"],
 };
 
 describe("serializeProjectFile / parseProjectFile", () => {
@@ -41,12 +42,23 @@ describe("serializeProjectFile / parseProjectFile", () => {
 
   it("fills in missing fields rather than failing", () => {
     const parsed = parseProjectFile("{}");
-    expect(parsed).toEqual({ videoPath: "", cues: [], speakers: [], dictionary: [] });
+    expect(parsed).toEqual({
+      videoPath: "",
+      cues: [],
+      speakers: [],
+      dictionary: [],
+      beats: [],
+    });
   });
 
   it("keeps only usable words in the project dictionary", () => {
     const raw = JSON.stringify({ dictionary: ["Kaelen", "  ", 7, "  Arda  ", null] });
     expect(parseProjectFile(raw).dictionary).toEqual(["Kaelen", "Arda"]);
+  });
+
+  it("keeps the blank lines between story beats, but drops non-strings", () => {
+    const raw = JSON.stringify({ beats: ["Act one", "", 7, null, "Act two"] });
+    expect(parseProjectFile(raw).beats).toEqual(["Act one", "", "Act two"]);
   });
 
   it("drops entries that have no usable timing or name", () => {

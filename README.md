@@ -38,7 +38,7 @@ play in the preview.
 
 | File | Role |
 |---|---|
-| `<name>.sstproj` | The project file — cues, speakers, colours, and the path of the video. This is the native save format. |
+| `<name>.sstproj` | The project file — cues, speakers, colours, story beats, and the path of the video. This is the native save format. |
 | `<name>.captions.json` | The legacy sidecar. Still read when opening a bare video; no longer written. |
 | `<name>.srt` | Import source, and an export that carries each speaker as a `<font color>` — or strips speaker data entirely, if you turn that off in Settings. |
 | `<name>.ass` | Styled export: one `Style` per speaker, `Actor` set per line. This is what renders colour on burn-in. |
@@ -254,6 +254,33 @@ hardcoded id that may have been retired.
 `Ctrl+G` sends the recent lines plus the target speaker's voice notes and returns
 2–3 candidates. Nothing is inserted until you press **Accept**; accepting appends
 a cue after the selection with placeholder timing for you to set on the waveform.
+
+The panel's optional **Direction** field says what the next line should get
+across — "she deflects and changes the subject", "he finally admits he lost the
+money". It steers the content only: the subtitle length and no-narration rules
+still apply. `Ctrl+Enter` inside the field generates (`Ctrl+G` is inert while a
+text field has focus). The direction survives **Regenerate** and clears once you
+accept a candidate; it is not saved with the project.
+
+### The Scene tab
+
+The panel has two tabs. **Line** is the single-line feature above. **Scene**
+writes several lines at once — a whole exchange between your speakers — and it
+knows what the story is about, so it can write *toward* something instead of just
+extending the last exchange.
+
+That knowledge is the **story beats**: a short outline, one beat per line, held in
+a collapsible box at the top of the tab. Write them by hand, or press **Generate**
+to have the model read the whole script and distil it. A script too long for one
+request keeps its opening and its ending, with the middle elided, so the beats
+still cover the whole arc. Beats are saved in the `.sstproj`, take part in
+undo/redo, and editing them marks the project unsaved.
+
+**Continue** (or `Ctrl+G`) then writes the number of lines you asked for, choosing
+which speaker says each one. Every line is editable and re-attributable before
+it lands: **Accept** takes one, **✕** drops one, and **Accept all** inserts the
+rest as consecutive cues in a single undo step. Accept all refuses outright when
+the gap after the selection is too tight, rather than creating overlapping cues.
 
 ## Burn-in
 

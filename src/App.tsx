@@ -62,6 +62,7 @@ import {
   resizeCue,
   resolveOverlaps,
   slotAfter,
+  slotsAfter,
   sortCues,
   splitCueAt,
 } from "./lib/cues";
@@ -377,7 +378,7 @@ export default function App() {
 
         // Sibling project file, then the legacy sidecar (it has speakers), then
         // a sibling .srt.
-        let loaded: Project = { videoPath: path, cues: [], speakers: [] };
+        let loaded: Project = { videoPath: path, cues: [], speakers: [], beats: [] };
         if (await api.fileExists(derived.project)) {
           const raw = await api.readTextFile(derived.project);
           loaded = { ...parseProjectFile(raw), videoPath: path };
@@ -392,6 +393,7 @@ export default function App() {
             videoPath: path,
             cues: sortCues(parsed.cues ?? []),
             speakers: parsed.speakers ?? [],
+            beats: [],
           };
           notify(`Loaded ${loaded.cues.length} cues from the project sidecar.`);
         } else if (await api.fileExists(derived.srt)) {
@@ -400,7 +402,12 @@ export default function App() {
           // Colour-coded files arrive with speakers already grouped; without the
           // merge their cues would hold ids pointing at nothing.
           const merged = mergeImportedSpeakers([], parsed);
-          loaded = { videoPath: path, cues: merged.cues, speakers: merged.speakers };
+          loaded = {
+            videoPath: path,
+            cues: merged.cues,
+            speakers: merged.speakers,
+            beats: [],
+          };
           notify(
             `Imported ${merged.cues.length} cues from ${derived.stem}.srt` +
               (parsed.speakers.length
@@ -459,6 +466,18 @@ export default function App() {
       cancelLabel: "Cancel",
     });
   }, []);
+
+  /** For panels that need a yes/no before overwriting something. */
+  const confirmReplace = useCallback(
+    (question: string) =>
+      ask(question, {
+        title: "Replace",
+        kind: "warning",
+        okLabel: "Replace",
+        cancelLabel: "Cancel",
+      }),
+    [],
+  );
 
   const openProjectAt = useCallback(
     async (path: string) => {
@@ -603,6 +622,16 @@ export default function App() {
         const next = fn(current.cues);
         return next === current.cues ? current : { ...current, cues: next };
       }, mergeKey ? { mergeKey } : undefined);
+    },
+    [update],
+  );
+
+  const setBeats = useCallback(
+    (next: string[], mergeKey?: string) => {
+      update(
+        (current) => (next === current.beats ? current : { ...current, beats: next }),
+        mergeKey ? { mergeKey } : undefined,
+      );
     },
     [update],
   );
@@ -975,7 +1004,39 @@ export default function App() {
       selectOnly(cue.id);
       notify("Added the line. Set its timing on the waveform.");
     },
-    [cues, primaryId, duration, setCues, notify],
+    [cues, primaryId, duration, setCues, selectOnly, notify],
+  );
+
+  /**
+   * A whole generated exchange at once: one undo step, and it refuses rather
+   * than overlapping the cue after the selection. Reports whether it landed so
+   * the panel only clears its list on success.
+   */
+  const acceptGeneratedLines = useCallback(
+    (lines: Array<{ text: string; speakerId: string | null }>): boolean => {
+      if (lines.length === 0) return false;
+      const slots = slotsAfter(cues, primaryId, duration, lines.length, settings.minGap);
+      if (!slots) {
+        notify(
+          "There is not enough room after the selection for those lines.",
+          "error",
+        );
+        return false;
+      }
+      const created: Cue[] = lines.map((line, i) => ({
+        id: makeId(),
+        start: slots[i].start,
+        end: slots[i].end,
+        text: line.text,
+        speakerId: line.speakerId,
+      }));
+      setCues((list) => sortCues([...list, ...created]));
+      // The last one, so a following continuation carries on after the exchange.
+      selectOnly(created[created.length - 1].id);
+      notify(`Added ${created.length} lines. Set their timing on the waveform.`);
+      return true;
+    },
+    [cues, primaryId, duration, settings.minGap, setCues, selectOnly, notify],
   );
 
   const registerGenerate = useCallback((fn: (() => void) | null) => {
@@ -1450,7 +1511,11 @@ export default function App() {
   const activeSpeaker =
     speakers.find((s) => s.id === activeCue?.speakerId) ?? null;
   /** There is something worth writing to disk. */
-  const hasProject = Boolean(paths) || cues.length > 0 || speakers.length > 0;
+  const hasProject =
+    Boolean(paths) ||
+    cues.length > 0 ||
+    speakers.length > 0 ||
+    project.beats.some((beat) => beat.trim() !== "");
   const selectionLabel = selectedIds.size > 1 ? ` ${selectedIds.size} cues` : " cue";
 
   const menus: Menu[] = [
@@ -1771,7 +1836,11 @@ export default function App() {
             selectedCueId={primaryId}
             settings={settings}
             apiKeySet={apiKeySet}
+            beats={project.beats}
+            onBeatsChange={setBeats}
             onAccept={acceptGenerated}
+            onAcceptAll={acceptGeneratedLines}
+            onConfirm={confirmReplace}
             onOpenSettings={() => setShowSettings(true)}
             registerGenerate={registerGenerate}
           />

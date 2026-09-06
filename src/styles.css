@@ -540,6 +540,20 @@ kbd {
   color: var(--text-dim);
   margin: 0;
 }
+.panel-tabs {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+button.tab {
+  padding: 2px 9px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+button.tab.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .panel-body {
   padding: 10px;
   overflow-y: auto;
@@ -633,6 +647,12 @@ kbd {
   gap: 8px;
 }
 
+.direction-input {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
+
 .context-preview {
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -673,6 +693,60 @@ kbd {
 }
 .candidate textarea {
   flex: 1;
+  min-width: 0;
+}
+
+/* Story beats: a disclosure whose summary carries its own Generate button. */
+.beats > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 2px 0;
+  /* Laying the summary out as a flex box costs the default triangle, so the
+     disclosure affordance is drawn below instead. */
+  list-style: none;
+}
+.beats > summary::-webkit-details-marker {
+  display: none;
+}
+.beats > summary::before {
+  content: "▸";
+  font-size: 10px;
+}
+.beats[open] > summary::before {
+  content: "▾";
+}
+/* Pushes the Generate button to the right edge. */
+.beats > summary > span {
+  margin-right: auto;
+}
+.beats-generate {
+  font-size: 12px;
+  padding: 1px 8px;
+}
+.beats-input {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  margin: 4px 0 0;
+}
+
+/* A generated line: who says it, what they say, accept, discard. */
+.scene-line {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) auto auto;
+  gap: 4px;
+  align-items: flex-start;
+}
+.scene-line textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+}
+.scene-line select {
   min-width: 0;
 }
 

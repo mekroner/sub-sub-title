@@ -29,6 +29,8 @@ pub struct ContinueRequest {
     /// The speaker the new line should be written for.
     pub speaker_name: String,
     pub voice_notes: String,
+    /// What the user wants the line to get across. Empty when they gave no direction.
+    pub direction: String,
     /// Preceding dialogue, oldest first.
     pub context: Vec<ContextLine>,
 }
@@ -123,12 +125,23 @@ fn build_user_prompt(req: &ContinueRequest) -> String {
             req.voice_notes.trim()
         ));
     }
+
+    // Last, so it is the most salient thing the model reads. It steers what the
+    // line says; the formatting rules in the system prompt still bind.
+    if !req.direction.trim().is_empty() {
+        s.push_str(&format!(
+            "\n\nWhat this line should get across: {}\n\
+             Follow that direction in what the line says, but keep to the formatting \
+             and length rules above.",
+            req.direction.trim()
+        ));
+    }
     s
 }
 
 /// Models are inconsistent about honouring "reply with JSON only", so accept a
 /// fenced block or a bare array, and fall back to line-splitting.
-fn parse_candidates(content: &str, wanted: usize) -> Vec<String> {
+pub(crate) fn parse_candidates(content: &str, wanted: usize) -> Vec<String> {
     let cleaned = content.trim();
 
     // Strip a ```json ... ``` fence if present.
@@ -325,7 +338,35 @@ pub async fn list_models() -> AppResult<Vec<ModelInfo>> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_candidates;
+    use super::{build_user_prompt, parse_candidates, ContextLine, ContinueRequest};
+
+    fn req(direction: &str) -> ContinueRequest {
+        ContinueRequest {
+            model: "test/model".into(),
+            temperature: 0.9,
+            candidate_count: 3,
+            style_notes: String::new(),
+            speaker_name: "Anna".into(),
+            voice_notes: String::new(),
+            direction: direction.into(),
+            context: vec![ContextLine {
+                speaker: "Ben".into(),
+                text: "Where did the money go?".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn user_prompt_carries_the_direction() {
+        let got = build_user_prompt(&req("he admits he lost it"));
+        assert!(got.contains("What this line should get across: he admits he lost it"));
+    }
+
+    #[test]
+    fn user_prompt_omits_a_blank_direction() {
+        let got = build_user_prompt(&req("   \n "));
+        assert!(!got.contains("should get across"));
+    }
 
     #[test]
     fn parses_a_bare_json_array() {
