@@ -1,8 +1,7 @@
-//! The continue-feature: OpenRouter chat completions, called from Rust so the
-//! API key never reaches the webview.
+//! OpenRouter chat completions, called from Rust so the API key never reaches
+//! the webview. Shared by Fill, story beats, and the proofreader.
 
 use crate::error::{AppError, AppResult};
-use crate::settings::read_api_key;
 use serde::{Deserialize, Serialize};
 
 const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
@@ -12,6 +11,7 @@ const APP_URL: &str = "https://github.com/local/sub-sub-title";
 /// request eventually gives up instead of pinning the UI forever.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// One line of the script, as the frontend sends it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextLine {
@@ -19,23 +19,7 @@ pub struct ContextLine {
     pub text: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContinueRequest {
-    pub model: String,
-    pub temperature: f32,
-    pub candidate_count: u32,
-    pub style_notes: String,
-    /// The speaker the new line should be written for.
-    pub speaker_name: String,
-    pub voice_notes: String,
-    /// What the user wants the line to get across. Empty when they gave no direction.
-    pub direction: String,
-    /// Preceding dialogue, oldest first.
-    pub context: Vec<ContextLine>,
-}
-
-/// One turn of a chat request. Shared with the proofreader.
+/// One turn of a chat request.
 #[derive(Serialize)]
 pub struct ChatTurn {
     pub role: &'static str,
@@ -69,74 +53,6 @@ struct ChoiceMessage {
 #[derive(Deserialize)]
 struct ApiError {
     message: Option<String>,
-}
-
-fn build_system_prompt(req: &ContinueRequest) -> String {
-    let mut s = String::from(
-        "You are helping write dialogue for a subtitled video. Given the recent lines of a \
-         scene, propose the single next line of dialogue for one specific speaker.\n\n\
-         Rules:\n\
-         - Write only what the speaker says. No speaker name prefix, no quotation marks, \
-         no stage directions, no narration.\n\
-         - Keep it to subtitle length: at most about 15 words, one or two short sentences.\n\
-         - Match the language, register, and tone of the surrounding lines.\n\
-         - Continue the scene naturally. Do not summarise or conclude it.\n",
-    );
-
-    if !req.style_notes.trim().is_empty() {
-        s.push_str(&format!("\nOverall style guidance: {}\n", req.style_notes.trim()));
-    }
-
-    s.push_str(&format!(
-        "\nRespond with a JSON array of exactly {} distinct candidate lines, and nothing else. \
-         Example format: [\"first candidate\", \"second candidate\"]",
-        req.candidate_count.clamp(1, 6)
-    ));
-    s
-}
-
-fn build_user_prompt(req: &ContinueRequest) -> String {
-    let mut s = String::new();
-
-    if req.context.is_empty() {
-        s.push_str("There are no preceding lines; this is the opening of the scene.\n");
-    } else {
-        s.push_str("Recent dialogue, in order:\n\n");
-        for line in &req.context {
-            let who = if line.speaker.trim().is_empty() {
-                "UNKNOWN"
-            } else {
-                line.speaker.trim()
-            };
-            s.push_str(&format!("{}: {}\n", who, line.text.replace('\n', " ")));
-        }
-    }
-
-    let speaker = if req.speaker_name.trim().is_empty() {
-        "the next speaker"
-    } else {
-        req.speaker_name.trim()
-    };
-    s.push_str(&format!("\nWrite the next line for: {speaker}"));
-
-    if !req.voice_notes.trim().is_empty() {
-        s.push_str(&format!(
-            "\nHow {speaker} speaks: {}",
-            req.voice_notes.trim()
-        ));
-    }
-
-    // Last, so it is the most salient thing the model reads. It steers what the
-    // line says; the formatting rules in the system prompt still bind.
-    if !req.direction.trim().is_empty() {
-        s.push_str(&format!(
-            "\n\nWhat this line should get across: {}\n\
-             Follow that direction in what the line says, but keep to the formatting \
-             and length rules above.",
-            req.direction.trim()
-        ));
-    }
-    s
 }
 
 /// Models are inconsistent about honouring "reply with JSON only", so accept a
@@ -189,8 +105,8 @@ pub(crate) fn parse_candidates(content: &str, wanted: usize) -> Vec<String> {
 
 /// A single chat completion, returning the assistant's text.
 ///
-/// Shared by the continue-feature and the proofreader so the two cannot drift
-/// apart in how they authenticate, time out, or report an OpenRouter failure.
+/// Shared by every AI feature so they cannot drift apart in how they
+/// authenticate, time out, or report an OpenRouter failure.
 pub async fn chat_completion(
     key: &str,
     model: &str,
@@ -253,38 +169,6 @@ pub async fn chat_completion(
         .ok_or_else(|| AppError::msg("OpenRouter returned no completion."))
 }
 
-#[tauri::command]
-pub async fn ai_continue(request: ContinueRequest) -> AppResult<Vec<String>> {
-    let key = read_api_key()?;
-    let wanted = request.candidate_count.clamp(1, 6) as usize;
-
-    let messages = [
-        ChatTurn {
-            role: "system",
-            content: build_system_prompt(&request),
-        },
-        ChatTurn {
-            role: "user",
-            content: build_user_prompt(&request),
-        },
-    ];
-
-    let content = chat_completion(
-        &key,
-        &request.model,
-        &messages,
-        request.temperature,
-        600,
-    )
-    .await?;
-
-    let candidates = parse_candidates(&content, wanted);
-    if candidates.is_empty() {
-        return Err(AppError::msg("The model returned no usable lines."));
-    }
-    Ok(candidates.into_iter().take(wanted).collect())
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
@@ -338,35 +222,7 @@ pub async fn list_models() -> AppResult<Vec<ModelInfo>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_user_prompt, parse_candidates, ContextLine, ContinueRequest};
-
-    fn req(direction: &str) -> ContinueRequest {
-        ContinueRequest {
-            model: "test/model".into(),
-            temperature: 0.9,
-            candidate_count: 3,
-            style_notes: String::new(),
-            speaker_name: "Anna".into(),
-            voice_notes: String::new(),
-            direction: direction.into(),
-            context: vec![ContextLine {
-                speaker: "Ben".into(),
-                text: "Where did the money go?".into(),
-            }],
-        }
-    }
-
-    #[test]
-    fn user_prompt_carries_the_direction() {
-        let got = build_user_prompt(&req("he admits he lost it"));
-        assert!(got.contains("What this line should get across: he admits he lost it"));
-    }
-
-    #[test]
-    fn user_prompt_omits_a_blank_direction() {
-        let got = build_user_prompt(&req("   \n "));
-        assert!(!got.contains("should get across"));
-    }
+    use super::parse_candidates;
 
     #[test]
     fn parses_a_bare_json_array() {

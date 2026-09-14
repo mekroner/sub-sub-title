@@ -13,9 +13,16 @@ const project: Project = {
     { id: "a", start: 0, end: 1.5, text: "Hello", speakerId: "s1" },
     { id: "b", start: 1.5, end: 3, text: "Goodbye", speakerId: null },
   ],
-  speakers: [{ id: "s1", name: "Ada", color: "#ff8800", voiceNotes: "dry" }],
+  speakers: [
+    { id: "s1", name: "Ada", color: "#ff8800", voiceNotes: "dry", innerVoice: "frantic" },
+  ],
   dictionary: ["Ada"],
+  brief: "A heist that goes wrong in the first minute.",
   beats: ["Ada asks for the truth", "", "Ada leaves"],
+  sections: [
+    { id: "sec1", start: 0, label: "Cold open", note: "Ada already suspects" },
+    { id: "sec2", start: 2, label: "Cut here" },
+  ],
 };
 
 describe("serializeProjectFile / parseProjectFile", () => {
@@ -47,7 +54,9 @@ describe("serializeProjectFile / parseProjectFile", () => {
       cues: [],
       speakers: [],
       dictionary: [],
+      brief: "",
       beats: [],
+      sections: [],
     });
   });
 
@@ -72,6 +81,21 @@ describe("serializeProjectFile / parseProjectFile", () => {
     // A cue missing an id still gets one, so React keys and selection work.
     expect(parsed.cues[0].id).toBeTruthy();
     expect(parsed.cues[0].text).toBe("");
+  });
+
+  it("sorts sections and drops the ones with no usable time", () => {
+    const raw = JSON.stringify({
+      sections: [
+        { id: "b", start: 30, label: "Later" },
+        { start: "nope", label: "No time" },
+        { id: "a", start: 5, label: "Earlier" },
+        { id: "c", start: 9 },
+      ],
+    });
+    const { sections } = parseProjectFile(raw);
+    expect(sections.map((s) => s.id)).toEqual(["a", "c", "b"]);
+    // An unnamed flag is still a usable mark.
+    expect(sections[1].label).toBe("");
   });
 
   it("throws a readable error on invalid JSON", () => {
@@ -106,7 +130,9 @@ describe("cue modes and speaker colours", () => {
       { id: "mike", name: "Mike", color: "#4fc3f7", thinkingColor: "#334455" },
     ],
     dictionary: [],
+    brief: "",
     beats: [],
+    sections: [],
   };
 
   it("survives a save and load", () => {

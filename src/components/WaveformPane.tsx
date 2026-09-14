@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.esm.js";
-import type { Cue, Speaker } from "../types";
+import type { Cue, Section, Speaker } from "../types";
 import { contrastText, thoughtColor, withAlpha } from "../lib/colors";
 import { clamp } from "../lib/time";
 import { selectModeOf, type SelectMode } from "../hooks/useCueSelection";
+import { SectionLane } from "./SectionLane";
 
 interface Props {
   videoEl: HTMLVideoElement | null;
@@ -26,6 +27,15 @@ interface Props {
   onContextMenuCue: (id: string, x: number, y: number) => void;
   onSeek: (time: number) => void;
   onZoomChange: (zoom: number) => void;
+  /** Timeline flags, drawn in their own lane under the waveform. */
+  sections: Section[];
+  selectedSectionId: string | null;
+  onSelectSection: (id: string) => void;
+  /** Fired once, when a lane drag is released. */
+  onMoveSection: (id: string, start: number) => void;
+  onContextMenuSection: (id: string, x: number, y: number) => void;
+  /** Right-click on empty lane: the instant under the pointer, and the anchor. */
+  onContextMenuLane: (time: number, x: number, y: number) => void;
 }
 
 /** Regions outside the viewport are not created at all; this is the margin. */
@@ -61,7 +71,14 @@ export function WaveformPane({
   onContextMenuCue,
   onSeek,
   onZoomChange,
+  sections,
+  selectedSectionId,
+  onSelectSection,
+  onMoveSection,
+  onContextMenuSection,
+  onContextMenuLane,
 }: Props) {
+  const paneRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<RegionsPlugin | null>(null);
@@ -78,6 +95,21 @@ export function WaveformPane({
    * moment under the pointer stays put instead of the view jumping.
    */
   const pendingScroll = useRef<number | null>(null);
+  /**
+   * wavesurfer's scroll content, for the section lane to align against. State
+   * rather than a ref, so the lane's effects re-subscribe when the instance is
+   * recreated. The lane only ever holds this node, never the instance, so it
+   * cannot call into a destroyed one.
+   */
+  const [wrapper, setWrapper] = useState<HTMLElement | null>(null);
+  /**
+   * The duration the cue regions are positioned against, which is not always
+   * the `duration` prop: wavesurfer lays the canvas out with the number it was
+   * given (ffprobe's) but positions regions against getDuration(), which
+   * prefers the media element's own. The lane has to use the regions' number so
+   * a section edge and a cue edge at the same instant land on the same pixel.
+   */
+  const [mediaDuration, setMediaDuration] = useState(0);
 
   // Latest props, so the wavesurfer event handlers never close over stale state.
   const handlers = useRef({
@@ -124,13 +156,17 @@ export function WaveformPane({
     wsRef.current = ws;
     regionsRef.current = regions;
     regionMap.current = new Map();
+    // The renderer builds its wrapper in its constructor, so the node is
+    // already there; only its width waits for the first render.
+    setWrapper(ws.getWrapper());
 
     const disableDragSelection = regions.enableDragSelection({
       color: "rgba(255,255,255,0.18)",
     });
 
-    ws.on("ready", () => {
+    ws.on("ready", (mediaSeconds: number) => {
       setReady(true);
+      setMediaDuration(mediaSeconds || duration);
       const width = containerRef.current?.clientWidth ?? 800;
       setVisible([0, width / zoom]);
     });
@@ -177,6 +213,8 @@ export function WaveformPane({
     return () => {
       disableDragSelection();
       setReady(false);
+      setWrapper(null);
+      setMediaDuration(0);
       regionMap.current = new Map();
       wsRef.current = null;
       regionsRef.current = null;
@@ -220,7 +258,10 @@ export function WaveformPane({
 
   // --- Wheel: Alt to zoom, otherwise pan through time ----------------------
   useEffect(() => {
-    const el = containerRef.current;
+    // The whole pane, not just the canvas: the section lane is a sibling below
+    // it, and wheeling over the lane must pan and zoom the timeline too. Both
+    // elements share a left edge, so the pointer maths below is unaffected.
+    const el = paneRef.current;
     if (!el || !ready) return;
 
     const onWheel = (event: WheelEvent) => {
@@ -330,8 +371,19 @@ export function WaveformPane({
   const hasWaveform = Boolean(peaks && peaks.length > 0 && videoEl);
 
   return (
-    <div className="waveform-pane">
+    <div className="waveform-pane" ref={paneRef}>
       <div ref={containerRef} className="waveform-canvas" />
+      <SectionLane
+        wrapper={wrapper}
+        duration={mediaDuration || duration}
+        sections={sections}
+        selectedId={selectedSectionId}
+        onSeek={onSeek}
+        onSelect={onSelectSection}
+        onMove={onMoveSection}
+        onContextMenuSection={onContextMenuSection}
+        onContextMenuEmpty={onContextMenuLane}
+      />
       {!hasWaveform && (
         <div className="waveform-placeholder">
           {videoEl

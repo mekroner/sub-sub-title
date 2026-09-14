@@ -102,7 +102,7 @@ export function SpeakerPanel({
               <button
                 type="button"
                 className="icon-button"
-                title="Voice notes for the continue-feature"
+                title="How this speaker talks and thinks — used by Fill"
                 aria-pressed={isEditing}
                 onClick={() => setEditing(isEditing ? null : speaker.id)}
               >
@@ -119,14 +119,24 @@ export function SpeakerPanel({
               </button>
 
               {isEditing && (
-                <textarea
-                  className="voice-notes"
-                  placeholder={`How does ${speaker.name} speak? Tone, vocabulary, quirks — used by the continue-feature.`}
-                  value={speaker.voiceNotes ?? ""}
-                  rows={3}
-                  onChange={(e) => onUpdate(speaker.id, { voiceNotes: e.target.value })}
-                  onKeyDown={(e) => e.stopPropagation()}
-                />
+                <>
+                  <textarea
+                    className="voice-notes"
+                    placeholder={`Voice: how does ${speaker.name} speak? Tone, vocabulary, quirks.`}
+                    value={speaker.voiceNotes ?? ""}
+                    rows={2}
+                    onChange={(e) => onUpdate(speaker.id, { voiceNotes: e.target.value })}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  />
+                  <textarea
+                    className="voice-notes"
+                    placeholder={`Inner voice: how does ${speaker.name} think, if it differs?`}
+                    value={speaker.innerVoice ?? ""}
+                    rows={2}
+                    onChange={(e) => onUpdate(speaker.id, { innerVoice: e.target.value })}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  />
+                </>
               )}
             </div>
           );

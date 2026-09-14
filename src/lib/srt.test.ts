@@ -9,6 +9,7 @@ import {
 import { formatSrtTime, parseTimecode } from "./time";
 import type { Cue, Speaker } from "../types";
 import { DEFAULT_MIN_GAP, findOverlaps } from "./cues";
+import { mutedVariant, thoughtColor } from "./colors";
 
 const SAMPLE = `1
 00:00:01,000 --> 00:00:03,500
@@ -508,11 +509,21 @@ describe("thought cues", () => {
     mode: "thought",
   };
 
-  it("exports a thought wrapped in asterisks, inside the speaker's colour", () => {
+  it("exports a thought in the speaker's thinking colour, not their own", () => {
     const out = serializeSrt([spoken, thought], { speakers, speakerColors: true });
-    // The colour still carries identity, so both cues share it.
     expect(out).toContain('<font color="#4fc3f7">Hello there.</font>');
-    expect(out).toContain('<font color="#4fc3f7">*I\'m so happy*</font>');
+    expect(out).toContain(
+      `<font color="${mutedVariant("#4fc3f7")}">*I'm so happy*</font>`,
+    );
+  });
+
+  it("uses the thinking colour the speaker chose, over the derived one", () => {
+    const chosen: Speaker[] = [{ ...speakers[0], thinkingColor: "#ff00ff" }];
+    const out = serializeSrt([spoken, thought], {
+      speakers: chosen,
+      speakerColors: true,
+    });
+    expect(out).toContain('<font color="#ff00ff">*I\'m so happy*</font>');
   });
 
   it("wraps a multi-line thought once, around the line break", () => {
@@ -521,18 +532,77 @@ describe("thought cues", () => {
   });
 
   /**
-   * The point of putting the mode in the text and not the colour: re-importing
-   * gives back one Mike, not one per mode.
+   * Thoughts export in a second colour, so the file really does hold two — but
+   * one of them is Mike's thinking colour, and the merge has to hand it back to
+   * him rather than invent a speaker per mode.
    */
   it("round-trips through colour export as a single speaker", () => {
     const out = serializeSrt([spoken, thought], { speakers, speakerColors: true });
-    const parsed = parseSrt(out);
+    const merged = mergeImportedSpeakers(speakers, parseSrt(out));
 
+    expect(merged.speakers).toHaveLength(1);
+    expect(merged.cues.map((c) => c.text)).toEqual(["Hello there.", "I'm so happy"]);
+    expect(merged.cues[0].mode).toBeUndefined();
+    expect(merged.cues[1].mode).toBe("thought");
+    expect(merged.cues.every((c) => c.speakerId === "mike")).toBe(true);
+  });
+
+  /** The same file opened fresh, where Mike has to be minted from the export. */
+  it("reunites the two colours when the project has no speakers yet", () => {
+    const out = serializeSrt([spoken, thought], { speakers, speakerColors: true });
+    const merged = mergeImportedSpeakers([], parseSrt(out));
+
+    expect(merged.speakers).toHaveLength(1);
+    expect(merged.speakers[0].color).toBe("#4fc3f7");
+    const id = merged.speakers[0].id;
+    expect(merged.cues.every((c) => c.speakerId === id)).toBe(true);
+  });
+
+  /** A hand-picked thinking colour cannot be derived, so it is matched instead. */
+  it("recognises a chosen thinking colour against the project's speakers", () => {
+    const chosen: Speaker[] = [{ ...speakers[0], thinkingColor: "#ff00ff" }];
+    const out = serializeSrt([spoken, thought], {
+      speakers: chosen,
+      speakerColors: true,
+    });
+    const merged = mergeImportedSpeakers(chosen, parseSrt(out));
+
+    expect(merged.speakers).toHaveLength(1);
+    expect(merged.cues.every((c) => c.speakerId === "mike")).toBe(true);
+  });
+
+  /**
+   * A foreign file whose colour only ever appears on thoughts: there is no
+   * speaker to hand it to, so it becomes one, keeping the colour as its thinking
+   * colour too so a re-export does not drift to a derived variant.
+   */
+  it("keeps a thought-only colour stable when it belongs to nobody", () => {
+    const parsed = parseSrt(
+      '1\n00:00:01,000 --> 00:00:02,000\n<font color="#123456">*alone*</font>\n',
+    );
+    const merged = mergeImportedSpeakers([], parsed);
+
+    expect(merged.speakers).toHaveLength(1);
+    expect(thoughtColor(merged.speakers[0])).toBe("#123456");
+    const out = serializeSrt(merged.cues, {
+      speakers: merged.speakers,
+      speakerColors: true,
+    });
+    expect(out).toContain('<font color="#123456">*alone*</font>');
+  });
+
+  it("treats a colour carrying spoken lines too as a speaking colour", () => {
+    const parsed = parseSrt(
+      '1\n00:00:01,000 --> 00:00:02,000\n<font color="#123456">*thinking*</font>\n\n' +
+        '2\n00:00:03,000 --> 00:00:04,000\n<font color="#123456">aloud</font>\n',
+    );
     expect(parsed.speakers).toHaveLength(1);
-    expect(parsed.cues.map((c) => c.text)).toEqual(["Hello there.", "I'm so happy"]);
-    expect(parsed.cues[0].mode).toBeUndefined();
-    expect(parsed.cues[1].mode).toBe("thought");
-    expect(parsed.cues[0].speakerId).toBe(parsed.cues[1].speakerId);
+    expect(parsed.speakers[0].thoughtOnly).toBe(false);
+
+    const merged = mergeImportedSpeakers([], parsed);
+    expect(merged.speakers).toHaveLength(1);
+    expect(merged.speakers[0].color).toBe("#123456");
+    expect(merged.speakers[0].thinkingColor).toBeUndefined();
   });
 
   it("round-trips the mode on a plain .srt, with the colours off", () => {

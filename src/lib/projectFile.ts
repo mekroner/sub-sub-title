@@ -4,9 +4,10 @@
  * at the cost of breaking if the video is renamed, which the app reports.
  */
 
-import type { Cue, Project, ProjectFile, Speaker } from "../types";
+import type { Cue, Project, ProjectFile, Section, Speaker } from "../types";
 import { sortCues } from "./cues";
 import { makeId } from "./ids";
+import { sortSections } from "./sections";
 
 export const PROJECT_EXTENSION = "sstproj";
 
@@ -53,6 +54,21 @@ function coerceSpeaker(raw: unknown): Speaker | null {
     color: typeof s.color === "string" ? s.color : "#888888",
     ...(typeof s.thinkingColor === "string" ? { thinkingColor: s.thinkingColor } : {}),
     ...(typeof s.voiceNotes === "string" ? { voiceNotes: s.voiceNotes } : {}),
+    ...(typeof s.innerVoice === "string" ? { innerVoice: s.innerVoice } : {}),
+  };
+}
+
+function coerceSection(raw: unknown): Section | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const s = raw as Partial<Section>;
+  // A flag with no time cannot be placed on the timeline, so it is dropped.
+  if (typeof s.start !== "number" || !Number.isFinite(s.start)) return null;
+  return {
+    id: typeof s.id === "string" && s.id ? s.id : makeId(),
+    start: Math.max(0, s.start),
+    // An unnamed flag is still a usable mark; it shows as a bare line.
+    label: typeof s.label === "string" ? s.label : "",
+    ...(typeof s.note === "string" && s.note.trim() !== "" ? { note: s.note } : {}),
   };
 }
 
@@ -95,11 +111,19 @@ export function parseProjectFile(raw: string): Project {
     ? file.beats.filter((beat): beat is string => typeof beat === "string")
     : [];
 
+  const sections = Array.isArray(file.sections)
+    ? sortSections(
+        file.sections.map(coerceSection).filter((s): s is Section => s !== null),
+      )
+    : [];
+
   return {
     videoPath: typeof file.videoPath === "string" ? file.videoPath : "",
     cues: sortCues(cues),
     speakers,
     dictionary,
+    brief: typeof file.brief === "string" ? file.brief : "",
     beats,
+    sections,
   };
 }

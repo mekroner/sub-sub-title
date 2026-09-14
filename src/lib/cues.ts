@@ -164,43 +164,6 @@ export function setCueTiming(
   );
 }
 
-/**
- * Find a free slot for a newly generated line: after the given cue, in the gap
- * before the next one, defaulting to two seconds.
- */
-export function slotAfter(cues: Cue[], afterId: string | null, duration: number): {
-  start: number;
-  end: number;
-} {
-  const sorted = sortCues(cues);
-  const index = afterId ? sorted.findIndex((c) => c.id === afterId) : sorted.length - 1;
-  const previous = index >= 0 ? sorted[index] : undefined;
-  const following = index >= 0 ? sorted[index + 1] : undefined;
-
-  const start = previous ? previous.end + 0.05 : 0;
-  const limit = duration > 0 ? duration : start + 2;
-  const gapEnd = following ? following.start - 0.05 : limit;
-  const end = Math.min(start + 2, Math.max(start + MIN_CUE_DURATION, gapEnd));
-
-  return { start: Math.min(start, limit), end: Math.min(end, limit) };
-}
-
-/**
- * The run of cues ending at the selection — the dialogue an AI continuation is
- * given as context. With nothing selected it is the tail of the script.
- */
-export function contextBefore(
-  cues: Cue[],
-  selectedCueId: string | null,
-  lines: number,
-): Cue[] {
-  const index = selectedCueId
-    ? cues.findIndex((c) => c.id === selectedCueId)
-    : cues.length - 1;
-  const end = index >= 0 ? index + 1 : cues.length;
-  return cues.slice(Math.max(0, end - lines), end);
-}
-
 export function insertCue(cues: Cue[], cue: Cue): Cue[] {
   return sortCues([...cues, cue]);
 }
@@ -405,44 +368,6 @@ export function insertCueClamped(
   // introducing a new one means there was no room.
   const before = findOverlaps(cues, minGap).length;
   return findOverlaps(clamped, minGap).length > before ? null : clamped;
-}
-
-/**
- * Slots for several generated lines at once, laid end to end in the gap after
- * the given cue — the multi-line sibling of `slotAfter`.
- *
- * Two deliberate differences from `slotAfter`: the margin comes from the
- * caller's `minGap` rather than a hardcoded 0.05, and there is no gap it will
- * squeeze into — it returns null instead, because accepting a whole exchange
- * must never quietly overlap the cue that follows.
- */
-export function slotsAfter(
-  cues: Cue[],
-  afterId: string | null,
-  duration: number,
-  count: number,
-  minGap = DEFAULT_MIN_GAP,
-): Array<{ start: number; end: number }> | null {
-  if (count < 1) return [];
-
-  const sorted = sortCues(cues);
-  const index = afterId ? sorted.findIndex((c) => c.id === afterId) : sorted.length - 1;
-  const previous = index >= 0 ? sorted[index] : undefined;
-  const following = index >= 0 ? sorted[index + 1] : undefined;
-
-  const start = previous ? previous.end + minGap : 0;
-  // With no media loaded there is no end to bump into, so assume room for all.
-  const limit = duration > 0 ? duration : start + count * 2 + (count - 1) * minGap;
-  const gapEnd = Math.min(following ? following.start - minGap : limit, limit);
-
-  const available = gapEnd - start;
-  const width = Math.min(2, (available - (count - 1) * minGap) / count);
-  if (width < MIN_CUE_DURATION) return null;
-
-  return Array.from({ length: count }, (_, i) => {
-    const slotStart = start + i * (width + minGap);
-    return { start: slotStart, end: slotStart + width };
-  });
 }
 
 /** Cues that start before their predecessor has finished. */

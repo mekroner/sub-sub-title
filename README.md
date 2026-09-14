@@ -14,7 +14,7 @@ for this specific loop only.
    picked up automatically. The project you had open last reopens on launch.
 2. Tag each line with a speaker (`1`–`9`), each speaker having a colour.
 3. Fine-tune timing by dragging regions on the waveform.
-4. Optionally ask an AI to propose the next line of dialogue.
+4. Optionally have an AI write lines into timed cues, or continue the scene.
 5. Export `.srt` (coloured or plain), `.ass` (coloured), or burn the subtitles
    into an MP4.
 
@@ -38,7 +38,7 @@ play in the preview.
 
 | File | Role |
 |---|---|
-| `<name>.sstproj` | The project file — cues, speakers, colours, story beats, and the path of the video. This is the native save format. |
+| `<name>.sstproj` | The project file — cues, speakers, colours, the brief and story beats, timeline sections with their notes, and the path of the video. This is the native save format. |
 | `<name>.captions.json` | The legacy sidecar. Still read when opening a bare video; no longer written. |
 | `<name>.srt` | Import source, and an export that carries each speaker as a `<font color>` — or strips speaker data entirely, if you turn that off in Settings. |
 | `<name>.ass` | Styled export: one `Style` per speaker, `Actor` set per line. This is what renders colour on burn-in. |
@@ -76,6 +76,38 @@ per-machine, not part of any project.
 The project file also carries the project's own spellcheck dictionary, so
 character names travel with the project rather than with the machine.
 
+## Sections
+
+A lane under the waveform holds named flags — a cut, the start of a scene, a
+pickup to reshoot. They are working notes, kept in the project file and never
+written to an SRT, an ASS or a burn-in.
+
+A section is a single instant, not a range: it owns the span from its own flag to
+the next one, so the lane always tiles the timeline and there are no gaps or
+overlaps to keep tidy. Moving one therefore never has to negotiate with its
+neighbours.
+
+- `B` drops a flag at the playhead and focuses its name, so the whole gesture is
+  one key press and then typing.
+- `PgUp` / `PgDn` jump the playhead between flags.
+- Drag a flag along the lane to move it; the neighbouring spans re-flow as you
+  go, and the whole drag is one undo step.
+- Right-click a flag to rename, move it to the playhead, or delete it.
+  Right-click empty lane to add one there.
+- The **Sections** panel in the side column lists them in time order: click a
+  timecode to jump, type in the name field to rename. The timecode of the
+  section the playhead is inside is highlighted.
+- ✎ on a section opens its **scene note** — what is going on in that stretch.
+  Fill reads the notes of every section its passage covers.
+
+The lane is aligned to the waveform by measuring wavesurfer's own scroll content
+rather than by multiplying time by the zoom level, because wavesurfer stretches
+the waveform to fill the pane whenever the timeline is narrower than the
+container — so the requested zoom is not always the real pixels-per-second. The
+flags are then placed in percent-of-duration, the same units the cue regions use,
+which is what keeps a flag and a cue edge at the same instant on the same pixel
+at every zoom level.
+
 ## Menu bar
 
 Every command lives in an in-app menu bar — **File**, **Edit**, **View**,
@@ -106,11 +138,13 @@ project/cue-count label, the zoom slider, and the Follow toggle.
 | `Ctrl+V` | Paste clipboard text as a new cue at the playhead |
 | `R` | Fit the selected cues' length to the target reading speed |
 | `T` | Mark the selected cues as thinking, or spoken again |
+| `B` | Flag a section at the playhead, ready to name |
+| `PgUp` / `PgDn` | Jump to the previous / next section |
 | `Delete` | Delete the selected cues |
 | `Ctrl+A` / `Esc` | Select every cue / clear the selection |
 | `Ctrl+D` | Duplicate the selected cue |
 | `Ctrl+F` | Find and replace across cues |
-| `Ctrl+G` | Generate a continuation for the selected cue |
+| `Ctrl+G` | Fill the selected cues with AI, or continue after them |
 | `Ctrl+N` | New project |
 | `Ctrl+O` | Open a project |
 | `Ctrl+S` | Save the project |
@@ -252,7 +286,7 @@ Exporting `.srt` writes those tags back out. To get a bare `.srt` with no speake
 data, clear **Write speaker colours into exported .srt** under Settings ▸
 Subtitle export.
 
-## The continue-feature
+## Fill — writing with AI
 
 Uses **OpenRouter**. The API key is stored in **Windows Credential Manager** and
 is read only by the Rust backend — it is never sent to the webview.
@@ -261,36 +295,72 @@ Add the key under `Settings → OpenRouter`. Pick a model by typing in the filte
 box, which queries OpenRouter's live model list rather than relying on a
 hardcoded id that may have been retired.
 
-`Ctrl+G` sends the recent lines plus the target speaker's voice notes and returns
-2–3 candidates. Nothing is inserted until you press **Accept**; accepting appends
-a cue after the selection with placeholder timing for you to set on the waveform.
+Fill writes into **slots**, not after them. Timing comes first — you have already
+seen where a mouth moves on the waveform — and the words are written to fit it:
+each slot's character limit is its time on screen at the target reading speed,
+capped by the line limits. `Ctrl+G` (or right-click ▸ **Fill with AI…**) opens the
+dialog on the selection, in one of two modes:
 
-The panel's optional **Direction** field says what the next line should get
-across — "she deflects and changes the subject", "he finally admits he lost the
-money". It steers the content only: the subtitle length and no-narration rules
-still apply. `Ctrl+Enter` inside the field generates (`Ctrl+G` is inert while a
-text field has focus). The direction survives **Regenerate** and clears once you
-accept a candidate; it is not saved with the project.
+- **Fill** — the selected cues are the slots. They keep their timing; empty ones
+  are written, and ones that already hold text are either built on or rewritten.
+  This is the mode the dialog opens in when the selection holds an empty cue.
+- **Continue** — 1–8 new lines after the selection, or after the playhead with
+  nothing selected. Their timing follows from their text, laid end to end in the
+  gap before the next cue, and the dialog refuses rather than overlap that cue.
 
-### The Scene tab
+### The dialog
 
-The panel has two tabs. **Line** is the single-line feature above. **Scene**
-writes several lines at once — a whole exchange between your speakers — and it
-knows what the story is about, so it can write *toward* something instead of just
-extending the last exchange.
+The left column, **Context**, is everything the model reads, editable in place:
 
-That knowledge is the **story beats**: a short outline, one beat per line, held in
-a collapsible box at the top of the tab. Write them by hand, or press **Generate**
-to have the model read the whole script and distil it. A script too long for one
-request keeps its opening and its ending, with the middle elided, so the beats
-still cover the whole arc. Beats are saved in the `.sstproj`, take part in
-undo/redo, and editing them marks the project unsaved.
+| Context | Stored in |
+|---|---|
+| Project brief — premise, tone, world | the `.sstproj` |
+| Story beats — written by hand, or generated from the whole script | the `.sstproj` |
+| Characters — each speaker's *voice* and *inner voice* | the `.sstproj` |
+| Scene notes — one per section covering the passage | the `.sstproj` |
+| The transcript around the slots, with how many lines before and after | settings |
 
-**Continue** (or `Ctrl+G`) then writes the number of lines you asked for, choosing
-which speaker says each one. Every line is editable and re-attributable before
-it lands: **Accept** takes one, **✕** drops one, and **Accept all** inserts the
-rest as consecutive cues in a single undo step. Accept all refuses outright when
-the gap after the selection is too tight, rather than creating overlapping cues.
+Below it, **Exact prompt** shows the full request as it stands, with a Copy button.
+
+The right column, **Direction**, is what you want this time: per slot, who speaks
+and whether it is said or thought (either may be left to the model); a free-text
+direction, with a list of recent ones; **creative latitude** — *Close*, *Open* or
+*Wild*; and how many **takes** to ask for. `Ctrl+Enter` anywhere in the dialog
+writes.
+
+Each take fills every slot, and the takes are asked to be different readings of
+the moment, not rewordings. Under each slot the lines from every take are listed;
+click one to use it, or **Use take B** to switch every slot at once. The chosen
+line stays editable, with its speaker, said/thought, and a character count that
+turns red past the limit. **Fill cues** / **Add lines** lands everything as one
+undo step, re-wrapped to the line limits.
+
+### Speech and thought
+
+The transcript marks every line as `Name says:` or `Name thinks:`, and the prompt
+spells out what that means: other characters cannot hear or answer a thought, a
+thought may contradict what the same character says aloud, and thoughts run
+shorter and more honest than speech. A speaker's **inner voice** notes (Speakers
+panel ✎, or the dialog) describe how they think when it differs from how they
+talk. A slot set to *Model decides* lets the model choose between the two.
+
+### The prompt
+
+The system prompt has three layers:
+
+1. **Writing guidance** — craft (subtext, specificity, spoken rhythm, no stock
+   lines) and speech versus thought. `Settings ▸ Fill` can replace it wholesale,
+   starting from the built-in text, with a reset.
+2. **Your instructions** from `Settings ▸ Fill` — language, dialect, house rules.
+   They follow the guidance and win where the two disagree. The style notes of
+   the old continue-feature carry over into this field.
+3. **Conventions** — how to read the transcript, the hard limits, and the JSON
+   reply format. Always appended and not editable, so a reply can still be read.
+
+The user message carries the brief, beats, characters, scene notes, transcript and
+task, with your direction last. The prompt is assembled in the frontend
+(`src/lib/fill.ts`) so the dialog can show it exactly; the backend only adds the
+key and makes the call.
 
 ## Burn-in
 

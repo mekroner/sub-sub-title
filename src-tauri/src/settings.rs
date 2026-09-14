@@ -16,12 +16,21 @@ pub struct Settings {
     /// OpenRouter model id, e.g. "anthropic/claude-sonnet-4.5".
     pub model: String,
     pub temperature: f32,
-    /// How many preceding cues are sent as context to the continue-feature.
-    pub context_lines: u32,
-    /// How many candidate lines to ask for.
-    pub candidate_count: u32,
-    /// Extra guidance appended to the system prompt (tone, era, language...).
-    pub style_notes: String,
+    /// The user's own instructions, added to Fill's built-in writing guidance.
+    /// Aliased so the style notes of the old continue-feature carry over.
+    #[serde(alias = "styleNotes")]
+    pub fill_instructions: String,
+    /// Replaces Fill's built-in writing guidance when non-empty. The transcript
+    /// conventions and reply format are always appended, so replies still parse.
+    pub fill_guidance_override: String,
+    /// Dialogue lines Fill shows the model before and after the slots.
+    pub fill_lines_before: u32,
+    pub fill_lines_after: u32,
+    /// How many alternative takes Fill asks for.
+    pub fill_takes: u32,
+    /// "close", "open" or "wild". A string, like `dialect`, so an unknown value
+    /// degrades to the default instead of failing the load.
+    pub fill_latitude: String,
     /// Default .ass styling used for export and the preview overlay.
     pub font_name: String,
     pub font_size: u32,
@@ -62,9 +71,12 @@ impl Default for Settings {
         Self {
             model: "anthropic/claude-sonnet-4.5".to_string(),
             temperature: 0.9,
-            context_lines: 12,
-            candidate_count: 3,
-            style_notes: String::new(),
+            fill_instructions: String::new(),
+            fill_guidance_override: String::new(),
+            fill_lines_before: 24,
+            fill_lines_after: 4,
+            fill_takes: 3,
+            fill_latitude: "open".to_string(),
             font_name: "Arial".to_string(),
             font_size: 48,
             bold: false,
@@ -150,7 +162,7 @@ pub fn clear_api_key() -> AppResult<()> {
 pub fn read_api_key() -> AppResult<String> {
     let key = keyring_entry()?.get_password().map_err(|e| match e {
         keyring::Error::NoEntry => AppError::msg(
-            "No OpenRouter API key saved. Add one in Settings before using the continue-feature.",
+            "No OpenRouter API key saved. Add one in Settings before using the AI features.",
         ),
         other => AppError::from(other),
     })?;
@@ -158,4 +170,18 @@ pub fn read_api_key() -> AppResult<String> {
         return Err(AppError::msg("The saved OpenRouter API key is empty."));
     }
     Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn old_style_notes_become_fill_instructions() {
+        let old = r#"{"model":"x","styleNotes":"Norwegian, dry humour","contextLines":12}"#;
+        let settings: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(settings.fill_instructions, "Norwegian, dry humour");
+        assert_eq!(settings.fill_takes, 3);
+        assert_eq!(settings.fill_latitude, "open");
+    }
 }

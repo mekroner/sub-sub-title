@@ -3,16 +3,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppState,
-  ContinueRequest,
   CueIssues,
   EngineStatus,
-  GeneratedLine,
+  FillRequest,
   MediaInfo,
   ModelInfo,
   Peaks,
   ProjectPaths,
   ProofreadCorrection,
-  SceneRequest,
   Settings,
   SpellDialect,
   StoryBeatsRequest,
@@ -63,14 +61,11 @@ export const forgetProject = (path: string) =>
 
 export const clearLastProject = () => invoke<AppState>("clear_last_project");
 
-export const aiContinue = (request: ContinueRequest) =>
-  invoke<string[]>("ai_continue", { request });
-
 export const aiStoryBeats = (request: StoryBeatsRequest) =>
   invoke<string[]>("ai_story_beats", { request });
 
-export const aiContinueScene = (request: SceneRequest) =>
-  invoke<GeneratedLine[]>("ai_continue_scene", { request });
+/** Sends a prompt built by `lib/fill.ts`; returns the model's raw reply. */
+export const aiFill = (request: FillRequest) => invoke<string>("ai_fill", { request });
 
 export const listModels = () => invoke<ModelInfo[]>("list_models");
 

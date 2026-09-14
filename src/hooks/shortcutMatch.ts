@@ -22,12 +22,14 @@ export type ShortcutCommand =
   | { type: "newCue" }
   | { type: "fitReadingSpeed" }
   | { type: "toggleThought" }
+  | { type: "addSection" }
+  | { type: "jumpSection"; direction: number }
   | { type: "duplicate" }
   | { type: "deleteSelected" }
   | { type: "selectAll" }
   | { type: "clearSelection" }
   | { type: "find" }
-  | { type: "generate" }
+  | { type: "fill" }
   | { type: "save" }
   | { type: "saveAs" }
   | { type: "newProject" }
@@ -73,6 +75,8 @@ function effectiveCode(event: KeyLike): string {
     "+": "Equal",
     "/": "Slash",
     "?": "Slash",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
   };
   return named[key] ?? "";
 }
@@ -86,7 +90,7 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
   if (ctrl) {
     switch (code) {
       case "KeyG":
-        return { type: "generate" };
+        return { type: "fill" };
       case "KeyS":
         return shift ? { type: "saveAs" } : { type: "save" };
       case "KeyN":
@@ -141,6 +145,12 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
       return { type: "fitReadingSpeed" };
     case "KeyT":
       return { type: "toggleThought" };
+    case "KeyB":
+      return { type: "addSection" };
+    case "PageUp":
+      return { type: "jumpSection", direction: -1 };
+    case "PageDown":
+      return { type: "jumpSection", direction: 1 };
     case "KeyF":
       return { type: "toggleFollow" };
     case "ArrowUp":

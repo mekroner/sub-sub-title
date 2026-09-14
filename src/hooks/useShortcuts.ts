@@ -15,12 +15,15 @@ export interface ShortcutActions {
   newCueAtPlayhead: () => void;
   fitReadingSpeed: () => void;
   toggleThought: () => void;
+  addSectionAtPlayhead: () => void;
+  /** direction: -1 for the previous section, +1 for the next. */
+  jumpSection: (direction: number) => void;
   duplicateSelected: () => void;
   deleteSelected: () => void;
   selectAll: () => void;
   clearSelection: () => void;
   openFind: () => void;
-  generateContinuation: () => void;
+  openFill: () => void;
   save: () => void;
   saveAs: () => void;
   newProject: () => void;
@@ -96,6 +99,12 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
         case "toggleThought":
           a.toggleThought();
           break;
+        case "addSection":
+          a.addSectionAtPlayhead();
+          break;
+        case "jumpSection":
+          a.jumpSection(command.direction);
+          break;
         case "duplicate":
           a.duplicateSelected();
           break;
@@ -111,8 +120,8 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
         case "find":
           a.openFind();
           break;
-        case "generate":
-          a.generateContinuation();
+        case "fill":
+          a.openFill();
           break;
         case "save":
           a.save();

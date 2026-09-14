@@ -1,13 +1,14 @@
 mod ai;
+mod beats;
 mod dictionary;
 mod engine;
 mod error;
 mod files;
+mod fill;
 mod media;
 mod project_state;
 mod proofread;
 mod render;
-mod scene;
 mod settings;
 mod spelling;
 mod transcribe;
@@ -51,10 +52,9 @@ pub fn run() {
             project_state::remember_position,
             project_state::forget_project,
             project_state::clear_last_project,
-            ai::ai_continue,
             ai::list_models,
-            scene::ai_story_beats,
-            scene::ai_continue_scene,
+            beats::ai_story_beats,
+            fill::ai_fill,
             render::render_burn_in,
             render::cancel_render,
             spelling::check_cues,

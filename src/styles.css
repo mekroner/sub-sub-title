@@ -522,14 +522,21 @@ body.resizing {
 
 .waveform-pane {
   flex: none;
-  height: 168px;
+  /*
+   * A column, not a fixed box: the waveform takes the height wavesurfer draws
+   * (128px, plus whatever its scrollbar costs) and the section lane sits under
+   * it. The min-height keeps the empty-state placeholder the size it always was.
+   */
+  min-height: 168px;
+  display: flex;
+  flex-direction: column;
   position: relative;
   border-top: 1px solid var(--border);
   background: var(--bg-raised);
   overflow: hidden;
 }
 .waveform-canvas {
-  height: 100%;
+  flex: none;
 }
 .waveform-placeholder {
   position: absolute;
@@ -551,6 +558,85 @@ body.resizing {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 
+/* --- Section lane ------------------------------------------------------- */
+
+/*
+ * A sibling of the waveform rather than an overlay: wavesurfer's DOM lives in a
+ * shadow root whose scroll container clips vertically, so nothing can be drawn
+ * below the waveform from inside it — and these rules would not cross the
+ * boundary anyway. Being a sibling also keeps the lane clear of the cue
+ * regions' stacking context, so the z-indexes here only order the lane's own
+ * children.
+ */
+.section-lane {
+  flex: none;
+  height: 26px;
+  position: relative;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.22);
+}
+.section-lane-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  /*
+   * Width and transform are written by SectionLane's sync effect, from
+   * wavesurfer's own measured scroll content. Never set them here.
+   */
+  width: 0;
+  will-change: transform;
+}
+.section-lane-hint {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.section-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /*
+   * Two flags on the same instant would otherwise collapse to nothing. An
+   * absolutely positioned box with left, right and a min-width is
+   * over-constrained, so the right edge gives way and a grabbable sliver
+   * survives.
+   */
+  min-width: 3px;
+  border-left: 2px solid var(--accent);
+  background: rgba(74, 158, 255, 0.14);
+  overflow: hidden;
+  cursor: grab;
+  z-index: 1;
+}
+.section-marker:hover {
+  background: rgba(74, 158, 255, 0.24);
+}
+.section-marker.selected {
+  background: rgba(74, 158, 255, 0.34);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.section-marker.dragging {
+  cursor: grabbing;
+  /* Above its neighbours while it is being pushed across them. */
+  z-index: 2;
+}
+.section-label {
+  position: absolute;
+  top: 7px;
+  left: 6px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  color: var(--text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
 /* --- Panels ------------------------------------------------------------ */
 
 .panel {
@@ -562,14 +648,14 @@ body.resizing {
 .speaker-panel {
   flex: none;
   /*
-   * The side column now runs the full height of the window, where a plain
-   * percentage would grow the speaker list well past what it needs. The pixel
-   * cap holds it at the size it had before; the percentage still guards a short
-   * window, where 260px would leave the continue panel with nothing.
+   * A cap rather than a share of the column: the speaker list should not grow
+   * past what it needs. The percentage guards a short window, where the pixel
+   * cap alone would leave the sections panel with nothing.
    */
-  max-height: min(260px, 46%);
+  max-height: min(360px, 55%);
 }
-.continue-panel {
+.section-panel {
+  /* Takes the rest of the column, which is where scene notes open up. */
   flex: 1;
   min-height: 0;
 }
@@ -588,28 +674,6 @@ body.resizing {
   color: var(--text-dim);
   margin: 0;
 }
-.panel-tabs {
-  display: flex;
-  gap: 4px;
-  flex: none;
-}
-button.tab {
-  padding: 2px 9px;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-button.tab.on {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.panel-body {
-  padding: 10px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
-}
 .panel-footer {
   border-top: 1px solid var(--border);
   padding: 7px 10px;
@@ -623,6 +687,45 @@ button.tab.on {
   overflow-y: auto;
   padding: 6px 10px;
   min-height: 0;
+}
+
+.section-list {
+  overflow-y: auto;
+  padding: 6px 10px;
+  min-height: 0;
+}
+.section-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.section-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  padding: 2px 6px;
+  color: var(--text-dim);
+}
+.section-row.active .section-time {
+  /* Where the playhead is, so the panel says where you are in the timeline. */
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.section-name {
+  width: 100%;
+  min-width: 0;
+}
+.section-row.selected .section-name {
+  border-color: var(--border-strong);
+}
+.section-note {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 2px 0 6px;
+}
+button.icon-button.has-note {
+  color: var(--accent);
 }
 .speaker-row {
   display: grid;
@@ -694,109 +797,6 @@ button.tab.on {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-}
-
-.direction-input {
-  width: 100%;
-  resize: vertical;
-  font: inherit;
-}
-
-.context-preview {
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 6px;
-  max-height: 190px;
-  overflow-y: auto;
-  background: var(--bg-input);
-}
-.context-line {
-  display: grid;
-  grid-template-columns: 10px 70px 1fr;
-  gap: 6px;
-  align-items: baseline;
-  padding: 2px 0;
-  font-size: 12px;
-}
-.context-speaker {
-  color: var(--text-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.context-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.candidates {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.candidate {
-  display: flex;
-  gap: 6px;
-  align-items: flex-start;
-}
-.candidate textarea {
-  flex: 1;
-  min-width: 0;
-}
-
-/* Story beats: a disclosure whose summary carries its own Generate button. */
-.beats > summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  color: var(--text-dim);
-  font-size: 12px;
-  padding: 2px 0;
-  /* Laying the summary out as a flex box costs the default triangle, so the
-     disclosure affordance is drawn below instead. */
-  list-style: none;
-}
-.beats > summary::-webkit-details-marker {
-  display: none;
-}
-.beats > summary::before {
-  content: "▸";
-  font-size: 10px;
-}
-.beats[open] > summary::before {
-  content: "▾";
-}
-/* Pushes the Generate button to the right edge. */
-.beats > summary > span {
-  margin-right: auto;
-}
-.beats-generate {
-  font-size: 12px;
-  padding: 1px 8px;
-}
-.beats-input {
-  width: 100%;
-  resize: vertical;
-  font: inherit;
-  margin: 4px 0 0;
-}
-
-/* A generated line: who says it, what they say, accept, discard. */
-.scene-line {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr) auto auto;
-  gap: 4px;
-  align-items: flex-start;
-}
-.scene-line textarea {
-  width: 100%;
-  min-width: 0;
-  resize: vertical;
-}
-.scene-line select {
-  min-width: 0;
 }
 
 .swatch {
@@ -1244,4 +1244,334 @@ legend {
 .toast.error {
   border-color: var(--danger);
   color: #ffd9d9;
+}
+
+/* --- Fill dialog --------------------------------------------------------- */
+
+.modal.fill-modal {
+  width: min(1240px, 100%);
+  height: 100%;
+}
+.fill-modal .modal-header {
+  gap: 12px;
+}
+.fill-modal .modal-header h2 {
+  margin-right: auto;
+}
+.footer-note {
+  margin-right: auto;
+  align-self: center;
+}
+
+/* Two columns that scroll on their own, so the transcript stays put while the
+   takes grow below the direction. */
+.fill-columns {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.fill-column {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fill-column + .fill-column {
+  border-left: 1px solid var(--border);
+}
+.fill-heading {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.fill-column textarea {
+  width: 100%;
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.field-label-row > span:first-child,
+.field-caption {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.field-label-row > span:first-child {
+  margin-right: auto;
+}
+button.small,
+select.small {
+  font-size: 12px;
+  padding: 1px 8px;
+}
+.inline-number {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.inline-number input {
+  width: 56px;
+  padding: 1px 4px;
+}
+.button-hint {
+  margin-left: 8px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.segmented {
+  display: inline-flex;
+}
+.segmented button {
+  border-radius: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.segmented button:first-child {
+  border-radius: 5px 0 0 5px;
+}
+.segmented button:last-child {
+  border-radius: 0 5px 5px 0;
+}
+.segmented button + button {
+  border-left-width: 0;
+}
+.segmented button.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.segmented button.on + button {
+  /* The accent border replaces the seam the next button would draw. */
+  border-left-width: 0;
+}
+.segmented button + button.on {
+  border-left-width: 1px;
+  margin-left: -1px;
+}
+.segmented.wide {
+  display: flex;
+}
+.segmented.wide button {
+  flex: 1;
+}
+
+.fill-details > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 2px 0;
+}
+.fill-details[open] > summary {
+  margin-bottom: 6px;
+}
+.fill-character {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 6px;
+  margin-bottom: 8px;
+}
+.fill-character-name {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.fill-scene {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.fill-transcript {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-input);
+  padding: 6px 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 12px;
+  position: relative;
+}
+.ft-line {
+  display: grid;
+  grid-template-columns: 52px 88px minmax(0, 1fr);
+  gap: 6px;
+  padding: 2px 0;
+  align-items: baseline;
+}
+.ft-time {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+.ft-who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.ft-who i {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.ft-line.thought .ft-text {
+  font-style: italic;
+  color: var(--text-dim);
+}
+.ft-line.slot {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-left: 2px solid var(--accent);
+  margin-left: -8px;
+  padding-left: 6px;
+}
+.ft-line.slot .ft-text {
+  color: var(--accent);
+}
+.ft-scene {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.ft-pause {
+  color: var(--text-dim);
+  font-size: 11px;
+  padding-left: 58px;
+}
+
+.fill-prompt {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px;
+  margin: 6px 0 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.fill-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: 5px;
+}
+
+.fill-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fill-slot {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fill-slot-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.fill-slot-head .hint {
+  margin-right: auto;
+}
+.fill-slot-head select {
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.fill-draft {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.fill-choice {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: start;
+}
+.fill-choice textarea.thought {
+  font-style: italic;
+}
+button.mode-toggle {
+  font-size: 12px;
+  padding: 3px 8px;
+  color: var(--text-dim);
+}
+button.mode-toggle.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.fill-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  padding-top: 5px;
+}
+.fill-count.warn {
+  color: var(--danger);
+}
+.fill-alternatives {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+button.fill-alt {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  text-align: left;
+  font-size: 12px;
+  padding: 3px 8px;
+  background: transparent;
+  border-color: transparent;
+}
+button.fill-alt:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+button.fill-alt.on {
+  border-color: var(--accent);
+}
+.fill-alt b {
+  color: var(--accent);
+  flex: none;
+}
+.fill-alt i {
+  color: var(--text-dim);
+  flex: none;
+}
+.fill-takes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.guidance-input {
+  width: 100%;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
 }

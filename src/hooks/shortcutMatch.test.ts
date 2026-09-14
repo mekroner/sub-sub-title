@@ -41,7 +41,7 @@ describe("matchShortcut", () => {
     expect(matchShortcut({ code: "KeyZ", ctrlKey: true, shiftKey: true })).toEqual({
       type: "redo",
     });
-    expect(matchShortcut({ code: "KeyG", ctrlKey: true })).toEqual({ type: "generate" });
+    expect(matchShortcut({ code: "KeyG", ctrlKey: true })).toEqual({ type: "fill" });
     // Left for the webview.
     expect(matchShortcut({ code: "KeyC", ctrlKey: true })).toBeNull();
     expect(matchShortcut({ code: "KeyV", ctrlKey: true })).toBeNull();
@@ -74,6 +74,23 @@ describe("matchShortcut", () => {
   it("toggles the thinking mode on T", () => {
     expect(matchShortcut({ code: "KeyT" })).toEqual({ type: "toggleThought" });
     expect(matchShortcut({ code: "KeyT", ctrlKey: true })).toBeNull();
+  });
+
+  it("flags a section on B, and leaves Ctrl+B to the webview", () => {
+    expect(matchShortcut({ code: "KeyB" })).toEqual({ type: "addSection" });
+    expect(matchShortcut({ code: "KeyB", ctrlKey: true })).toBeNull();
+  });
+
+  it("jumps between sections on PageUp and PageDown", () => {
+    expect(matchShortcut({ code: "PageUp" })).toEqual({ type: "jumpSection", direction: -1 });
+    expect(matchShortcut({ code: "PageDown" })).toEqual({
+      type: "jumpSection",
+      direction: 1,
+    });
+    expect(matchShortcut({ code: "", key: "PageDown" })).toEqual({
+      type: "jumpSection",
+      direction: 1,
+    });
   });
 
   /**

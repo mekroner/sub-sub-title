@@ -7,6 +7,7 @@ import {
   listModels,
   setApiKey as storeApiKey,
 } from "../lib/api";
+import { DEFAULT_FILL_GUIDANCE } from "../lib/fill";
 
 interface Props {
   settings: Settings;
@@ -29,6 +30,9 @@ export function SettingsDialog({
   const [modelFilter, setModelFilter] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [overridingGuidance, setOverridingGuidance] = useState(
+    settings.fillGuidanceOverride.trim() !== "",
+  );
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
@@ -163,37 +167,69 @@ export function SettingsDialog({
                   onChange={(e) => set("temperature", Number(e.target.value))}
                 />
               </label>
-              <label className="field">
-                <span>Context lines</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={60}
-                  value={draft.contextLines}
-                  onChange={(e) => set("contextLines", Number(e.target.value))}
-                />
-              </label>
-              <label className="field">
-                <span>Candidates</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={6}
-                  value={draft.candidateCount}
-                  onChange={(e) => set("candidateCount", Number(e.target.value))}
-                />
-              </label>
             </div>
+            <p className="hint">
+              Used by Fill. Higher is looser; around 0.9 suits dialogue, and the
+              latitude chosen in the Fill dialog does more to steer it than this.
+            </p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Fill — writing with AI</legend>
 
             <label className="field">
-              <span>Style notes (sent with every request)</span>
+              <span>Your instructions (added to every Fill request)</span>
               <textarea
-                rows={2}
-                value={draft.styleNotes}
-                placeholder="e.g. Norwegian dialogue, dry humour, 1970s setting"
-                onChange={(e) => set("styleNotes", e.target.value)}
+                rows={4}
+                value={draft.fillInstructions}
+                placeholder={
+                  "e.g. Norwegian dialogue, Bergen dialect.\nKeep swearing mild.\nAnna never uses contractions."
+                }
+                onChange={(e) => set("fillInstructions", e.target.value)}
               />
             </label>
+            <p className="hint">
+              These sit after the built-in writing guidance and win where the two
+              disagree. Anything specific to one project belongs in that project's
+              brief, in the Fill dialog.
+            </p>
+
+            <label className="field checkbox">
+              <input
+                type="checkbox"
+                checked={overridingGuidance}
+                onChange={(e) => {
+                  setOverridingGuidance(e.target.checked);
+                  if (e.target.checked && !draft.fillGuidanceOverride.trim()) {
+                    set("fillGuidanceOverride", DEFAULT_FILL_GUIDANCE);
+                  }
+                }}
+              />
+              <span>Replace the built-in writing guidance</span>
+            </label>
+
+            {overridingGuidance && (
+              <>
+                <textarea
+                  className="guidance-input"
+                  rows={16}
+                  value={draft.fillGuidanceOverride}
+                  onChange={(e) => set("fillGuidanceOverride", e.target.value)}
+                />
+                <div className="field-row">
+                  <span className="hint">
+                    How to read the transcript, the character limits and the reply
+                    format are always added after this, so replies can still be read.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => set("fillGuidanceOverride", DEFAULT_FILL_GUIDANCE)}
+                  >
+                    Reset to built-in
+                  </button>
+                </div>
+              </>
+            )}
           </fieldset>
 
           <fieldset>
@@ -435,7 +471,12 @@ export function SettingsDialog({
             type="button"
             className="primary"
             onClick={() => {
-              onSave(draft);
+              // An override that is off, or still word for word the built-in text,
+              // is stored as none — so improvements to the built-in text reach it.
+              const override = draft.fillGuidanceOverride.trim();
+              const unchanged =
+                !overridingGuidance || override === DEFAULT_FILL_GUIDANCE.trim();
+              onSave({ ...draft, fillGuidanceOverride: unchanged ? "" : draft.fillGuidanceOverride });
               onClose();
             }}
           >

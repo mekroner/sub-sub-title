@@ -10,7 +10,9 @@ import { VideoPane } from "./components/VideoPane";
 import { MAX_ZOOM, MIN_ZOOM, WaveformPane } from "./components/WaveformPane";
 import { CueList } from "./components/CueList";
 import { SpeakerPanel } from "./components/SpeakerPanel";
-import { ContinuePanel } from "./components/ContinuePanel";
+import { SectionPanel } from "./components/SectionPanel";
+import { FillDialog } from "./components/FillDialog";
+import type { AcceptedFill } from "./components/FillDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { RenderDialog } from "./components/RenderDialog";
@@ -53,15 +55,25 @@ import {
   serializeProjectFile,
 } from "./lib/projectFile";
 import { makeId } from "./lib/ids";
+import {
+  insertSection,
+  moveSection,
+  newSection,
+  nextSection,
+  previousSection,
+  removeSection,
+  renameSection,
+  setSectionNote,
+} from "./lib/sections";
+import { layoutContinuation } from "./lib/fill";
 import { DEFAULT_WHISPER_MODEL } from "./lib/whisper";
-import { DEFAULT_TARGET_CPS, clamp, durationForText } from "./lib/time";
+import { DEFAULT_TARGET_CPS, clamp, durationForText, formatShort } from "./lib/time";
 import {
   DEFAULT_MIN_GAP,
   duplicateCue,
   findActiveCueIndex,
   findOverlaps,
   fitCuesToReadingSpeed,
-  insertCue,
   insertCueClamped,
   joinCues,
   mergeWithNext,
@@ -70,8 +82,6 @@ import {
   newCue,
   resizeCue,
   resolveOverlaps,
-  slotAfter,
-  slotsAfter,
   sortCues,
   splitCueAt,
 } from "./lib/cues";
@@ -95,6 +105,7 @@ import type {
   MediaInfo,
   Project,
   ProjectPaths,
+  Section,
   Settings,
   Sidecar,
   Speaker,
@@ -104,9 +115,12 @@ import type {
 const DEFAULT_SETTINGS: Settings = {
   model: "anthropic/claude-sonnet-4.5",
   temperature: 0.9,
-  contextLines: 12,
-  candidateCount: 3,
-  styleNotes: "",
+  fillInstructions: "",
+  fillGuidanceOverride: "",
+  fillLinesBefore: 24,
+  fillLinesAfter: 4,
+  fillTakes: 3,
+  fillLatitude: "open",
   fontName: "Arial",
   fontSize: 48,
   bold: false,
@@ -199,9 +213,19 @@ export default function App() {
   const [showRender, setShowRender] = useState(false);
   const [showProofread, setShowProofread] = useState(false);
   const [showTranscribe, setShowTranscribe] = useState(false);
+  /** The Fill dialog, with what it was opened on. Null while closed. */
+  const [fillOpen, setFillOpen] = useState<{
+    selectedCueIds: string[];
+    continueAfter: number;
+    initialKind: "fill" | "continue";
+  } | null>(null);
   /** The user's personal word list, shared by every project. */
   const [userDictionary, setUserDictionary] = useState<string[]>([]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  /** The section highlighted on the timeline lane. Independent of cue selection. */
+  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
+  /** A just-created section, whose name field should take focus for typing. */
+  const [renamingSectionId, setRenamingSectionId] = useState<string | null>(null);
   const [find, setFind] = useState<FindState | null>(null);
   const [toast, setToast] = useState<{ text: string; kind: "info" | "error" } | null>(
     null,
@@ -216,10 +240,10 @@ export default function App() {
     videoRef.current = el;
     setVideoEl(el);
   }, []);
-  const generateRef = useRef<(() => void) | null>(null);
 
   const cues = project.cues;
   const speakers = project.speakers;
+  const sections = project.sections;
 
   const {
     selectedIds,
@@ -394,7 +418,14 @@ export default function App() {
 
         // Sibling project file, then the legacy sidecar (it has speakers), then
         // a sibling .srt.
-        let loaded: Project = { videoPath: path, cues: [], speakers: [], beats: [] };
+        let loaded: Project = {
+          videoPath: path,
+          cues: [],
+          speakers: [],
+          brief: "",
+          beats: [],
+          sections: [],
+        };
         if (await api.fileExists(derived.project)) {
           const raw = await api.readTextFile(derived.project);
           loaded = { ...parseProjectFile(raw), videoPath: path };
@@ -409,7 +440,9 @@ export default function App() {
             videoPath: path,
             cues: sortCues(parsed.cues ?? []),
             speakers: parsed.speakers ?? [],
+            brief: "",
             beats: [],
+            sections: [],
           };
           notify(`Loaded ${loaded.cues.length} cues from the project sidecar.`);
         } else if (await api.fileExists(derived.srt)) {
@@ -422,7 +455,9 @@ export default function App() {
             videoPath: path,
             cues: merged.cues,
             speakers: merged.speakers,
+            brief: "",
             beats: [],
+            sections: [],
           };
           notify(
             `Imported ${merged.cues.length} cues from ${derived.stem}.srt` +
@@ -650,6 +685,98 @@ export default function App() {
       );
     },
     [update],
+  );
+
+  const setBrief = useCallback(
+    (brief: string) =>
+      update(
+        (current) => (brief === current.brief ? current : { ...current, brief }),
+        { mergeKey: "brief" },
+      ),
+    [update],
+  );
+
+  // --- Sections -----------------------------------------------------------
+  const setSections = useCallback(
+    (fn: (list: Section[]) => Section[], mergeKey?: string) => {
+      update((current) => {
+        const next = fn(current.sections);
+        return next === current.sections ? current : { ...current, sections: next };
+      }, mergeKey ? { mergeKey } : undefined);
+    },
+    [update],
+  );
+
+  /**
+   * Flags an instant and puts the new section straight into rename, so the whole
+   * gesture is one key press and then typing.
+   */
+  const addSectionAt = useCallback(
+    (time: number) => {
+      // A flag needs a timeline to sit on; with no media every one would pile
+      // up at zero.
+      if (duration <= 0) return;
+      const section = newSection(sections, time);
+      setSections((list) => insertSection(list, section, duration));
+      setSelectedSectionId(section.id);
+      setRenamingSectionId(section.id);
+    },
+    [setSections, sections, duration],
+  );
+
+  const addSectionAtPlayhead = useCallback(
+    () => addSectionAt(currentTime),
+    [addSectionAt, currentTime],
+  );
+
+  const renameSectionById = useCallback(
+    (id: string, label: string) =>
+      setSections((list) => renameSection(list, id, label), `section-name:${id}`),
+    [setSections],
+  );
+
+  const noteSectionById = useCallback(
+    (id: string, note: string) =>
+      setSections((list) => setSectionNote(list, id, note), `section-note:${id}`),
+    [setSections],
+  );
+
+  /** One undo step for the whole drag; the lane commits only on release. */
+  const moveSectionTo = useCallback(
+    (id: string, start: number) =>
+      setSections((list) => moveSection(list, id, start, duration), `section:${id}`),
+    [setSections, duration],
+  );
+
+  const removeSectionById = useCallback(
+    (id: string) => {
+      setSections((list) => removeSection(list, id));
+      setSelectedSectionId((current) => (current === id ? null : current));
+    },
+    [setSections],
+  );
+
+  const jumpToSection = useCallback(
+    (direction: number) => {
+      const target =
+        direction < 0
+          ? previousSection(sections, currentTime)
+          : nextSection(sections, currentTime);
+      if (!target) return;
+      setSelectedSectionId(target.id);
+      seek(target.start);
+    },
+    [sections, currentTime, seek],
+  );
+
+  const jumpToSectionId = useCallback(
+    (id: string) => {
+      const target = sections.find((s) => s.id === id);
+      if (!target) return;
+      setSelectedSectionId(id);
+      seek(target.start);
+    },
+    [sections, seek],
   );
 
   const editText = useCallback(
@@ -1102,53 +1229,85 @@ export default function App() {
     }
   }, [cues, speakers, assText, paths, notify]);
 
-  // --- Continue-feature ---------------------------------------------------
-  const acceptGenerated = useCallback(
-    (text: string, speakerId: string | null) => {
-      const { start, end } = slotAfter(cues, primaryId, duration);
-      const cue: Cue = { id: makeId(), start, end, text, speakerId };
-      setCues((list) => insertCue(list, cue));
-      selectOnly(cue.id);
-      notify("Added the line. Set its timing on the waveform.");
+  // --- Fill ---------------------------------------------------------------
+  /** For preferences a dialog changes in passing, saved as they change. */
+  const patchSettings = useCallback(
+    (patch: Partial<Settings>) => {
+      const next = { ...settings, ...patch };
+      setSettings(next);
+      api.saveSettings(next).catch((e) => notify(errorMessage(e), "error"));
     },
-    [cues, primaryId, duration, setCues, selectOnly, notify],
+    [settings, notify],
   );
 
   /**
-   * A whole generated exchange at once: one undo step, and it refuses rather
-   * than overlapping the cue after the selection. Reports whether it landed so
-   * the panel only clears its list on success.
+   * Opens on the selection. A selection holding an empty cue is there to be
+   * filled; anything else most likely wants the story carried on after it.
    */
-  const acceptGeneratedLines = useCallback(
-    (lines: Array<{ text: string; speakerId: string | null }>): boolean => {
-      if (lines.length === 0) return false;
-      const slots = slotsAfter(cues, primaryId, duration, lines.length, settings.minGap);
-      if (!slots) {
-        notify(
-          "There is not enough room after the selection for those lines.",
-          "error",
+  const openFill = useCallback(() => {
+    const selected = cues.filter((c) => selectedIds.has(c.id));
+    const last = selected[selected.length - 1];
+    setFillOpen({
+      selectedCueIds: selected.map((c) => c.id),
+      continueAfter: last ? last.end : currentTime,
+      initialKind: selected.some((c) => c.text.trim() === "") ? "fill" : "continue",
+    });
+  }, [cues, selectedIds, currentTime]);
+
+  /** Lands a fill as one undo step. False when new lines had no room. */
+  const acceptFill = useCallback(
+    (result: AcceptedFill): boolean => {
+      const shape = (text: string) =>
+        wrapText(text, settings.maxCharsPerLine, settings.maxLines);
+      const voiced = (cue: Cue, mode: "spoken" | "thought"): Cue => {
+        if (mode === "thought") return { ...cue, mode: "thought" };
+        const { mode: _mode, ...spoken } = cue;
+        return spoken;
+      };
+
+      if (result.kind === "fill") {
+        if (result.lines.length === 0) return false;
+        const byId = new Map(result.lines.map((line) => [line.cueId, line]));
+        setCues((list) =>
+          list.map((cue) => {
+            const line = byId.get(cue.id);
+            if (!line) return cue;
+            return voiced({ ...cue, text: shape(line.text), speakerId: line.speakerId }, line.mode);
+          }),
         );
+        const count = result.lines.length;
+        notify(`Filled ${count} cue${count === 1 ? "" : "s"}.`);
+        return true;
+      }
+
+      const texts = result.lines.map((line) => shape(line.text));
+      const timing = layoutContinuation(texts, result.window, settings.targetCps, minGap);
+      if (!timing || texts.length === 0) {
+        notify("There is not enough room for those lines before the next cue.", "error");
         return false;
       }
-      const created: Cue[] = lines.map((line, i) => ({
-        id: makeId(),
-        start: slots[i].start,
-        end: slots[i].end,
-        text: line.text,
-        speakerId: line.speakerId,
-      }));
+      const created = result.lines.map((line, i) =>
+        voiced(
+          {
+            id: makeId(),
+            start: timing[i].start,
+            end: timing[i].end,
+            text: texts[i],
+            speakerId: line.speakerId,
+          },
+          line.mode,
+        ),
+      );
       setCues((list) => sortCues([...list, ...created]));
-      // The last one, so a following continuation carries on after the exchange.
+      // The last one, so pressing Ctrl+G again carries on from where these end.
       selectOnly(created[created.length - 1].id);
-      notify(`Added ${created.length} lines. Set their timing on the waveform.`);
+      notify(
+        `Added ${created.length} line${created.length === 1 ? "" : "s"}, timed to reading speed.`,
+      );
       return true;
     },
-    [cues, primaryId, duration, settings.minGap, setCues, selectOnly, notify],
+    [settings.maxCharsPerLine, settings.maxLines, settings.targetCps, minGap, setCues, selectOnly, notify],
   );
-
-  const registerGenerate = useCallback((fn: (() => void) | null) => {
-    generateRef.current = fn;
-  }, []);
 
   // --- Cue actions --------------------------------------------------------
   // Shared by the Edit menu and the keyboard shortcuts, so the two can never
@@ -1356,7 +1515,12 @@ export default function App() {
 
   // --- Shortcuts ----------------------------------------------------------
   const modalOpen =
-    showSettings || showHelp || showRender || showProofread || showTranscribe;
+    showSettings ||
+    showHelp ||
+    showRender ||
+    showProofread ||
+    showTranscribe ||
+    fillOpen !== null;
 
   useShortcuts(
     {
@@ -1400,6 +1564,8 @@ export default function App() {
       newCueAtPlayhead,
       fitReadingSpeed: fitSelectionToReadingSpeed,
       toggleThought: toggleThoughtOnSelection,
+      addSectionAtPlayhead,
+      jumpSection: jumpToSection,
       duplicateSelected,
       deleteSelected,
       selectAll,
@@ -1407,14 +1573,12 @@ export default function App() {
         // Escape backs out of whatever is in the way, innermost first.
         if (contextMenu) setContextMenu(null);
         else if (find) setFind(null);
+        else if (selectedSectionId) setSelectedSectionId(null);
         else clearSelection();
       },
       openFind: () =>
         setFind((current) => current ?? { query: "", replacement: "", matchCase: false }),
-      generateContinuation: () => {
-        if (generateRef.current) generateRef.current();
-        else notify("Add an OpenRouter API key in Settings first.", "error");
-      },
+      openFill,
       save: () => void saveProject(),
       saveAs: () => void saveProjectAs(),
       newProject: () => void newProject(),
@@ -1431,6 +1595,59 @@ export default function App() {
   usePasteText(pasteCueAtPlayhead, !modalOpen && !menuOpen && !contextMenu);
 
   // --- Context menu -------------------------------------------------------
+  /** Right-clicking a flag on the timeline lane. */
+  const openSectionContextMenu = useCallback(
+    (id: string, x: number, y: number) => {
+      const section = sections.find((s) => s.id === id);
+      if (!section) return;
+      setSelectedSectionId(id);
+      setContextMenu({
+        x,
+        y,
+        entries: [
+          {
+            kind: "item",
+            label: "Rename",
+            detail: section.label || undefined,
+            onSelect: () => setRenamingSectionId(id),
+          },
+          {
+            kind: "item",
+            label: "Move to playhead",
+            onSelect: () => moveSectionTo(id, currentTime),
+          },
+          { kind: "separator" },
+          {
+            kind: "item",
+            label: "Delete section",
+            onSelect: () => removeSectionById(id),
+          },
+        ],
+      });
+    },
+    [sections, currentTime, moveSectionTo, removeSectionById],
+  );
+
+  /** Right-clicking the empty part of the lane, which offers only an add. */
+  const openLaneContextMenu = useCallback(
+    (time: number, x: number, y: number) => {
+      setContextMenu({
+        x,
+        y,
+        entries: [
+          {
+            kind: "item",
+            label: "Add section here",
+            detail: formatShort(time),
+            onSelect: () => addSectionAt(time),
+          },
+        ],
+      });
+    },
+    [addSectionAt],
+  );
+
+
   /**
    * Right-clicking a cue that is not in the selection selects it first, so the
    * menu always acts on what the user is looking at.
@@ -1581,6 +1798,22 @@ export default function App() {
           checked: cue?.mode === "thought",
           onSelect: toggleThoughtOnSelection,
         },
+        {
+          kind: "item",
+          label: many ? `Fill${suffix} with AI…` : "Fill with AI…",
+          accelerator: "Ctrl+G",
+          // Built from the targets, not the selection state, which has not
+          // re-rendered yet when the menu opens on an unselected cue.
+          onSelect: () => {
+            const chosen = cues.filter((c) => targets.has(c.id));
+            const last = chosen[chosen.length - 1];
+            setFillOpen({
+              selectedCueIds: chosen.map((c) => c.id),
+              continueAfter: last ? last.end : currentTime,
+              initialKind: "fill",
+            });
+          },
+        },
         { kind: "separator" },
         {
           kind: "item",
@@ -1634,7 +1867,9 @@ export default function App() {
     Boolean(paths) ||
     cues.length > 0 ||
     speakers.length > 0 ||
-    project.beats.some((beat) => beat.trim() !== "");
+    project.brief.trim() !== "" ||
+    project.beats.some((beat) => beat.trim() !== "") ||
+    sections.length > 0;
   const selectionLabel = selectedIds.size > 1 ? ` ${selectedIds.size} cues` : " cue";
 
   const menus: Menu[] = [
@@ -1801,6 +2036,19 @@ export default function App() {
         { kind: "separator" },
         {
           kind: "item",
+          label: "Flag a section at the playhead",
+          accelerator: "B",
+          onSelect: addSectionAtPlayhead,
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: selectedIds.size > 0 ? "Fill or continue with AI…" : "Continue with AI…",
+          accelerator: "Ctrl+G",
+          onSelect: openFill,
+        },
+        {
+          kind: "item",
           label: "Proofread with AI…",
           detail: apiKeySet ? undefined : "Add an OpenRouter key in Settings",
           disabled: cues.length === 0 || !apiKeySet,
@@ -1820,6 +2068,21 @@ export default function App() {
           accelerator: "F",
           checked: follow,
           onSelect: () => setFollow((f) => !f),
+        },
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Previous section",
+          accelerator: "PgUp",
+          disabled: !previousSection(sections, currentTime),
+          onSelect: () => jumpToSection(-1),
+        },
+        {
+          kind: "item",
+          label: "Next section",
+          accelerator: "PgDn",
+          disabled: !nextSection(sections, currentTime),
+          onSelect: () => jumpToSection(1),
         },
         { kind: "separator" },
         {
@@ -1944,6 +2207,12 @@ export default function App() {
             // Clicking a region must move the video, not just the app's clock.
             onSeek={seek}
             onZoomChange={setZoom}
+            sections={sections}
+            selectedSectionId={selectedSectionId}
+            onSelectSection={setSelectedSectionId}
+            onMoveSection={moveSectionTo}
+            onContextMenuSection={openSectionContextMenu}
+            onContextMenuLane={openLaneContextMenu}
           />
         </div>
 
@@ -1961,19 +2230,18 @@ export default function App() {
             onApplyDetected={applyDetectedSpeakers}
           />
 
-          <ContinuePanel
-            cues={cues}
-            speakers={speakers}
-            selectedCueId={primaryId}
-            settings={settings}
-            apiKeySet={apiKeySet}
-            beats={project.beats}
-            onBeatsChange={setBeats}
-            onAccept={acceptGenerated}
-            onAcceptAll={acceptGeneratedLines}
-            onConfirm={confirmReplace}
-            onOpenSettings={() => setShowSettings(true)}
-            registerGenerate={registerGenerate}
+          <SectionPanel
+            sections={sections}
+            currentTime={currentTime}
+            selectedId={selectedSectionId}
+            renamingId={renamingSectionId}
+            enabled={Boolean(videoUrl)}
+            onAdd={addSectionAtPlayhead}
+            onRename={renameSectionById}
+            onNote={noteSectionById}
+            onRemove={removeSectionById}
+            onJump={jumpToSectionId}
+            onRenamed={() => setRenamingSectionId(null)}
           />
         </aside>
 
@@ -2048,6 +2316,34 @@ export default function App() {
       )}
 
       {showHelp && <ShortcutsDialog onClose={() => setShowHelp(false)} />}
+
+      {fillOpen && (
+        <FillDialog
+          selectedCueIds={fillOpen.selectedCueIds}
+          continueAfter={fillOpen.continueAfter}
+          initialKind={fillOpen.initialKind}
+          cues={cues}
+          speakers={speakers}
+          sections={sections}
+          brief={project.brief}
+          beats={project.beats}
+          settings={settings}
+          duration={duration}
+          apiKeySet={apiKeySet}
+          onBriefChange={setBrief}
+          onBeatsChange={setBeats}
+          onSpeakerChange={updateSpeaker}
+          onSectionNoteChange={noteSectionById}
+          onSettingsChange={patchSettings}
+          onConfirm={confirmReplace}
+          onAccept={acceptFill}
+          onOpenSettings={() => {
+            setFillOpen(null);
+            setShowSettings(true);
+          }}
+          onClose={() => setFillOpen(null)}
+        />
+      )}
 
       {showProofread && (
         <ProofreadDialog

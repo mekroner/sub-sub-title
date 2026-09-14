@@ -9,8 +9,13 @@ export interface Speaker {
    * existed needs no setting up.
    */
   thinkingColor?: string;
-  /** Short persona/style description fed to the continue-feature. */
+  /** How this speaker talks — tone, vocabulary, quirks. Sent to Fill. */
   voiceNotes?: string;
+  /**
+   * How this speaker thinks, when that differs from how they talk. Sent to Fill
+   * alongside the voice notes, so thoughts can sound unlike the speech.
+   */
+  innerVoice?: string;
 }
 
 /**
@@ -35,6 +40,26 @@ export interface Cue {
   mode?: CueMode;
 }
 
+/**
+ * A named flag on the timeline: a cut, the start of a scene, a pickup to
+ * reshoot. Never exported — these are the writer's own working notes.
+ *
+ * A section owns the span from its own `start` to the next section's, which is
+ * why there is no `end`: sections cannot gap or overlap, and moving one never
+ * has to negotiate with its neighbours.
+ */
+export interface Section {
+  id: string;
+  /** Seconds. */
+  start: number;
+  label: string;
+  /**
+   * What happens in this stretch, for Fill: who wants what, what has changed.
+   * Absent when the writer never wrote one.
+   */
+  note?: string;
+}
+
 export interface Project {
   videoPath: string;
   cues: Cue[];
@@ -45,12 +70,19 @@ export interface Project {
    */
   dictionary?: string[];
   /**
+   * Premise, tone, world — what anyone writing lines for this project needs to
+   * know. Free text, sent with every Fill request.
+   */
+  brief: string;
+  /**
    * The core story beats, one per entry, in story order. Written by hand or
-   * generated from the script, and used to steer the scene-continue feature.
+   * generated from the script, and sent to Fill so lines fit the larger story.
    * Blank entries are kept so the paragraph breaks the writer typed survive a
    * round trip; they are filtered where the beats are used, not where stored.
    */
   beats: string[];
+  /** Timeline flags, in time order. Never exported. */
+  sections: Section[];
 }
 
 /** The `.sstproj` project file. Versioned so the format can move later. */
@@ -117,9 +149,16 @@ export interface ToolStatus {
 export interface Settings {
   model: string;
   temperature: number;
-  contextLines: number;
-  candidateCount: number;
-  styleNotes: string;
+  /** The user's own instructions, added to Fill's built-in writing guidance. */
+  fillInstructions: string;
+  /** Replaces Fill's built-in writing guidance when non-empty. */
+  fillGuidanceOverride: string;
+  /** Dialogue lines Fill shows the model around the slots. */
+  fillLinesBefore: number;
+  fillLinesAfter: number;
+  /** Alternative takes per Fill request. */
+  fillTakes: number;
+  fillLatitude: FillLatitude;
   fontName: string;
   fontSize: number;
   bold: boolean;
@@ -232,47 +271,28 @@ export interface ProofreadCorrection {
   reason: string;
 }
 
-export interface ContinueContextLine {
+export interface ScriptLine {
   speaker: string;
   text: string;
-}
-
-export interface ContinueRequest {
-  model: string;
-  temperature: number;
-  candidateCount: number;
-  styleNotes: string;
-  speakerName: string;
-  voiceNotes: string;
-  /** What the next line should get across. Empty when the user gave no direction. */
-  direction: string;
-  context: ContinueContextLine[];
 }
 
 /** Distils the whole script into an outline. */
 export interface StoryBeatsRequest {
   model: string;
-  cues: ContinueContextLine[];
+  cues: ScriptLine[];
 }
 
-export interface SceneSpeaker {
-  name: string;
-  voiceNotes: string;
-}
+/**
+ * How far Fill may stray from what is established. Each level is a paragraph of
+ * prompt, not a temperature — temperature stays a setting of its own.
+ */
+export type FillLatitude = "close" | "open" | "wild";
 
-/** Writes the next several lines as an exchange, steered by the story beats. */
-export interface SceneRequest {
+/** A finished prompt, ready to send. Assembled in `lib/fill.ts`. */
+export interface FillRequest {
   model: string;
   temperature: number;
-  lineCount: number;
-  styleNotes: string;
-  beats: string[];
-  speakers: SceneSpeaker[];
-  context: ContinueContextLine[];
-}
-
-/** One line of a generated exchange. The speaker is a name, not an id. */
-export interface GeneratedLine {
-  speaker: string;
-  text: string;
+  maxTokens: number;
+  system: string;
+  user: string;
 }

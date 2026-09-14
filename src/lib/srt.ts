@@ -9,6 +9,7 @@ import type { Cue, CueMode, Speaker } from "../types";
 import { formatSrtTime, parseTimecode } from "./time";
 import { makeId } from "./ids";
 import { DEFAULT_MIN_GAP, MIN_CUE_DURATION } from "./cues";
+import { thoughtColor } from "./colors";
 import { unwrapThought, wrapThought } from "./text";
 
 const TIMECODE_LINE =
@@ -26,6 +27,14 @@ export interface ImportedSpeaker {
   color: string;
   /** How many cues carry this colour. */
   count: number;
+  /**
+   * True while every cue seen in this colour was a thought. An export writes a
+   * speaker's thinking colour on their thought cues, so a group like this is
+   * usually not a speaker of its own — `mergeImportedSpeakers` tries to hand it
+   * back to the speaker it belongs to. A single spoken cue in the colour settles
+   * it the other way, which is what a file using one colour throughout does.
+   */
+  thoughtOnly: boolean;
 }
 
 export interface ParseResult {
@@ -312,10 +321,11 @@ export function parseSrt(input: string, options: ParseOptions = {}): ParseResult
       if (segment.color) {
         let group = speakers.find((s) => s.color === segment.color);
         if (!group) {
-          group = { id: makeId(), color: segment.color, count: 0 };
+          group = { id: makeId(), color: segment.color, count: 0, thoughtOnly: true };
           speakers.push(group);
         }
         group.count += 1;
+        if (segment.mode !== "thought") group.thoughtOnly = false;
         speakerId = group.id;
       }
       const from = start + (share + minGap) * index;
@@ -365,21 +375,40 @@ export function mergeImportedSpeakers(
   const usedNames = new Set(speakers.map((s) => s.name.toLowerCase()));
   const idMap = new Map<string, string>();
 
-  for (const found of parsed.speakers) {
-    const reused = byColor.get(found.color);
-    if (reused) {
-      idMap.set(found.id, reused.id);
-      continue;
-    }
+  const mint = (color: string, thinkingColor?: string): Speaker => {
     // One import mints several names at once, so unlike `addSpeaker` this has to
     // step past names already taken rather than trusting the count alone.
     let n = speakers.length + 1;
     while (usedNames.has(`speaker ${n}`)) n += 1;
-    const speaker: Speaker = { id: makeId(), name: `Speaker ${n}`, color: found.color };
+    const speaker: Speaker = {
+      id: makeId(),
+      name: `Speaker ${n}`,
+      color,
+      ...(thinkingColor ? { thinkingColor } : {}),
+    };
     speakers.push(speaker);
     usedNames.add(speaker.name.toLowerCase());
     byColor.set(speaker.color, speaker);
-    idMap.set(found.id, speaker.id);
+    return speaker;
+  };
+
+  // Speaking colours first: a thinking colour is only recognisable once the
+  // speaker it belongs to exists, whether they came from the project or this file.
+  for (const found of parsed.speakers.filter((g) => !g.thoughtOnly)) {
+    const reused = byColor.get(found.color);
+    idMap.set(found.id, (reused ?? mint(found.color)).id);
+  }
+
+  for (const found of parsed.speakers.filter((g) => g.thoughtOnly)) {
+    // A colour used for nothing but thoughts is most likely some speaker's
+    // thinking colour — ours writes exactly that. An exact match on a speaking
+    // colour still wins: that is someone plainly talking in this colour too.
+    const owner =
+      byColor.get(found.color) ??
+      speakers.find((s) => thoughtColor(s).toLowerCase() === found.color);
+    // Nothing to attach it to, so it becomes its own speaker. Recording the
+    // colour as their thinking colour as well keeps a second round trip stable.
+    idMap.set(found.id, (owner ?? mint(found.color, found.color)).id);
   }
 
   const cues = parsed.cues.map((cue) =>
@@ -412,7 +441,15 @@ export function serializeSrt(cues: Cue[], options: SerializeOptions = {}): strin
     if (cue.mode === "thought") text = wrapThought(text);
     if (wrap) {
       const speaker = cue.speakerId ? byId.get(cue.speakerId) : undefined;
-      const color = speaker ? normalizeFontColor(speaker.color) : null;
+      // Thoughts go out in the speaker's thinking colour, matching the .ass
+      // export and the preview. The asterisks still carry the mode, so a player
+      // that ignores colour, and a re-import, both still read it as a thought.
+      const source = speaker
+        ? cue.mode === "thought"
+          ? thoughtColor(speaker)
+          : speaker.color
+        : null;
+      const color = source ? normalizeFontColor(source) : null;
       // Strip first: a tag typed by hand must not end up nested inside ours.
       // With the toggle off the text goes out exactly as the user wrote it.
       if (color) text = `<font color="${color}">${stripFontTags(text).trim()}</font>`;
