@@ -4,10 +4,11 @@
  * at the cost of breaking if the video is renamed, which the app reports.
  */
 
-import type { Cue, Project, ProjectFile, Section, Speaker } from "../types";
+import type { Cue, Project, ProjectFile, Section, Speaker, TimedBeat } from "../types";
 import { sortCues } from "./cues";
 import { makeId } from "./ids";
 import { sortSections } from "./sections";
+import { sortBeats } from "./timedBeats";
 
 export const PROJECT_EXTENSION = "sstproj";
 
@@ -55,6 +56,20 @@ function coerceSpeaker(raw: unknown): Speaker | null {
     ...(typeof s.thinkingColor === "string" ? { thinkingColor: s.thinkingColor } : {}),
     ...(typeof s.voiceNotes === "string" ? { voiceNotes: s.voiceNotes } : {}),
     ...(typeof s.innerVoice === "string" ? { innerVoice: s.innerVoice } : {}),
+  };
+}
+
+function coerceTimedBeat(raw: unknown): TimedBeat | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const b = raw as Partial<TimedBeat>;
+  // A beat needs a moment and something to say; anything else is noise.
+  if (typeof b.time !== "number" || !Number.isFinite(b.time)) return null;
+  if (typeof b.text !== "string" || b.text.trim() === "") return null;
+  return {
+    id: typeof b.id === "string" && b.id ? b.id : makeId(),
+    time: Math.max(0, b.time),
+    text: b.text,
+    ...(b.by === "agent" ? { by: "agent" as const } : {}),
   };
 }
 
@@ -117,6 +132,11 @@ export function parseProjectFile(raw: string): Project {
       )
     : [];
 
+  // Written only since timed beats existed; older files simply have none.
+  const timedBeats = Array.isArray(file.timedBeats)
+    ? sortBeats(file.timedBeats.map(coerceTimedBeat).filter((b): b is TimedBeat => b !== null))
+    : [];
+
   return {
     videoPath: typeof file.videoPath === "string" ? file.videoPath : "",
     cues: sortCues(cues),
@@ -125,5 +145,6 @@ export function parseProjectFile(raw: string): Project {
     brief: typeof file.brief === "string" ? file.brief : "",
     beats,
     sections,
+    timedBeats,
   };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Cue, FillLatitude, Section, Settings, Speaker } from "../types";
+import type { Cue, FillLatitude, Section, Settings, Speaker, TimedBeat } from "../types";
 import { aiFill, aiStoryBeats, errorMessage } from "../lib/api";
 import {
   LATITUDE_LABELS,
@@ -53,6 +53,8 @@ interface Props {
   sections: Section[];
   brief: string;
   beats: string[];
+  /** Planned beats in the stretch Fill writes go along with the request. */
+  timedBeats: TimedBeat[];
   settings: Settings;
   duration: number;
   apiKeySet: boolean;
@@ -114,6 +116,7 @@ export function FillDialog({
   sections,
   brief,
   beats,
+  timedBeats,
   settings,
   duration,
   apiKeySet,
@@ -201,6 +204,7 @@ export function FillDialog({
     speakers,
     brief,
     beats,
+    timedBeats,
     direction,
     latitude,
     drafts,

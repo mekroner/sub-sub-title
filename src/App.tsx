@@ -75,6 +75,7 @@ import {
   setSectionNote,
 } from "./lib/sections";
 import { layoutContinuation } from "./lib/fill";
+import { addBeat, editBeat, removeBeat } from "./lib/timedBeats";
 import { DEFAULT_WHISPER_MODEL } from "./lib/whisper";
 import { DEFAULT_TARGET_CPS, clamp, durationForText, formatShort } from "./lib/time";
 import {
@@ -118,6 +119,7 @@ import type {
   Settings,
   Sidecar,
   Speaker,
+  TimedBeat,
   ToolStatus,
 } from "./types";
 
@@ -266,6 +268,7 @@ export default function App() {
   const cues = project.cues;
   const speakers = project.speakers;
   const sections = project.sections;
+  const timedBeats = project.timedBeats;
 
   const {
     selectedIds,
@@ -448,6 +451,7 @@ export default function App() {
           brief: "",
           beats: [],
           sections: [],
+          timedBeats: [],
         };
         if (await api.fileExists(derived.project)) {
           const raw = await api.readTextFile(derived.project);
@@ -466,6 +470,7 @@ export default function App() {
             brief: "",
             beats: [],
             sections: [],
+            timedBeats: [],
           };
           notify(`Loaded ${loaded.cues.length} cues from the project sidecar.`);
         } else if (await api.fileExists(derived.srt)) {
@@ -481,6 +486,7 @@ export default function App() {
             brief: "",
             beats: [],
             sections: [],
+            timedBeats: [],
           };
           notify(
             `Imported ${merged.cues.length} cues from ${derived.stem}.srt` +
@@ -700,11 +706,16 @@ export default function App() {
     [update],
   );
 
-  /** A `/continue` run's edits: however long it takes, one undo step. */
-  const applyAgentCues = useCallback(
-    (next: Cue[], runId: string) => {
+  /** A `/continue` or `/story` run's edits: however long it takes, one undo step. */
+  const applyAgentPatch = useCallback(
+    (patch: Partial<Pick<Project, "cues" | "sections" | "beats" | "timedBeats">>, runId: string) => {
       update(
-        (current) => (next === current.cues ? current : { ...current, cues: next }),
+        (current) => {
+          const changed = (Object.keys(patch) as Array<keyof typeof patch>).some(
+            (key) => patch[key] !== undefined && patch[key] !== current[key],
+          );
+          return changed ? { ...current, ...patch } : current;
+        },
         { mergeKey: `agent:${runId}`, mergeWindowMs: Infinity },
       );
     },
@@ -740,6 +751,19 @@ export default function App() {
     },
     [update],
   );
+
+  const setTimedBeats = useCallback(
+    (fn: (list: TimedBeat[]) => TimedBeat[], mergeKey?: string) => {
+      update((current) => {
+        const next = fn(current.timedBeats);
+        return next === current.timedBeats ? current : { ...current, timedBeats: next };
+      }, mergeKey ? { mergeKey } : undefined);
+    },
+    [update],
+  );
+
+  /** Text for the chat box, set from elsewhere — the Sections panel's ✦ Story. */
+  const [chatPrefill, setChatPrefill] = useState<{ text: string; nonce: number } | null>(null);
 
   /**
    * Flags an instant and puts the new section straight into rename, so the whole
@@ -2307,6 +2331,15 @@ export default function App() {
             onRemove={removeSectionById}
             onJump={jumpToSectionId}
             onRenamed={() => setRenamingSectionId(null)}
+            timedBeats={timedBeats}
+            duration={duration}
+            onSeek={seek}
+            onAddBeat={(beat) => setTimedBeats((list) => addBeat(list, beat))}
+            onEditBeat={(id, patch) =>
+              setTimedBeats((list) => editBeat(list, id, patch), `beat:${id}:${"time" in patch ? "time" : "text"}`)
+            }
+            onRemoveBeat={(id) => setTimedBeats((list) => removeBeat(list, id))}
+            onStory={() => setChatPrefill((p) => ({ text: "/story ", nonce: (p?.nonce ?? 0) + 1 }))}
           />
 
           <PanelResizer height={chatHeight} onHeight={setChatHeight} />
@@ -2343,7 +2376,9 @@ export default function App() {
             onModelChange={(chatModel) => patchSettings({ chatModel })}
             onEffortChange={(chatEffort) => patchSettings({ chatEffort })}
             onOpenSettings={() => setShowSettings(true)}
-            onAgentCues={applyAgentCues}
+            timedBeats={timedBeats}
+            prefill={chatPrefill}
+            onAgentPatch={applyAgentPatch}
             onAgentDone={(created) => {
               if (created.length > 0) selectOnly(created[created.length - 1]);
             }}
@@ -2433,6 +2468,7 @@ export default function App() {
           sections={sections}
           brief={project.brief}
           beats={project.beats}
+          timedBeats={timedBeats}
           settings={settings}
           duration={duration}
           apiKeySet={apiKeySet}

@@ -427,6 +427,28 @@ answer in your own words, or **Skip** (**Esc**) to leave it to the model.
 Questions are about where the scene goes, whose beat it is, tone and pace —
 never about approving particular lines. **Stop** works there too.
 
+## Story outline — timed beats and /story
+
+Each row in the Sections panel opens with **▸**: the section's note, and its
+**timed story beats** — what happens, or should happen, at a moment. **+ Beat**
+adds one at the playhead (or the section's start); click a beat's time to jump
+there and retype it. Beats belong to their moment, not to a flag, so moving or
+removing a section never loses one. The note and the beats of the stretch being
+written go along with `/continue`, Fill and the chat, so new lines head where the
+story is meant to go.
+
+**/story** (or **✦ Story** in the Sections header, which puts it into the chat
+box) lets a story agent work on the outline. It reads the script section by
+section, looks at key frames when a vision model is set, and asks you about the
+big forks — what the story is about, where it ends, what a character wants —
+before it writes section names, notes, timed beats and the overall beats,
+looking for an arc that fits what is already on screen. It can ask up to 8
+questions and look at up to 12 frames per run. Its beats are marked **✦**; your
+own beats are fixed points it builds around and never changes (edit one of its
+beats and it becomes yours). It never touches the subtitle lines, its edits show
+up live, and one **Ctrl+Z** undoes the whole run. The tools and prompt live in
+`src/lib/storyAgent.ts`.
+
 **📎 Last N** attaches the N lines up to and including the selected cue, or up
 to the playhead when nothing is selected. The lines appear as a chip over the
 prompt box: click it to read them, ✕ to drop them. They are captured when you

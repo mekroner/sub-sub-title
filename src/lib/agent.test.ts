@@ -193,6 +193,22 @@ describe("prompts", () => {
     expect(kickoff).toContain("## Already in your window\nc2 [0:12.00–0:13.50] Ben says: On what?");
     expect(kickoff).toContain("## Right after your window (lead into this)\nc3 [0:25.00–0:27.00]");
     expect(kickoff).toContain("## Direction from the writer\nBen pushes");
+    expect(kickoff).not.toContain("## Planned story beats");
+  });
+
+  it("names the planned beats in the window and the next ones after it", () => {
+    const beats = [
+      { id: "1", time: 5, text: "Before" },
+      { id: "2", time: 15, text: "Ben breaks" },
+      { id: "3", time: 30, text: "Anna leaves" },
+      { id: "4", time: 40, text: "Rain" },
+      { id: "5", time: 50, text: "Too far" },
+    ];
+    const kickoff = buildContinueKickoff(CUES, env, createAliases(), "", 1, beats);
+    expect(kickoff).toContain("## Planned story beats");
+    expect(kickoff).toContain("- [0:15.00] Ben breaks\n- [0:30.00] Anna leaves\n- [0:40.00] Rain");
+    expect(kickoff).not.toContain("Before");
+    expect(kickoff).not.toContain("Too far");
   });
 
   it("builds a request with the tools and the effort's budget", () => {

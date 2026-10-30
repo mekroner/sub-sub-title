@@ -23,6 +23,10 @@ const project: Project = {
     { id: "sec1", start: 0, label: "Cold open", note: "Ada already suspects" },
     { id: "sec2", start: 2, label: "Cut here" },
   ],
+  timedBeats: [
+    { id: "tb1", time: 0.5, text: "Ada asks" },
+    { id: "tb2", time: 2.5, text: "She walks", by: "agent" },
+  ],
 };
 
 describe("serializeProjectFile / parseProjectFile", () => {
@@ -57,6 +61,7 @@ describe("serializeProjectFile / parseProjectFile", () => {
       brief: "",
       beats: [],
       sections: [],
+      timedBeats: [],
     });
   });
 
@@ -98,6 +103,23 @@ describe("serializeProjectFile / parseProjectFile", () => {
     expect(sections[1].label).toBe("");
   });
 
+  it("sorts timed beats and drops the ones with no time or text", () => {
+    const raw = JSON.stringify({
+      timedBeats: [
+        { id: "b", time: 30, text: "Later", by: "agent" },
+        { id: "x", time: "nope", text: "No time" },
+        { id: "y", time: 4, text: "   " },
+        { id: "a", time: -2, text: "Earlier", by: "someone" },
+      ],
+    });
+    expect(parseProjectFile(raw).timedBeats).toEqual([
+      { id: "a", time: 0, text: "Earlier" },
+      { id: "b", time: 30, text: "Later", by: "agent" },
+    ]);
+    // Files from before timed beats load with none.
+    expect(parseProjectFile("{}").timedBeats).toEqual([]);
+  });
+
   it("throws a readable error on invalid JSON", () => {
     expect(() => parseProjectFile("not json")).toThrow(/not valid JSON/);
     expect(() => parseProjectFile("null")).toThrow(/empty or malformed/);
@@ -133,6 +155,7 @@ describe("cue modes and speaker colours", () => {
     brief: "",
     beats: [],
     sections: [],
+    timedBeats: [],
   };
 
   it("survives a save and load", () => {

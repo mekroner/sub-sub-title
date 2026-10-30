@@ -182,6 +182,23 @@ describe("buildUserPrompt", () => {
     expect(user.trimEnd().endsWith("he tries charm and it fails")).toBe(true);
   });
 
+  it("carries the planned beats within the transcript's stretch, and only those", () => {
+    const line = promptInput().transcript.find((i) => i.kind === "line");
+    if (line?.kind !== "line") throw new Error("the fixture has no lines");
+    const user = buildUserPrompt(
+      promptInput({
+        timedBeats: [
+          { id: "near", time: line.cue.start, text: "Ben starts to crack" },
+          { id: "far", time: 99_999, text: "The divorce" },
+        ],
+      }),
+    );
+    expect(user).toContain("## Planned story beats");
+    expect(user).toContain("Ben starts to crack");
+    expect(user).not.toContain("The divorce");
+    expect(buildUserPrompt(promptInput())).not.toContain("## Planned story beats");
+  });
+
   it("mentions drafts only when a slot has one", () => {
     expect(buildUserPrompt(promptInput())).not.toContain("draft");
     const target: FillTarget = { kind: "fill", cueIds: ["b"] };

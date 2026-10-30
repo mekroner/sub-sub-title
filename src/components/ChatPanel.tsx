@@ -7,8 +7,10 @@ import type {
   ChatAttachment,
   ChatMessage,
   Cue,
+  Project,
   Section,
   Speaker,
+  TimedBeat,
   WriterAnswer,
   WriterQuestion,
 } from "../types";
@@ -24,9 +26,21 @@ import {
   describeRun,
   parseContinueCommand,
   runAgent,
+  type AgentDeps,
   type AgentEnv,
   type DescribeFrame,
 } from "../lib/agent";
+import {
+  buildStoryKickoff,
+  buildStorySystemPrompt,
+  createStoryAliases,
+  describeStoryRun,
+  parseStoryCommand,
+  runStory,
+  storyTools,
+  type StoryEnv,
+  type StoryState,
+} from "../lib/storyAgent";
 import {
   CHAT_EFFORTS,
   MAX_CHAT_LINES,
@@ -81,8 +95,12 @@ interface Props {
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
   onOpenSettings: () => void;
-  /** A `/continue` run changed the script; every call with one `runId` is one undo step. */
-  onAgentCues: (cues: Cue[], runId: string) => void;
+  /** Story beats with a time; `/story` writes them, `/continue` heads for them. */
+  timedBeats: TimedBeat[];
+  /** Text to put in the chat box, e.g. `/story ` from the Sections panel. */
+  prefill: { text: string; nonce: number } | null;
+  /** A run changed the project; every call with one `runId` is one undo step. */
+  onAgentPatch: (patch: Partial<Pick<Project, "cues" | "sections" | "beats" | "timedBeats">>, runId: string) => void;
   /** A run finished, with the cues it added that still exist. */
   onAgentDone: (created: string[]) => void;
 }
@@ -115,7 +133,9 @@ export function ChatPanel({
   onModelChange,
   onEffortChange,
   onOpenSettings,
-  onAgentCues,
+  timedBeats,
+  prefill,
+  onAgentPatch,
   onAgentDone,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -145,13 +165,17 @@ export function ChatPanel({
   const streamingRef = useRef(false);
   streamingRef.current = streaming;
 
-  // The script a `/continue` run works on: its own edits at once, and the
-  // writer's (or an undo) as soon as they reach the props.
-  const cuesRef = useRef(cues);
-  const seenCues = useRef(cues);
-  if (cues !== seenCues.current) {
-    seenCues.current = cues;
-    cuesRef.current = cues;
+  // What a run works on: its own edits at once, and the writer's (or an undo)
+  // as soon as they reach the props. Each field is refreshed on its own, so a
+  // run's edit to one is not overwritten by a stale render of another.
+  const props = { cues, sections, beats, timedBeats };
+  const latest = useRef({ ...props });
+  const seen = useRef({ ...props });
+  for (const key of Object.keys(props) as Array<keyof typeof props>) {
+    if (props[key] !== seen.current[key]) {
+      (seen.current as Record<string, unknown>)[key] = props[key];
+      (latest.current as Record<string, unknown>)[key] = props[key];
+    }
   }
 
   const logRef = useRef<HTMLDivElement | null>(null);
@@ -190,6 +214,17 @@ export function ChatPanel({
 
   useEffect(() => reset, [projectKey, reset]);
 
+  // ✦ Story in the Sections panel: the command, ready for a direction.
+  useEffect(() => {
+    if (!prefill) return;
+    setDraft(prefill.text);
+    const input = inputRef.current;
+    if (input) {
+      input.focus();
+      input.setSelectionRange(prefill.text.length, prefill.text.length);
+    }
+  }, [prefill]);
+
   useLayoutEffect(() => {
     const log = logRef.current;
     if (log && stick.current) log.scrollTop = log.scrollHeight;
@@ -224,6 +259,7 @@ export function ChatPanel({
       speakers,
       sections,
       anchor: anchorFor(cues, primaryId, currentTime),
+      timedBeats,
     });
     const request = buildChatRequest(system, history, {
       model,
@@ -259,38 +295,27 @@ export function ChatPanel({
     }
   };
 
+  const vision = visionModel.trim() !== "" && videoPath !== "";
+
   /**
-   * `/continue`: hands the model the window from the playhead and lets it
-   * write there with tools until it is done, its edits landing as it goes.
+   * A tool-using run — `/continue` or `/story` — in the log: its bubble lists
+   * each step as it lands, the question card answers it, Stop and Reset end it,
+   * and the conversation remembers it as one line.
    */
-  const runContinue = async (
+  const runInChat = async <R extends { ending: "finished" | "limit" | "abandoned"; summary: string }>(
     earlier: ChatMessage[],
     question: ChatMessage,
-    command: { seconds: number; direction: string },
+    setup: {
+      run: AgentRun;
+      describe: (run: AgentRun) => string;
+      tools: unknown[];
+      go: (deps: Pick<AgentDeps, "send" | "onStep" | "isCurrent" | "describeFrame" | "askWriter">) => Promise<R>;
+      onDone?: (result: R) => void;
+    },
   ) => {
-    const stretch = agentWindow(currentTime, command.seconds, duration);
-    if (stretch.end - stretch.start < 1) {
-      setNotice("The playhead is at the end of the video — move it back to continue from there.");
-      return;
-    }
-    const vision = visionModel.trim() !== "" && videoPath !== "";
-    const env: AgentEnv = { window: stretch, duration, vision, speakers, sections, ...reading };
-    const aliases = createAliases();
-    const runId = makeId();
-    const run: AgentRun = { from: stretch.start, to: stretch.end, steps: [] };
+    const { run } = setup;
     const reply: ChatMessage = { id: makeId(), role: "assistant", text: "", status: "streaming", agent: run };
-    const history = [...earlier, question];
-
-    const opening: AgentMessage[] = [
-      { role: "system", content: buildContinueSystemPrompt({ brief, beats }, env) },
-      ...historyTurns(earlier),
-      {
-        role: "user",
-        content: buildContinueKickoff(cuesRef.current, env, aliases, command.direction, linesBefore),
-      },
-    ];
     const settings = { model, temperature, effort: chatEffort(effort) };
-    const tools = agentTools(vision);
     /** A failed or refused look is an answer; only a Stop ends the run. */
     const describeFrame: DescribeFrame = async (time, question) => {
       try {
@@ -304,7 +329,7 @@ export function ChatPanel({
     };
 
     const mine = ++generation.current;
-    setMessages([...history, reply]);
+    setMessages([...earlier, question, reply]);
     setStreaming(true);
     stick.current = true;
 
@@ -316,23 +341,18 @@ export function ChatPanel({
     /** The run as it ends, remembered by the conversation as one line. */
     const end = (summary: string | undefined, status?: ChatMessage["status"]) => {
       const done: AgentRun = { ...run, steps, ...(summary ? { summary } : {}) };
-      update(({ status: _, ...m }) => ({ ...m, agent: done, text: describeRun(done), ...(status ? { status } : {}) }));
+      update(({ status: _, ...m }) => ({ ...m, agent: done, text: setup.describe(done), ...(status ? { status } : {}) }));
     };
 
     try {
-      const result = await runAgent(opening, env, aliases, {
-        send: (conversation) => api.aiAgentStep(buildAgentRequest(conversation, settings, tools)),
+      const result = await setup.go({
+        send: (conversation) => api.aiAgentStep(buildAgentRequest(conversation, settings, setup.tools)),
         ...(vision ? { describeFrame } : {}),
         askWriter: (question) =>
           new Promise<WriterAnswer>((resolve, reject) => {
             pendingAnswer.current = { resolve, reject };
             setAsking(question);
           }),
-        getCues: () => cuesRef.current,
-        applyCues: (next) => {
-          cuesRef.current = next;
-          onAgentCues(next, runId);
-        },
         onStep: (step) => {
           steps = [...steps, step];
           update((m) => ({ ...m, agent: { ...run, steps } }));
@@ -341,7 +361,7 @@ export function ChatPanel({
       });
       if (result.ending === "abandoned") return;
       end(result.summary, result.ending === "limit" ? "stopped" : undefined);
-      onAgentDone(result.created.filter((id) => cuesRef.current.some((c) => c.id === id)));
+      setup.onDone?.(result);
     } catch (e) {
       const message = errorMessage(e);
       if (message === api.CHAT_CANCELLED) {
@@ -354,12 +374,100 @@ export function ChatPanel({
     }
   };
 
-  /** Asks `question`, or runs it when it is a `/continue`. */
+  /**
+   * `/continue`: hands the model the window from the playhead and lets it
+   * write there with tools until it is done, its edits landing as it goes.
+   */
+  const runContinue = (
+    earlier: ChatMessage[],
+    question: ChatMessage,
+    command: { seconds: number; direction: string },
+  ) => {
+    const stretch = agentWindow(currentTime, command.seconds, duration);
+    if (stretch.end - stretch.start < 1) {
+      setNotice("The playhead is at the end of the video — move it back to continue from there.");
+      return;
+    }
+    const env: AgentEnv = { window: stretch, duration, vision, speakers, sections, ...reading };
+    const aliases = createAliases();
+    const runId = makeId();
+    const opening: AgentMessage[] = [
+      { role: "system", content: buildContinueSystemPrompt({ brief, beats }, env) },
+      ...historyTurns(earlier),
+      {
+        role: "user",
+        content: buildContinueKickoff(
+          latest.current.cues,
+          env,
+          aliases,
+          command.direction,
+          linesBefore,
+          latest.current.timedBeats,
+        ),
+      },
+    ];
+
+    void runInChat(earlier, question, {
+      run: { from: stretch.start, to: stretch.end, steps: [] },
+      describe: describeRun,
+      tools: agentTools(vision),
+      go: (deps) =>
+        runAgent(opening, env, aliases, {
+          ...deps,
+          getCues: () => latest.current.cues,
+          applyCues: (next) => {
+            latest.current.cues = next;
+            onAgentPatch({ cues: next }, runId);
+          },
+        }),
+      onDone: (result) => onAgentDone(result.created.filter((id) => latest.current.cues.some((c) => c.id === id))),
+    });
+  };
+
+  /**
+   * `/story`: lets the model work on the outline — section notes, timed beats,
+   * the overall beats — asking and looking as it needs, its edits landing live.
+   */
+  const runStoryInChat = (earlier: ChatMessage[], question: ChatMessage, command: { direction: string }) => {
+    const env: StoryEnv = { duration, vision, speakers };
+    const aliases = createStoryAliases();
+    const runId = makeId();
+    const state = (): StoryState => ({
+      sections: latest.current.sections,
+      beats: latest.current.beats,
+      timedBeats: latest.current.timedBeats,
+    });
+    const opening: AgentMessage[] = [
+      { role: "system", content: buildStorySystemPrompt({ brief, beats: latest.current.beats }, env) },
+      ...historyTurns(earlier),
+      { role: "user", content: buildStoryKickoff(state(), latest.current.cues, env, aliases, command.direction) },
+    ];
+
+    void runInChat(earlier, question, {
+      run: { kind: "story", from: 0, to: duration, steps: [] },
+      describe: describeStoryRun,
+      tools: storyTools(vision),
+      go: (deps) =>
+        runStory(opening, env, aliases, {
+          ...deps,
+          getState: state,
+          getCues: () => latest.current.cues,
+          applyState: (next) => {
+            Object.assign(latest.current, next);
+            onAgentPatch({ sections: next.sections, beats: next.beats, timedBeats: next.timedBeats }, runId);
+          },
+        }),
+    });
+  };
+
+  /** Asks `question`, or runs it when it is a `/story` or a `/continue`. */
   const dispatch = (earlier: ChatMessage[], question: ChatMessage) => {
     // An edit sent while a run waits on an answer replaces that run.
     answerQuestion(null);
+    const story = parseStoryCommand(question.text);
     const command = parseContinueCommand(question.text);
-    if (command) void runContinue(earlier, question, command);
+    if (story) runStoryInChat(earlier, question, story);
+    else if (command) runContinue(earlier, question, command);
     else void ask(earlier, question);
   };
 
@@ -371,7 +479,7 @@ export function ChatPanel({
 
     setDraft("");
     setNotice(null);
-    if (parseContinueCommand(draft)) {
+    if (parseContinueCommand(draft) || parseStoryCommand(draft)) {
       // The run reads the script itself; an attachment waits for a question.
       dispatch(messages, { id: makeId(), role: "user", text: draft.trim() });
       return;
@@ -442,6 +550,7 @@ export function ChatPanel({
             <strong>📎 Last {linesBefore}</strong> hands it the lines up to the selected
             cue, or the playhead. <strong>/continue 30</strong> lets it write the next 30
             seconds from the playhead itself, with your direction after the number.
+            <strong>/story</strong> works on the outline: section notes and timed beats.
           </p>
         )}
 
@@ -564,7 +673,7 @@ export function ChatPanel({
           <textarea
             ref={inputRef}
             rows={2}
-            placeholder="Ask about a scene, a character… or /continue 30 to write from the playhead"
+            placeholder="Ask about a scene… or /continue 30 to write, /story to plan the outline"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -807,7 +916,11 @@ function AgentLog({
   return (
     <div className="chat-text agent-log">
       <div className="agent-head">
-        {status === "streaming" ? "Continuing" : "Continued"} {stretch}
+        {run.kind === "story"
+          ? status === "streaming"
+            ? "Working on the outline"
+            : "Outline"
+          : `${status === "streaming" ? "Continuing" : "Continued"} ${stretch}`}
       </div>
       {run.steps.length > 0 && (
         <ul className="agent-steps">

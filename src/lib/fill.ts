@@ -14,9 +14,10 @@
  *      format. Always appended, never replaceable, because the reply has to parse.
  */
 
-import type { Cue, FillLatitude, Section, Speaker } from "../types";
+import type { Cue, FillLatitude, Section, Speaker, TimedBeat } from "../types";
 import { MIN_CUE_DURATION } from "./cues";
 import { sectionAt, sortSections } from "./sections";
+import { beatsBetween, renderTimedBeats } from "./timedBeats";
 import { durationForText, formatShort } from "./time";
 
 // --- Slots ---------------------------------------------------------------
@@ -375,6 +376,8 @@ export interface PromptInput {
   speakers: Speaker[];
   brief: string;
   beats: string[];
+  /** Planned beats; those within the transcript's stretch go along. */
+  timedBeats?: TimedBeat[];
   direction: string;
   latitude: FillLatitude;
   drafts: DraftHandling;
@@ -437,6 +440,25 @@ export function renderProjectContext(input: {
   return sections;
 }
 
+/**
+ * The stretch of the timeline the transcript covers, from its first timed item
+ * to its last — or null when nothing in it has a time.
+ */
+function transcriptSpan(items: TranscriptItem[]): { from: number; to: number } | null {
+  let from = Infinity;
+  let to = -Infinity;
+  for (const item of items) {
+    if (item.kind === "line") {
+      from = Math.min(from, item.cue.start);
+      to = Math.max(to, item.cue.end);
+    } else if (item.kind === "slot" && item.slot.start !== null && item.slot.end !== null) {
+      from = Math.min(from, item.slot.start);
+      to = Math.max(to, item.slot.end);
+    }
+  }
+  return from <= to ? { from, to } : null;
+}
+
 export function buildUserPrompt(input: PromptInput): string {
   const sections = renderProjectContext(input);
 
@@ -447,6 +469,12 @@ export function buildUserPrompt(input: PromptInput): string {
         .map((s) => `- ${oneLine(s.label) || "untitled"}: ${oneLine(s.note ?? "")}`)
         .join("\n")}`,
     );
+  }
+
+  const stretch = transcriptSpan(input.transcript);
+  const planned = stretch ? renderTimedBeats(beatsBetween(input.timedBeats ?? [], stretch.from, stretch.to)) : "";
+  if (planned) {
+    sections.push(`## Planned story beats\nWhere the story is meant to go around here. Lines should move toward them.\n${planned}`);
   }
 
   sections.push(`## Transcript\n${renderTranscript(input.transcript, input.speakers)}`);

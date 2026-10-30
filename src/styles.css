@@ -1075,10 +1075,75 @@ button.chat-chip-label:hover {
 }
 .section-row {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  /* Toggle, time, name, beat count, remove. */
+  grid-template-columns: auto auto 1fr auto auto;
   align-items: center;
   gap: 6px;
   padding: 2px 0;
+}
+.section-toggle {
+  width: 18px;
+  padding: 0;
+  color: var(--text-dim);
+}
+.section-before {
+  /* Spans the time and name columns: the stretch before the first flag. */
+  grid-column: 2 / 4;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-dim);
+}
+.section-badge {
+  min-width: 14px;
+  font-size: 11px;
+  text-align: right;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.section-badge.has-note {
+  color: var(--accent);
+}
+.section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 8px 24px;
+}
+.section-body .section-note {
+  margin: 0 0 3px;
+}
+.section-add-beat {
+  align-self: flex-start;
+}
+.beat-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 12px auto;
+  align-items: center;
+  gap: 5px;
+}
+.beat-time,
+.beat-time-input {
+  width: 62px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 4px;
+}
+.beat-time {
+  color: var(--text-dim);
+}
+.beat-text {
+  width: 100%;
+  min-width: 0;
+}
+/* The story agent's beats: dimmer, so the writer's own fixed points stand out. */
+.beat-row.agent .beat-text {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.beat-owner {
+  font-size: 11px;
+  color: var(--accent);
+  text-align: center;
 }
 .section-time {
   font-variant-numeric: tabular-nums;

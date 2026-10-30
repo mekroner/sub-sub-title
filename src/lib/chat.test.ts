@@ -140,6 +140,20 @@ describe("buildChatSystemPrompt", () => {
     expect(got).toContain("## Current scene\nCar");
     expect(got).toContain("Note: Ben drives too fast.");
   });
+
+  it("lists the current scene's planned beats, and only those", () => {
+    const got = buildChatSystemPrompt({
+      ...base,
+      sections: SECTIONS,
+      anchor: 11,
+      timedBeats: [
+        { id: "a", time: 3, text: "Anna asks" },
+        { id: "b", time: 12, text: "Ben swerves", by: "agent" },
+      ],
+    });
+    expect(got).toContain("Planned beats:\n- [0:12.00] Ben swerves");
+    expect(got).not.toContain("Anna asks");
+  });
 });
 
 describe("buildChatRequest", () => {

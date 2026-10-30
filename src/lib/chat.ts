@@ -19,9 +19,11 @@ import type {
   Cue,
   Section,
   Speaker,
+  TimedBeat,
 } from "../types";
 import { buildTranscript, renderProjectContext, renderTranscript } from "./fill";
-import { sectionAt } from "./sections";
+import { sectionAt, sectionSpans } from "./sections";
+import { beatsBetween, renderTimedBeats } from "./timedBeats";
 import { formatShort } from "./time";
 
 export const MIN_CHAT_LINES = 1;
@@ -160,22 +162,31 @@ export interface ChatContext {
   sections: Section[];
   /** Seconds; picks the current scene. */
   anchor: number;
+  /** The scene's planned beats are shown with it. */
+  timedBeats?: TimedBeat[];
 }
 
 export function buildChatSystemPrompt(context: ChatContext): string {
   const parts = [CHAT_SYSTEM_PROMPT, ...renderProjectContext(context)];
-  const scene = renderCurrentScene(context.sections, context.anchor);
+  const scene = renderCurrentScene(context.sections, context.anchor, context.timedBeats);
   if (scene) parts.push(scene);
   return parts.join("\n\n");
 }
 
-/** The scene `anchor` falls in, with its note, as a prompt section. */
-export function renderCurrentScene(sections: Section[], anchor: number): string | null {
+/** The scene `anchor` falls in, with its note and planned beats, as a prompt section. */
+export function renderCurrentScene(
+  sections: Section[],
+  anchor: number,
+  timedBeats: TimedBeat[] = [],
+): string | null {
   const scene = sectionAt(sections, anchor);
   if (!scene) return null;
   const lines = [`## Current scene\n${scene.label.trim() || "Untitled"} (from ${formatShort(scene.start)})`];
   const note = scene.note?.trim();
   if (note) lines.push(`Note: ${note}`);
+  const end = sectionSpans(sections, Infinity).find((s) => s.id === scene.id)?.end ?? Infinity;
+  const beats = renderTimedBeats(beatsBetween(timedBeats, scene.start, end));
+  if (beats) lines.push(`Planned beats:\n${beats}`);
   return lines.join("\n");
 }
 

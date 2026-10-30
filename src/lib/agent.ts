@@ -21,6 +21,7 @@ import type {
   Cue,
   Section,
   Speaker,
+  TimedBeat,
   WriterAnswer,
   WriterQuestion,
 } from "../types";
@@ -28,6 +29,7 @@ import { renderCurrentScene } from "./chat";
 import { MIN_CUE_DURATION, newCue, sortCues } from "./cues";
 import { renderProjectContext, speakerIdForName } from "./fill";
 import { sectionAt } from "./sections";
+import { beatsBetween, renderTimedBeats } from "./timedBeats";
 import { unwrapThought, wrapText } from "./text";
 import { CPS_WARNING, charsPerSecond, durationForText, formatShort } from "./time";
 
@@ -53,6 +55,8 @@ export const AGENT_MAX_TOKENS_REASONING = 12000;
 
 /** Lines past the window shown read-only, so the run can lead into them. */
 const LINES_AFTER = 3;
+/** Planned beats past the window shown, so the run knows where the scene heads. */
+const BEATS_AFTER = 2;
 /** Most lines one `read_cues` returns. */
 const READ_LIMIT = 80;
 const PAUSE_THRESHOLD = 2.5;
@@ -109,18 +113,20 @@ export function agentWindow(
  * than ids, and a model cannot plausibly invent one that happens to exist.
  */
 export interface Aliases {
+  /** `c` for cues; a story run also names sections `s…` and beats `b…`. */
+  prefix: string;
   byId: Map<string, string>;
   byAlias: Map<string, string>;
 }
 
-export function createAliases(): Aliases {
-  return { byId: new Map(), byAlias: new Map() };
+export function createAliases(prefix = "c"): Aliases {
+  return { prefix, byId: new Map(), byAlias: new Map() };
 }
 
 export function aliasFor(aliases: Aliases, id: string): string {
   let alias = aliases.byId.get(id);
   if (!alias) {
-    alias = `c${aliases.byId.size + 1}`;
+    alias = `${aliases.prefix}${aliases.byId.size + 1}`;
     aliases.byId.set(id, alias);
     aliases.byAlias.set(alias, id);
   }
@@ -131,7 +137,7 @@ function inWindow(env: AgentEnv, start: number, end: number): boolean {
   return start >= env.window.start - EPSILON && end <= env.window.end + EPSILON;
 }
 
-const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+export const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
 const span = (start: number, end: number) => `${formatShort(start)}–${formatShort(end)}`;
 const windowLabel = (env: AgentEnv) => span(env.window.start, env.window.end);
 
@@ -150,7 +156,7 @@ function renderCue(cue: Cue, env: AgentEnv, aliases: Aliases): string {
 }
 
 /** Cues in time order with silences and scene changes called out. */
-function renderLines(cues: Cue[], env: AgentEnv, aliases: Aliases): string {
+export function renderLines(cues: Cue[], env: AgentEnv, aliases: Aliases): string {
   const out: string[] = [];
   let scene: Section | null = null;
   let previousEnd: number | null = null;
@@ -168,13 +174,67 @@ function renderLines(cues: Cue[], env: AgentEnv, aliases: Aliases): string {
 }
 
 /** Cues that touch `from`–`to`, in time order. */
-function cuesBetween(cues: Cue[], from: number, to: number): Cue[] {
+export function cuesBetween(cues: Cue[], from: number, to: number): Cue[] {
   return sortCues(cues).filter((c) => c.end > from && c.start < to);
 }
 
 // --- Tools -------------------------------------------------------------------
 
-const timeParam = (description: string) => ({ type: "number", description });
+export const timeParam = (description: string) => ({ type: "number", description });
+
+/** `ask_writer`, with the guidance that fits the kind of run. */
+export function askTool(description: string) {
+  return {
+    type: "function",
+    function: {
+      name: "ask_writer",
+      description,
+      parameters: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "One short question." },
+          options: {
+            type: "array",
+            minItems: 2,
+            maxItems: 4,
+            description: "Two to four genuinely different directions.",
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string", description: "A few words." },
+                description: { type: "string", description: "One sentence on what it would mean. Optional." },
+              },
+              required: ["label"],
+            },
+          },
+        },
+        required: ["question", "options"],
+      },
+    },
+  };
+}
+
+/** `look_at_frame`, with the guidance that fits the kind of run. */
+export function lookTool(description: string) {
+  return {
+    type: "function",
+    function: {
+      name: "look_at_frame",
+      description,
+      parameters: {
+        type: "object",
+        properties: {
+          time: timeParam("The moment to look at, in seconds."),
+          question: {
+            type: "string",
+            description: "Something to look out for in particular. Optional.",
+          },
+        },
+        required: ["time"],
+      },
+    },
+  };
+}
 
 export const AGENT_TOOLS = [
   {
@@ -276,54 +336,14 @@ export const AGENT_TOOLS = [
       },
     },
   },
-  {
-    type: "function",
-    function: {
-      name: "ask_writer",
-      description: `Ask the writer a multiple-choice question about general direction — where the scene goes, whose beat it is, the tone or pace — when the story could genuinely go very different ways and their direction does not settle it. Never use it to approve wording or specific lines. Ask before you write. They can also answer in their own words or leave it to you. At most ${MAX_QUESTIONS} per run.`,
-      parameters: {
-        type: "object",
-        properties: {
-          question: { type: "string", description: "One short question." },
-          options: {
-            type: "array",
-            minItems: 2,
-            maxItems: 4,
-            description: "Two to four genuinely different directions.",
-            items: {
-              type: "object",
-              properties: {
-                label: { type: "string", description: "A few words." },
-                description: { type: "string", description: "One sentence on what it would mean. Optional." },
-              },
-              required: ["label"],
-            },
-          },
-        },
-        required: ["question", "options"],
-      },
-    },
-  },
+  askTool(
+    `Ask the writer a multiple-choice question about general direction — where the scene goes, whose beat it is, the tone or pace — when the story could genuinely go very different ways and their direction does not settle it. Never use it to approve wording or specific lines. Ask before you write. They can also answer in their own words or leave it to you. At most ${MAX_QUESTIONS} per run.`,
+  ),
 ];
 
-const LOOK_TOOL = {
-  type: "function",
-  function: {
-    name: "look_at_frame",
-    description: `See what is on screen at a moment: a separate vision model describes that frame in words. Look where it matters — the start of your window, a new shot, before writing a reaction. Each look is slow and costs money; you have ${MAX_LOOKS} per run.`,
-    parameters: {
-      type: "object",
-      properties: {
-        time: timeParam("The moment to look at, in seconds."),
-        question: {
-          type: "string",
-          description: "Something to look out for in particular. Optional.",
-        },
-      },
-      required: ["time"],
-    },
-  },
-};
+const LOOK_TOOL = lookTool(
+  `See what is on screen at a moment: a separate vision model describes that frame in words. Look where it matters — the start of your window, a new shot, before writing a reaction. Each look is slow and costs money; you have ${MAX_LOOKS} per run.`,
+);
 
 /** The tools a run gets: looking at the video only when a vision model is set. */
 export function agentTools(vision: boolean): unknown[] {
@@ -343,12 +363,12 @@ export interface ToolOutcome {
   finished?: string;
 }
 
-class Refusal extends Error {}
+export class Refusal extends Error {}
 
-const BAD_ARGS = "The arguments were not a JSON object.";
+export const BAD_ARGS = "The arguments were not a JSON object.";
 
 /** A tool call's arguments, or null when they are not a JSON object. */
-function parseArgs(rawArgs: string): Record<string, unknown> | null {
+export function parseArgs(rawArgs: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = rawArgs.trim() ? JSON.parse(rawArgs) : {};
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
@@ -359,11 +379,11 @@ function parseArgs(rawArgs: string): Record<string, unknown> | null {
   }
 }
 
-function refuse(message: string): never {
+export function refuse(message: string): never {
   throw new Refusal(message);
 }
 
-function num(args: Record<string, unknown>, key: string, optional = false): number | undefined {
+export function num(args: Record<string, unknown>, key: string, optional = false): number | undefined {
   const value = args[key];
   if (value === undefined || value === null) {
     if (optional) return undefined;
@@ -374,7 +394,7 @@ function num(args: Record<string, unknown>, key: string, optional = false): numb
   return n;
 }
 
-function str(args: Record<string, unknown>, key: string): string | undefined {
+export function str(args: Record<string, unknown>, key: string): string | undefined {
   const value = args[key];
   return typeof value === "string" ? value : undefined;
 }
@@ -597,7 +617,12 @@ export type LookPlan =
   | { kind: "seen"; time: number; description: string }
   | { kind: "refused"; message: string };
 
-export function prepareLook(env: AgentEnv, looks: Looks, rawArgs: string): LookPlan {
+export function prepareLook(
+  env: Pick<AgentEnv, "vision" | "duration">,
+  looks: Looks,
+  rawArgs: string,
+  max = MAX_LOOKS,
+): LookPlan {
   const args = parseArgs(rawArgs);
   if (!args) return { kind: "refused", message: BAD_ARGS };
   try {
@@ -609,8 +634,8 @@ export function prepareLook(env: AgentEnv, looks: Looks, rawArgs: string): LookP
     const key = time.toFixed(1);
     const seen = looks.seen.get(key);
     if (seen !== undefined) return { kind: "seen", time, description: seen };
-    if (looks.used >= MAX_LOOKS) {
-      refuse(`You have used all ${MAX_LOOKS} looks for this run. Carry on from the script.`);
+    if (looks.used >= max) {
+      refuse(`You have used all ${max} looks for this run. Carry on from the script.`);
     }
     const question = str(args, "question")?.trim();
     return { kind: "fetch", time, key, ...(question ? { question } : {}) };
@@ -634,14 +659,15 @@ export type DescribeFrame = (
   question?: string,
 ) => Promise<{ ok: true; description: string } | { ok: false; error: string }>;
 
-async function look(
-  env: AgentEnv,
+export async function look(
+  env: Pick<AgentEnv, "vision" | "duration">,
   looks: Looks,
   rawArgs: string,
   describe: DescribeFrame | undefined,
+  max = MAX_LOOKS,
 ): Promise<{ result: string; step: AgentStep }> {
   const plan = describe
-    ? prepareLook(env, looks, rawArgs)
+    ? prepareLook(env, looks, rawArgs, max)
     : ({ kind: "refused", message: "Looking at frames is not available in this run." } as const);
   const label = (time: number) => `👁 Looked at ${formatShort(time)}`;
   switch (plan.kind) {
@@ -687,11 +713,12 @@ const clip = (text: string, max: number) => {
 export function prepareQuestion(
   asked: number,
   rawArgs: string,
+  max = MAX_QUESTIONS,
 ): { ok: true; question: WriterQuestion } | { ok: false; message: string } {
   const args = parseArgs(rawArgs);
   if (!args) return { ok: false, message: BAD_ARGS };
-  if (asked >= MAX_QUESTIONS) {
-    return { ok: false, message: `You have asked ${MAX_QUESTIONS} questions; decide the rest yourself.` };
+  if (asked >= max) {
+    return { ok: false, message: `You have asked ${max} questions; decide the rest yourself.` };
   }
   const question = clip(str(args, "question") ?? "", QUESTION_CHARS);
   if (!question) return { ok: false, message: "`question` is empty." };
@@ -729,13 +756,14 @@ function answerResult(answer: WriterAnswer): { result: string; detail: string } 
   }
 }
 
-async function ask(
+export async function ask(
   asked: { count: number },
   rawArgs: string,
   askWriter: AskWriter | undefined,
+  max = MAX_QUESTIONS,
 ): Promise<{ result: string; step: AgentStep }> {
   const prepared = askWriter
-    ? prepareQuestion(asked.count, rawArgs)
+    ? prepareQuestion(asked.count, rawArgs, max)
     : ({ ok: false, message: "The writer cannot be asked in this run; decide yourself." } as const);
   if (!prepared.ok) {
     return {
@@ -776,7 +804,7 @@ Reading the script
 - "(pause 4.2s)" marks a silence; "== Scene: name ==" marks where a section of the video begins.
 - Write in the language and voice of the script.`;
 
-const LOOKING_PROMPT = `## Looking at the video
+export const LOOKING_PROMPT = `## Looking at the video
 look_at_frame has a separate vision model describe what is on screen at a moment. Use it to fit your lines to the picture: the setting, who is in shot, what they are doing, the mood.
 - Treat every description as a hint, not fact. Vision models miss things, mix people up and sometimes invent details, and they never know who anyone is.
 - The script, the brief, the scene notes and the writer's direction always win. Never write a line that contradicts them because of a description.
@@ -808,12 +836,14 @@ export function buildContinueKickoff(
   aliases: Aliases,
   direction: string,
   linesBefore: number,
+  timedBeats: TimedBeat[] = [],
 ): string {
   const sorted = sortCues(cues);
   const { start, end } = env.window;
   const before = sorted.filter((c) => c.end <= start + EPSILON).slice(-Math.max(1, linesBefore));
   const inside = sorted.filter((c) => c.end > start + EPSILON && c.start < end - EPSILON);
   const after = sorted.filter((c) => c.start >= end - EPSILON).slice(0, LINES_AFTER);
+  const planned = [...beatsBetween(timedBeats, start, end), ...beatsBetween(timedBeats, end, Infinity).slice(0, BEATS_AFTER)];
 
   const parts = [
     `## Your window\n${windowLabel(env)} — ${start.toFixed(2)} s to ${end.toFixed(2)} s, ${(end - start).toFixed(1)} s long.`,
@@ -822,6 +852,11 @@ export function buildContinueKickoff(
   ];
   if (after.length > 0) {
     parts.push(`## Right after your window (lead into this)\n${renderLines(after, env, aliases)}`);
+  }
+  if (planned.length > 0) {
+    parts.push(
+      `## Planned story beats\nWhere the story is meant to go. A beat inside your window should happen there, around its time; later ones are where the scene is heading.\n${renderTimedBeats(planned)}`,
+    );
   }
   parts.push(
     `## Direction from the writer\n${direction.trim() || "None — continue the scene the way the story wants it to go."}`,
@@ -869,6 +904,56 @@ export interface AgentResult {
   created: string[];
 }
 
+/** What one tool call comes to: what the model reads back, and the log line. */
+export interface CallOutcome {
+  result: string;
+  step: AgentStep | null;
+  /** Set by `finish`: the model's closing words. */
+  finished?: string;
+}
+
+export interface ToolLoopDeps {
+  send: AgentDeps["send"];
+  onStep: AgentDeps["onStep"];
+  isCurrent: AgentDeps["isCurrent"];
+  /** Runs one call — applying whatever it changes — and says how it went. */
+  execute: (name: string, rawArgs: string) => CallOutcome | Promise<CallOutcome>;
+}
+
+/**
+ * The loop every kind of run shares: send the conversation, run the tool calls
+ * that come back, feed their results in, until the model calls `finish`,
+ * replies without a tool call, or runs out of turns.
+ */
+export async function runToolLoop(
+  messages: AgentMessage[],
+  deps: ToolLoopDeps,
+  maxSteps: number,
+): Promise<Omit<AgentResult, "created">> {
+  const conversation = [...messages];
+  for (let turn = 0; turn < maxSteps; turn++) {
+    if (!deps.isCurrent()) return { ending: "abandoned", summary: "" };
+    const reply = await deps.send(conversation);
+    if (!deps.isCurrent()) return { ending: "abandoned", summary: "" };
+    conversation.push(reply);
+
+    const calls = reply.tool_calls ?? [];
+    if (calls.length === 0) return { ending: "finished", summary: oneLine(reply.content ?? "") };
+
+    let finished: string | null = null;
+    for (const call of calls) {
+      const done = await deps.execute(call.function.name, call.function.arguments);
+      // A look or a question can take a while; the run may be gone by now.
+      if (!deps.isCurrent()) return { ending: "abandoned", summary: "" };
+      if (done.step) deps.onStep(done.step);
+      if (done.finished !== undefined) finished = done.finished;
+      conversation.push({ role: "tool", tool_call_id: call.id, content: done.result });
+    }
+    if (finished !== null) return { ending: "finished", summary: finished };
+  }
+  return { ending: "limit", summary: `Stopped after ${maxSteps} turns.` };
+}
+
 /**
  * Turns the model loose on `messages` until it calls `finish`, replies without
  * a tool call, or runs out of turns.
@@ -881,47 +966,28 @@ export async function runAgent(
   maxSteps = MAX_AGENT_STEPS,
 ): Promise<AgentResult> {
   const created: string[] = [];
-  const conversation = [...messages];
   const looks = createLooks();
   const asked = { count: 0 };
-  /** Tools that wait on something outside the run: the vision model, the writer. */
-  const waiting = new Map<string, (rawArgs: string) => Promise<{ result: string; step: AgentStep }>>([
-    ["look_at_frame", (rawArgs) => look(env, looks, rawArgs, deps.describeFrame)],
-    ["ask_writer", (rawArgs) => ask(asked, rawArgs, deps.askWriter)],
-  ]);
 
-  for (let turn = 0; turn < maxSteps; turn++) {
-    if (!deps.isCurrent()) return { ending: "abandoned", summary: "", created };
-    const reply = await deps.send(conversation);
-    if (!deps.isCurrent()) return { ending: "abandoned", summary: "", created };
-    conversation.push(reply);
-
-    const calls = reply.tool_calls ?? [];
-    if (calls.length === 0) {
-      return { ending: "finished", summary: oneLine(reply.content ?? ""), created };
-    }
-
-    let finished: string | null = null;
-    for (const call of calls) {
-      const wait = waiting.get(call.function.name);
-      if (wait) {
-        const done = await wait(call.function.arguments);
-        if (!deps.isCurrent()) return { ending: "abandoned", summary: "", created };
-        deps.onStep(done.step);
-        conversation.push({ role: "tool", tool_call_id: call.id, content: done.result });
-        continue;
-      }
-      const current = deps.getCues();
-      const outcome = executeTool(current, env, aliases, call.function.name, call.function.arguments);
-      if (outcome.cues !== current) deps.applyCues(outcome.cues);
-      if (outcome.step) deps.onStep(outcome.step);
-      if (outcome.created) created.push(outcome.created);
-      if (outcome.finished !== undefined) finished = outcome.finished;
-      conversation.push({ role: "tool", tool_call_id: call.id, content: outcome.result });
-    }
-    if (finished !== null) return { ending: "finished", summary: finished, created };
-  }
-  return { ending: "limit", summary: `Stopped after ${maxSteps} turns.`, created };
+  const result = await runToolLoop(
+    messages,
+    {
+      send: deps.send,
+      onStep: deps.onStep,
+      isCurrent: deps.isCurrent,
+      execute: (name, rawArgs) => {
+        if (name === "look_at_frame") return look(env, looks, rawArgs, deps.describeFrame);
+        if (name === "ask_writer") return ask(asked, rawArgs, deps.askWriter);
+        const current = deps.getCues();
+        const outcome = executeTool(current, env, aliases, name, rawArgs);
+        if (outcome.cues !== current) deps.applyCues(outcome.cues);
+        if (outcome.created) created.push(outcome.created);
+        return outcome;
+      },
+    },
+    maxSteps,
+  );
+  return { ...result, created };
 }
 
 /**

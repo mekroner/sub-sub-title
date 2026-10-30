@@ -35,6 +35,7 @@ export const emptyProject: Project = {
   brief: "",
   beats: [],
   sections: [],
+  timedBeats: [],
 };
 
 export function useProjectHistory(initial: Project = emptyProject) {

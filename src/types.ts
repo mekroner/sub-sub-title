@@ -60,6 +60,20 @@ export interface Section {
   note?: string;
 }
 
+/**
+ * A story beat pinned to a moment: what happens, or should happen, there. Kept
+ * at project level and grouped by section span for display, so moving or
+ * removing a flag never strands one. Never exported.
+ */
+export interface TimedBeat {
+  id: string;
+  /** Seconds. */
+  time: number;
+  text: string;
+  /** Written by the story agent; absent when the writer wrote it (or took it over). */
+  by?: "agent";
+}
+
 export interface Project {
   videoPath: string;
   cues: Cue[];
@@ -83,6 +97,8 @@ export interface Project {
   beats: string[];
   /** Timeline flags, in time order. Never exported. */
   sections: Section[];
+  /** Story beats with a time, in time order. Never exported. */
+  timedBeats: TimedBeat[];
 }
 
 /** The `.sstproj` project file. Versioned so the format can move later. */
@@ -343,7 +359,7 @@ export interface ChatMessage {
 
 /** One thing a `/continue` run did, as the chat log lists it. */
 export interface AgentStep {
-  kind: "read" | "add" | "edit" | "move" | "delete" | "look" | "ask" | "error";
+  kind: "read" | "add" | "edit" | "move" | "delete" | "look" | "ask" | "section" | "outline" | "error";
   label: string;
   /** More to read on demand: what a look saw, how a question was answered. */
   detail?: string;
@@ -362,6 +378,8 @@ export type WriterAnswer =
   | { kind: "skipped" };
 
 export interface AgentRun {
+  /** Absent for a `/continue` run, which is what runs were before `/story`. */
+  kind?: "story";
   /** Seconds: the window the run was allowed to change. */
   from: number;
   to: number;

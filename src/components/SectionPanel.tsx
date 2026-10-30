@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import type { Section } from "../types";
-import { formatShort } from "../lib/time";
-import { sectionAt, sortSections } from "../lib/sections";
+import type { Section, TimedBeat } from "../types";
+import { formatShort, parseTimecode } from "../lib/time";
+import { sectionAt } from "../lib/sections";
+import { groupBySection, newBeat, type BeatGroup } from "../lib/timedBeats";
 
 interface Props {
   sections: Section[];
+  timedBeats: TimedBeat[];
+  /** Seconds; 0 while no video is loaded. */
+  duration: number;
   /** Playhead position, for highlighting the section it is inside. */
   currentTime: number;
   selectedId: string | null;
@@ -21,10 +25,21 @@ interface Props {
   onRemove: (id: string) => void;
   onJump: (id: string) => void;
   onRenamed: () => void;
+  onSeek: (time: number) => void;
+  onAddBeat: (beat: TimedBeat) => void;
+  onEditBeat: (id: string, patch: { time?: number; text?: string }) => void;
+  onRemoveBeat: (id: string) => void;
+  /** Starts a story run: puts `/story` into the chat box. */
+  onStory: () => void;
 }
+
+/** The key a group is opened by: its section, or the stretch before the first. */
+const groupKey = (group: BeatGroup) => group.section?.id ?? "before";
 
 export function SectionPanel({
   sections,
+  timedBeats,
+  duration,
   currentTime,
   selectedId,
   renamingId,
@@ -35,16 +50,48 @@ export function SectionPanel({
   onRemove,
   onJump,
   onRenamed,
+  onSeek,
+  onAddBeat,
+  onEditBeat,
+  onRemoveBeat,
+  onStory,
 }: Props) {
   const activeId = sectionAt(sections, currentTime)?.id ?? null;
-  // The panel reads in time order even while a drag has the array unsorted.
-  const ordered = sortSections(sections);
-  const [editingNote, setEditingNote] = useState<string | null>(null);
+  // Grouped in time order, which also reads right while a drag has the
+  // section array unsorted.
+  const groups = groupBySection(sections, timedBeats, duration);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  /** A beat just added, whose text should take focus. */
+  const [focusBeat, setFocusBeat] = useState<string | null>(null);
+
+  const toggle = (key: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const addBeatIn = (group: BeatGroup) => {
+    const inside = currentTime >= group.start && currentTime < group.end;
+    const beat = newBeat(inside ? currentTime : group.start);
+    onAddBeat(beat);
+    setFocusBeat(beat.id);
+    setOpen((current) => new Set(current).add(groupKey(group)));
+  };
 
   return (
     <section className="panel section-panel">
       <header className="panel-header">
         <h2>Sections</h2>
+        <button
+          type="button"
+          className="small"
+          onClick={onStory}
+          title="Let the story agent work on the outline — puts /story into the chat"
+        >
+          ✦ Story
+        </button>
         <button
           type="button"
           onClick={onAdd}
@@ -56,71 +103,206 @@ export function SectionPanel({
       </header>
 
       <div className="section-list">
-        {ordered.length === 0 && (
+        {sections.length === 0 && (
           <p className="hint">
             No sections yet. Press <kbd>B</kbd> to flag one at the playhead — a cut, a
             scene, a note to yourself. Each one runs until the next.
           </p>
         )}
 
-        {ordered.map((section) => {
-          const noting = editingNote === section.id;
+        {groups.map((group) => {
+          const key = groupKey(group);
+          const expanded = open.has(key);
+          const section = group.section;
           const classes = ["section-row"];
-          if (section.id === activeId) classes.push("active");
-          if (section.id === selectedId) classes.push("selected");
+          if (section && section.id === activeId) classes.push("active");
+          if (section && section.id === selectedId) classes.push("selected");
+          if (!section) classes.push("before");
 
           return (
-            <div className={classes.join(" ")} key={section.id}>
-              <button
-                type="button"
-                className="section-time"
-                title="Jump to this section"
-                onClick={() => onJump(section.id)}
-              >
-                {formatShort(section.start)}
-              </button>
+            <div className="section-group" key={key}>
+              <div className={classes.join(" ")}>
+                <button
+                  type="button"
+                  className="icon-button section-toggle"
+                  aria-expanded={expanded}
+                  title={expanded ? "Hide the note and beats" : "Show the note and beats"}
+                  onClick={() => toggle(key)}
+                >
+                  {expanded ? "▾" : "▸"}
+                </button>
 
-              <SectionNameInput
-                value={section.label}
-                autoFocus={section.id === renamingId}
-                onFocused={onRenamed}
-                onChange={(label) => onRename(section.id, label)}
-              />
+                {section ? (
+                  <>
+                    <button
+                      type="button"
+                      className="section-time"
+                      title="Jump to this section"
+                      onClick={() => onJump(section.id)}
+                    >
+                      {formatShort(section.start)}
+                    </button>
+                    <SectionNameInput
+                      value={section.label}
+                      autoFocus={section.id === renamingId}
+                      onFocused={onRenamed}
+                      onChange={(label) => onRename(section.id, label)}
+                    />
+                  </>
+                ) : (
+                  <span className="section-before">
+                    {sections.length === 0 ? "Whole video" : "Before the first section"}
+                  </span>
+                )}
 
-              <button
-                type="button"
-                className={section.note ? "icon-button has-note" : "icon-button"}
-                title={section.note ? `Scene note: ${section.note}` : "Add a scene note for Fill"}
-                aria-pressed={noting}
-                onClick={() => setEditingNote(noting ? null : section.id)}
-              >
-                ✎
-              </button>
+                <span
+                  className={section?.note ? "section-badge has-note" : "section-badge"}
+                  title={
+                    `${group.beats.length} ${group.beats.length === 1 ? "beat" : "beats"}` +
+                    (section?.note ? " · has a scene note" : "")
+                  }
+                >
+                  {group.beats.length > 0 ? group.beats.length : ""}
+                  {section?.note ? "✎" : ""}
+                </span>
 
-              <button
-                type="button"
-                className="icon-button danger"
-                title="Remove this section"
-                onClick={() => onRemove(section.id)}
-              >
-                ✕
-              </button>
+                {section ? (
+                  <button
+                    type="button"
+                    className="icon-button danger"
+                    title="Remove this section (its beats stay)"
+                    onClick={() => onRemove(section.id)}
+                  >
+                    ✕
+                  </button>
+                ) : (
+                  <span />
+                )}
+              </div>
 
-              {noting && (
-                <textarea
-                  className="section-note"
-                  rows={2}
-                  placeholder="What is going on here — who wants what, what just changed. Fill reads this."
-                  value={section.note ?? ""}
-                  onChange={(e) => onNote(section.id, e.target.value)}
-                  onKeyDown={(e) => e.stopPropagation()}
-                />
+              {expanded && (
+                <div className="section-body">
+                  {section && (
+                    <textarea
+                      className="section-note"
+                      rows={2}
+                      placeholder="What is going on here — who wants what, what just changed. Fill and /continue read this."
+                      value={section.note ?? ""}
+                      onChange={(e) => onNote(section.id, e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    />
+                  )}
+
+                  {group.beats.map((beat) => (
+                    <BeatRow
+                      key={beat.id}
+                      beat={beat}
+                      autoFocus={beat.id === focusBeat}
+                      onFocused={() => setFocusBeat(null)}
+                      onSeek={onSeek}
+                      onEdit={(patch) => onEditBeat(beat.id, patch)}
+                      onRemove={() => onRemoveBeat(beat.id)}
+                    />
+                  ))}
+
+                  <button
+                    type="button"
+                    className="small section-add-beat"
+                    onClick={() => addBeatIn(group)}
+                    title="Add a story beat at the playhead, or at the start of this section"
+                  >
+                    + Beat
+                  </button>
+                </div>
               )}
             </div>
           );
         })}
       </div>
     </section>
+  );
+}
+
+interface BeatProps {
+  beat: TimedBeat;
+  autoFocus: boolean;
+  onFocused: () => void;
+  onSeek: (time: number) => void;
+  onEdit: (patch: { time?: number; text?: string }) => void;
+  onRemove: () => void;
+}
+
+/**
+ * One timed beat. Clicking the time jumps there and opens it for editing;
+ * Enter keeps the new time, Esc or an unreadable time puts the old one back.
+ */
+function BeatRow({ beat, autoFocus, onFocused, onSeek, onEdit, onRemove }: BeatProps) {
+  const [timeDraft, setTimeDraft] = useState<string | null>(null);
+  const textRef = useRef<HTMLInputElement | null>(null);
+  const focused = useRef(onFocused);
+  focused.current = onFocused;
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    textRef.current?.focus();
+    focused.current();
+  }, [autoFocus]);
+
+  const commitTime = () => {
+    if (timeDraft === null) return;
+    const time = parseTimecode(timeDraft);
+    if (time !== null && Number.isFinite(time)) onEdit({ time });
+    setTimeDraft(null);
+  };
+
+  return (
+    <div className={beat.by === "agent" ? "beat-row agent" : "beat-row"}>
+      {timeDraft === null ? (
+        <button
+          type="button"
+          className="beat-time"
+          title="Jump here; click again to change the time"
+          onClick={() => {
+            onSeek(beat.time);
+            setTimeDraft(formatShort(beat.time));
+          }}
+        >
+          {formatShort(beat.time)}
+        </button>
+      ) : (
+        <input
+          className="beat-time-input"
+          autoFocus
+          value={timeDraft}
+          aria-label="Beat time"
+          onChange={(e) => setTimeDraft(e.target.value)}
+          onBlur={commitTime}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") commitTime();
+            if (e.key === "Escape") setTimeDraft(null);
+          }}
+        />
+      )}
+      <input
+        ref={textRef}
+        className="beat-text"
+        value={beat.text}
+        placeholder="What happens here"
+        title={beat.by === "agent" ? "Written by the story agent — editing it makes it yours" : undefined}
+        onChange={(e) => onEdit({ text: e.target.value })}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur();
+        }}
+      />
+      <span className="beat-owner" title={beat.by === "agent" ? "Written by the story agent" : "Yours"}>
+        {beat.by === "agent" ? "✦" : ""}
+      </span>
+      <button type="button" className="icon-button danger" title="Remove this beat" onClick={onRemove}>
+        ✕
+      </button>
+    </div>
   );
 }
 
