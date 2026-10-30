@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentMessage, AgentReply, AgentRun, AgentStep, Cue, Speaker } from "../types";
+import type { AgentMessage, AgentReply, AgentRun, AgentStep, Cue, Speaker, WriterAnswer, WriterQuestion } from "../types";
 import {
   AGENT_MAX_TOKENS,
   AGENT_MAX_TOKENS_REASONING,
@@ -8,6 +8,7 @@ import {
   DEFAULT_CONTINUE_SECONDS,
   MAX_CONTINUE_SECONDS,
   MAX_LOOKS,
+  MAX_QUESTIONS,
   agentTools,
   agentWindow,
   aliasFor,
@@ -20,8 +21,10 @@ import {
   executeTool,
   parseContinueCommand,
   prepareLook,
+  prepareQuestion,
   runAgent,
   type AgentEnv,
+  type AskWriter,
   type DescribeFrame,
 } from "./agent";
 
@@ -329,6 +332,68 @@ describe("runAgent", () => {
     expect(h.steps[0].kind).toBe("error");
   });
 
+  const direction = {
+    question: "Where should this scene go?",
+    options: [{ label: "Ben confesses", description: "He has been lying all along." }, { label: "Anna walks out" }],
+  };
+  const asking = (id: string): AgentReply => ({
+    role: "assistant",
+    content: null,
+    tool_calls: [call(id, "ask_writer", direction)],
+  });
+  const lastResult = (h: { sent: AgentMessage[][] }, turn: number) =>
+    (h.sent[turn][h.sent[turn].length - 1] as { content: string }).content;
+
+  it("puts a question to the writer and passes on each kind of answer", async () => {
+    const answers: WriterAnswer[] = [
+      { kind: "option", label: "Ben confesses" },
+      { kind: "own", text: "Neither —  they  laugh it off" },
+    ];
+    const seen: WriterQuestion[] = [];
+    const askWriter: AskWriter = async (question) => {
+      seen.push(question);
+      return answers.shift()!;
+    };
+    const h = harness([asking("q1"), asking("q2"), finishing]);
+    const result = await runAgent([], env, createAliases(), { ...h.deps, askWriter });
+
+    expect(result.ending).toBe("finished");
+    expect(seen[0]).toEqual(direction);
+    expect(lastResult(h, 1)).toBe('The writer chose: "Ben confesses".');
+    expect(lastResult(h, 2)).toBe('The writer answered in their own words: "Neither — they laugh it off"');
+    expect(h.steps).toEqual([
+      { kind: "ask", label: "❓ Where should this scene go?", detail: "→ Ben confesses" },
+      { kind: "ask", label: "❓ Where should this scene go?", detail: "→ “Neither — they laugh it off”" },
+    ]);
+  });
+
+  it("tells the model to decide when the writer skips, or when nobody can answer", async () => {
+    const skipped = harness([asking("q1"), finishing]);
+    await runAgent([], env, createAliases(), { ...skipped.deps, askWriter: async () => ({ kind: "skipped" }) });
+    expect(lastResult(skipped, 1)).toMatch(/^The writer skipped the question — decide yourself/);
+    expect(skipped.steps[0].detail).toBe("→ skipped: left to the model");
+
+    const alone = harness([asking("q1"), finishing]);
+    expect((await runAgent([], env, createAliases(), alone.deps)).ending).toBe("finished");
+    expect(alone.steps[0].kind).toBe("error");
+  });
+
+  it("stops the run when the writer stops it mid-question, and keeps to the budget", async () => {
+    const stopped = harness([asking("q1")]);
+    const askWriter: AskWriter = () => Promise.reject("cancelled");
+    await expect(runAgent([], env, createAliases(), { ...stopped.deps, askWriter })).rejects.toBe("cancelled");
+
+    let calls = 0;
+    const counting: AskWriter = async () => {
+      calls++;
+      return { kind: "skipped" };
+    };
+    const greedy = harness([asking("q1"), asking("q2"), asking("q3"), finishing]);
+    await runAgent([], env, createAliases(), { ...greedy.deps, askWriter: counting });
+    expect(calls).toBe(MAX_QUESTIONS);
+    expect(lastResult(greedy, 3)).toContain(`You have asked ${MAX_QUESTIONS} questions`);
+  });
+
   it("gives up after the turn limit, and stops once replaced", async () => {
     const reading = () => ({
       role: "assistant" as const,
@@ -372,6 +437,39 @@ describe("looking at frames", () => {
   });
 });
 
+describe("prepareQuestion", () => {
+  const args = (value: object) => JSON.stringify(value);
+
+  it("accepts two to four distinct options, as objects or plain strings", () => {
+    expect(prepareQuestion(0, args({ question: " Tone? ", options: ["Dark", { label: "Light", description: "  Warm. " }] }))).toEqual({
+      ok: true,
+      question: { question: "Tone?", options: [{ label: "Dark" }, { label: "Light", description: "Warm." }] },
+    });
+  });
+
+  it("refuses a malformed question", () => {
+    const bad = (value: object | string) =>
+      prepareQuestion(0, typeof value === "string" ? value : args(value));
+    expect(bad({ question: "", options: ["a", "b"] })).toMatchObject({ ok: false, message: "`question` is empty." });
+    expect(bad({ question: "Tone?", options: ["only one"] })).toMatchObject({ ok: false });
+    expect(bad({ question: "Tone?", options: ["a", "b", "c", "d", "e"] })).toMatchObject({ ok: false });
+    expect(bad({ question: "Tone?", options: ["Dark", "dark"] })).toMatchObject({
+      ok: false,
+      message: "Each option needs its own label.",
+    });
+    expect(bad("{nope")).toMatchObject({ ok: false });
+    expect(prepareQuestion(MAX_QUESTIONS, args({ question: "Tone?", options: ["a", "b"] }))).toMatchObject({ ok: false });
+  });
+
+  it("is meant for direction, not for approving lines", () => {
+    const system = buildContinueSystemPrompt({ brief: "", beats: [] }, env);
+    expect(system).toContain("never ask about specific lines or wording");
+    expect(system).not.toContain("Do not ask questions");
+    const names = AGENT_TOOLS.map((t) => t.function.name);
+    expect(names).toContain("ask_writer");
+  });
+});
+
 describe("describeRun", () => {
   it("counts what changed and adds the summary", () => {
     const runInfo: AgentRun = {
@@ -390,6 +488,9 @@ describe("describeRun", () => {
     expect(describeRun({ from: 0, to: 5, steps: [] })).toBe("Continued 0:00.00–0:05.00: no changes.");
     expect(describeRun({ from: 0, to: 5, steps: [{ kind: "look", label: "" }, { kind: "add", label: "" }] })).toBe(
       "Continued 0:00.00–0:05.00: added 1, looked at 1 frame.",
+    );
+    expect(describeRun({ from: 0, to: 5, steps: [{ kind: "ask", label: "" }] })).toBe(
+      "Continued 0:00.00–0:05.00: asked 1 question.",
     );
   });
 });

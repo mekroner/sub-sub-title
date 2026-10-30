@@ -9,6 +9,8 @@ import type {
   Cue,
   Section,
   Speaker,
+  WriterAnswer,
+  WriterQuestion,
 } from "../types";
 import * as api from "../lib/api";
 import { errorMessage } from "../lib/api";
@@ -124,6 +126,12 @@ export function ChatPanel({
   const [openAttachments, setOpenAttachments] = useState<Set<string>>(new Set());
   const [streaming, setStreaming] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  /** A `/continue` run's question, waiting on the writer in place of the composer. */
+  const [asking, setAsking] = useState<WriterQuestion | null>(null);
+  const pendingAnswer = useRef<{
+    resolve: (answer: WriterAnswer) => void;
+    reject: (reason: unknown) => void;
+  } | null>(null);
   /** The user message being rewritten in place, with its edits so far. */
   const [editing, setEditing] = useState<{
     id: string;
@@ -155,8 +163,19 @@ export function ChatPanel({
     [cues, sections, speakers, selectedIds],
   );
 
+  /** Answers the open question, or with null withdraws it, which stops the run. */
+  const answerQuestion = useCallback((answer: WriterAnswer | null) => {
+    const pending = pendingAnswer.current;
+    pendingAnswer.current = null;
+    setAsking(null);
+    if (!pending) return;
+    if (answer) pending.resolve(answer);
+    else pending.reject(api.CHAT_CANCELLED);
+  }, []);
+
   const reset = useCallback(() => {
     generation.current++;
+    answerQuestion(null);
     if (streamingRef.current) api.cancelChat().catch(() => {});
     setMessages([]);
     setAttachment(null);
@@ -167,7 +186,7 @@ export function ChatPanel({
     setNotice(null);
     setEditing(null);
     stick.current = true;
-  }, []);
+  }, [answerQuestion]);
 
   useEffect(() => reset, [projectKey, reset]);
 
@@ -190,6 +209,7 @@ export function ChatPanel({
   };
 
   const stop = () => {
+    answerQuestion(null);
     api.cancelChat().catch(() => {});
   };
 
@@ -303,6 +323,11 @@ export function ChatPanel({
       const result = await runAgent(opening, env, aliases, {
         send: (conversation) => api.aiAgentStep(buildAgentRequest(conversation, settings, tools)),
         ...(vision ? { describeFrame } : {}),
+        askWriter: (question) =>
+          new Promise<WriterAnswer>((resolve, reject) => {
+            pendingAnswer.current = { resolve, reject };
+            setAsking(question);
+          }),
         getCues: () => cuesRef.current,
         applyCues: (next) => {
           cuesRef.current = next;
@@ -331,6 +356,8 @@ export function ChatPanel({
 
   /** Asks `question`, or runs it when it is a `/continue`. */
   const dispatch = (earlier: ChatMessage[], question: ChatMessage) => {
+    // An edit sent while a run waits on an answer replaces that run.
+    answerQuestion(null);
     const command = parseContinueCommand(question.text);
     if (command) void runContinue(earlier, question, command);
     else void ask(earlier, question);
@@ -466,7 +493,12 @@ export function ChatPanel({
                   </button>
                 </>
               ) : message.agent ? (
-                <AgentLog run={message.agent} status={message.status} error={message.text} />
+                <AgentLog
+                  run={message.agent}
+                  status={message.status}
+                  error={message.text}
+                  waiting={asking !== null && message.status === "streaming"}
+                />
               ) : message.status === "error" ? (
                 <div className="chat-text error">{message.text}</div>
               ) : (
@@ -484,143 +516,147 @@ export function ChatPanel({
         )}
       </div>
 
-      <div className="chat-composer">
-        {!apiKeySet && (
-          <div className="chat-banner">
-            <span>No OpenRouter API key saved yet.</span>
-            <button type="button" className="small" onClick={onOpenSettings}>
-              Open Settings
-            </button>
-          </div>
-        )}
+      {asking ? (
+        <QuestionCard key={asking.question} question={asking} onAnswer={answerQuestion} onStop={stop} />
+      ) : (
+        <div className="chat-composer">
+          {!apiKeySet && (
+            <div className="chat-banner">
+              <span>No OpenRouter API key saved yet.</span>
+              <button type="button" className="small" onClick={onOpenSettings}>
+                Open Settings
+              </button>
+            </div>
+          )}
 
-        {apiKeySet && models.length === 0 && (
-          <div className="chat-banner">
-            <span>No chat models yet.</span>
-            <button type="button" className="small" onClick={onOpenSettings}>
-              Open Settings
-            </button>
-          </div>
-        )}
+          {apiKeySet && models.length === 0 && (
+            <div className="chat-banner">
+              <span>No chat models yet.</span>
+              <button type="button" className="small" onClick={onOpenSettings}>
+                Open Settings
+              </button>
+            </div>
+          )}
 
-        {notice && <p className="hint">{notice}</p>}
+          {notice && <p className="hint">{notice}</p>}
 
-        {attachment && (
-          <AttachmentChip
-            attachment={attachment}
-            open={draftOpen}
-            onToggle={() => setDraftOpen((o) => !o)}
-            onRemove={() => {
-              setAttachment(null);
-              setDraftOpen(false);
-            }}
-          />
-        )}
-
-        {selection && (
-          <AttachmentChip
-            attachment={selection}
-            kind="selection"
-            open={selectionOpen}
-            onToggle={() => setSelectionOpen((o) => !o)}
-          />
-        )}
-
-        <textarea
-          ref={inputRef}
-          rows={2}
-          placeholder="Ask about a scene, a character… or /continue 30 to write from the playhead"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Typing here must never fire an editor shortcut.
-            e.stopPropagation();
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void send();
-            } else if (e.key === "Escape") {
-              if (streaming) stop();
-              else e.currentTarget.blur();
-            }
-          }}
-        />
-
-        {models.length > 0 && (
-          <div className="chat-options">
-            <select
-              value={model}
-              aria-label="Chat model"
-              title={model}
-              onKeyDown={(e) => e.stopPropagation()}
-              onChange={(e) => onModelChange(e.target.value)}
-            >
-              {models.map((id) => (
-                <option key={id} value={id} title={id}>
-                  {shortModelName(id)}
-                </option>
-              ))}
-            </select>
-            <select
-              value={chatEffort(effort) ?? ""}
-              aria-label="Reasoning effort"
-              title="How hard a reasoning model thinks before it answers. Default leaves it to the model."
-              onKeyDown={(e) => e.stopPropagation()}
-              onChange={(e) => onEffortChange(e.target.value)}
-            >
-              {CHAT_EFFORTS.map((e) => (
-                <option key={e.value} value={e.value}>
-                  Effort: {e.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <div className="chat-actions">
-          <div className="chat-attach">
-            <button
-              type="button"
-              className="small"
-              onClick={attachLines}
-              disabled={cues.length === 0}
-              title="Attach the lines up to the selected cue, or the playhead"
-            >
-              📎 Last
-            </button>
-            <input
-              type="number"
-              min={MIN_CHAT_LINES}
-              max={MAX_CHAT_LINES}
-              value={linesBefore}
-              aria-label="Lines to attach"
-              onKeyDown={(e) => e.stopPropagation()}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                if (Number.isFinite(n) && n >= MIN_CHAT_LINES) {
-                  onLinesChange(Math.min(MAX_CHAT_LINES, Math.round(n)));
-                }
+          {attachment && (
+            <AttachmentChip
+              attachment={attachment}
+              open={draftOpen}
+              onToggle={() => setDraftOpen((o) => !o)}
+              onRemove={() => {
+                setAttachment(null);
+                setDraftOpen(false);
               }}
             />
-            <span className="hint">lines</span>
-          </div>
-
-          {streaming ? (
-            <button type="button" className="small danger" onClick={stop} title="Stop the reply (Esc)">
-              Stop
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="small primary"
-              onClick={() => void send()}
-              disabled={!canSend}
-              title="Send (Enter). Shift+Enter for a new line."
-            >
-              Send
-            </button>
           )}
+
+          {selection && (
+            <AttachmentChip
+              attachment={selection}
+              kind="selection"
+              open={selectionOpen}
+              onToggle={() => setSelectionOpen((o) => !o)}
+            />
+          )}
+
+          <textarea
+            ref={inputRef}
+            rows={2}
+            placeholder="Ask about a scene, a character… or /continue 30 to write from the playhead"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // Typing here must never fire an editor shortcut.
+              e.stopPropagation();
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void send();
+              } else if (e.key === "Escape") {
+                if (streaming) stop();
+                else e.currentTarget.blur();
+              }
+            }}
+          />
+
+          {models.length > 0 && (
+            <div className="chat-options">
+              <select
+                value={model}
+                aria-label="Chat model"
+                title={model}
+                onKeyDown={(e) => e.stopPropagation()}
+                onChange={(e) => onModelChange(e.target.value)}
+              >
+                {models.map((id) => (
+                  <option key={id} value={id} title={id}>
+                    {shortModelName(id)}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={chatEffort(effort) ?? ""}
+                aria-label="Reasoning effort"
+                title="How hard a reasoning model thinks before it answers. Default leaves it to the model."
+                onKeyDown={(e) => e.stopPropagation()}
+                onChange={(e) => onEffortChange(e.target.value)}
+              >
+                {CHAT_EFFORTS.map((e) => (
+                  <option key={e.value} value={e.value}>
+                    Effort: {e.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="chat-actions">
+            <div className="chat-attach">
+              <button
+                type="button"
+                className="small"
+                onClick={attachLines}
+                disabled={cues.length === 0}
+                title="Attach the lines up to the selected cue, or the playhead"
+              >
+                📎 Last
+              </button>
+              <input
+                type="number"
+                min={MIN_CHAT_LINES}
+                max={MAX_CHAT_LINES}
+                value={linesBefore}
+                aria-label="Lines to attach"
+                onKeyDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n) && n >= MIN_CHAT_LINES) {
+                    onLinesChange(Math.min(MAX_CHAT_LINES, Math.round(n)));
+                  }
+                }}
+              />
+              <span className="hint">lines</span>
+            </div>
+
+            {streaming ? (
+              <button type="button" className="small danger" onClick={stop} title="Stop the reply (Esc)">
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="small primary"
+                onClick={() => void send()}
+                disabled={!canSend}
+                title="Send (Enter). Shift+Enter for a new line."
+              >
+                Send
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }
@@ -758,11 +794,14 @@ function AgentLog({
   run,
   status,
   error,
+  waiting,
 }: {
   run: AgentRun;
   status: ChatMessage["status"];
   /** The message text, shown when the run failed. */
   error: string;
+  /** The run has asked the writer something and waits for the answer. */
+  waiting: boolean;
 }) {
   const stretch = `${formatShort(run.from)}–${formatShort(run.to)}`;
   return (
@@ -786,10 +825,103 @@ function AgentLog({
           ))}
         </ul>
       )}
-      {status === "streaming" && <span className="chat-thinking">working…</span>}
+      {status === "streaming" && (
+        <span className="chat-thinking">{waiting ? "waiting for your answer below…" : "working…"}</span>
+      )}
       {status === "error" && <div className="chat-text error">{error}</div>}
       {run.summary && <p className="agent-summary">{run.summary}</p>}
       {status === "stopped" && <span className="chat-stopped">stopped</span>}
+    </div>
+  );
+}
+
+/**
+ * A run's question about direction, in place of the composer until answered:
+ * pick an option (or press its number), say it in your own words, or skip.
+ */
+function QuestionCard({
+  question,
+  onAnswer,
+  onStop,
+}: {
+  question: WriterQuestion;
+  onAnswer: (answer: WriterAnswer) => void;
+  onStop: () => void;
+}) {
+  const [own, setOwn] = useState("");
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+
+  const pick = (label: string) => onAnswer({ kind: "option", label });
+
+  return (
+    <div
+      ref={ref}
+      className="chat-composer question-card"
+      role="group"
+      aria-label="A question from the run"
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        // Answering here must never fire an editor shortcut.
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onAnswer({ kind: "skipped" });
+          return;
+        }
+        if (e.target instanceof HTMLInputElement) return;
+        const n = Number(e.key);
+        if (Number.isInteger(n) && n >= 1 && n <= question.options.length) {
+          e.preventDefault();
+          pick(question.options[n - 1].label);
+        }
+      }}
+    >
+      <p className="question-text">{question.question}</p>
+      <div className="question-options">
+        {question.options.map((option, i) => (
+          <button key={option.label} type="button" className="question-option" onClick={() => pick(option.label)}>
+            <span className="question-key">{i + 1}</span>
+            <span className="question-body">
+              <strong>{option.label}</strong>
+              {option.description && <span className="question-description">{option.description}</span>}
+            </span>
+          </button>
+        ))}
+      </div>
+      <form
+        className="question-other"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (own.trim()) onAnswer({ kind: "own", text: own.trim() });
+        }}
+      >
+        <input
+          value={own}
+          placeholder="Or say it in your own words…"
+          aria-label="Your own answer"
+          onChange={(e) => setOwn(e.target.value)}
+        />
+        <button type="submit" className="small" disabled={!own.trim()}>
+          Answer
+        </button>
+      </form>
+      <div className="chat-actions">
+        <button
+          type="button"
+          className="small"
+          onClick={() => onAnswer({ kind: "skipped" })}
+          title="Let the model decide (Esc)"
+        >
+          Skip — you decide
+        </button>
+        <button type="button" className="small danger" onClick={onStop} title="Stop the run">
+          Stop
+        </button>
+      </div>
     </div>
   );
 }

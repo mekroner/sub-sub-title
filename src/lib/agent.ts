@@ -21,6 +21,8 @@ import type {
   Cue,
   Section,
   Speaker,
+  WriterAnswer,
+  WriterQuestion,
 } from "../types";
 import { renderCurrentScene } from "./chat";
 import { MIN_CUE_DURATION, newCue, sortCues } from "./cues";
@@ -38,6 +40,12 @@ export const MAX_AGENT_STEPS = 30;
 
 /** Frames a run may have described: each is a slow, paid call. */
 export const MAX_LOOKS = 6;
+
+/** Questions a run may put to the writer: it should mostly just write. */
+export const MAX_QUESTIONS = 2;
+/** Longest question, and longest option label or description, kept. */
+const QUESTION_CHARS = 200;
+const LABEL_CHARS = 60;
 
 /** Per turn: room for a handful of tool calls, or thinking and then some. */
 export const AGENT_MAX_TOKENS = 4000;
@@ -265,6 +273,34 @@ export const AGENT_TOOLS = [
           summary: { type: "string", description: "One sentence for the writer on what you did." },
         },
         required: ["summary"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "ask_writer",
+      description: `Ask the writer a multiple-choice question about general direction — where the scene goes, whose beat it is, the tone or pace — when the story could genuinely go very different ways and their direction does not settle it. Never use it to approve wording or specific lines. Ask before you write. They can also answer in their own words or leave it to you. At most ${MAX_QUESTIONS} per run.`,
+      parameters: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "One short question." },
+          options: {
+            type: "array",
+            minItems: 2,
+            maxItems: 4,
+            description: "Two to four genuinely different directions.",
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string", description: "A few words." },
+                description: { type: "string", description: "One sentence on what it would mean. Optional." },
+              },
+              required: ["label"],
+            },
+          },
+        },
+        required: ["question", "options"],
       },
     },
   },
@@ -637,6 +673,82 @@ async function look(
   }
 }
 
+// --- Asking the writer -----------------------------------------------------------
+
+/** The writer's answer to a question, or why there is none. Rejects on Stop. */
+export type AskWriter = (question: WriterQuestion) => Promise<WriterAnswer>;
+
+const clip = (text: string, max: number) => {
+  const line = oneLine(text);
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+};
+
+/** A well-formed question within the run's budget, or why not. */
+export function prepareQuestion(
+  asked: number,
+  rawArgs: string,
+): { ok: true; question: WriterQuestion } | { ok: false; message: string } {
+  const args = parseArgs(rawArgs);
+  if (!args) return { ok: false, message: BAD_ARGS };
+  if (asked >= MAX_QUESTIONS) {
+    return { ok: false, message: `You have asked ${MAX_QUESTIONS} questions; decide the rest yourself.` };
+  }
+  const question = clip(str(args, "question") ?? "", QUESTION_CHARS);
+  if (!question) return { ok: false, message: "`question` is empty." };
+  const raw = Array.isArray(args.options) ? args.options : [];
+  const options = raw
+    .map((o) => {
+      const option = typeof o === "string" ? { label: o } : (o as Record<string, unknown>);
+      const label = clip(typeof option?.label === "string" ? option.label : "", LABEL_CHARS);
+      const description = clip(typeof option?.description === "string" ? option.description : "", QUESTION_CHARS);
+      return description ? { label, description } : { label };
+    })
+    .filter((o) => o.label);
+  if (options.length < 2 || options.length > 4) {
+    return { ok: false, message: "Give two to four options, each with a `label`." };
+  }
+  const labels = new Set(options.map((o) => o.label.toLowerCase()));
+  if (labels.size !== options.length) return { ok: false, message: "Each option needs its own label." };
+  return { ok: true, question: { question, options } };
+}
+
+function answerResult(answer: WriterAnswer): { result: string; detail: string } {
+  switch (answer.kind) {
+    case "option":
+      return { result: `The writer chose: "${answer.label}".`, detail: `→ ${answer.label}` };
+    case "own":
+      return {
+        result: `The writer answered in their own words: "${oneLine(answer.text)}"`,
+        detail: `→ “${oneLine(answer.text)}”`,
+      };
+    case "skipped":
+      return {
+        result: "The writer skipped the question — decide yourself, and don't ask again about this.",
+        detail: "→ skipped: left to the model",
+      };
+  }
+}
+
+async function ask(
+  asked: { count: number },
+  rawArgs: string,
+  askWriter: AskWriter | undefined,
+): Promise<{ result: string; step: AgentStep }> {
+  const prepared = askWriter
+    ? prepareQuestion(asked.count, rawArgs)
+    : ({ ok: false, message: "The writer cannot be asked in this run; decide yourself." } as const);
+  if (!prepared.ok) {
+    return {
+      result: `Error: ${prepared.message}`,
+      step: { kind: "error", label: `ask_writer: ${prepared.message}` },
+    };
+  }
+  asked.count++;
+  const answer = await askWriter!(prepared.question);
+  const { result, detail } = answerResult(answer);
+  return { result, step: { kind: "ask", label: `❓ ${prepared.question.question}`, detail } };
+}
+
 // --- Prompt ------------------------------------------------------------------
 
 const AGENT_SYSTEM_PROMPT = `You are writing the next stretch of a subtitled video's script yourself, directly into the timeline, using the tools you have. The writer handed you a window of time; fill it with dialogue and inner thoughts that belong in this story.
@@ -646,7 +758,13 @@ How to work
 - Write the lines with add_cue, in order. Leave natural pauses; a scene need not fill every second.
 - Then read your window back once and fix what reads badly: a line marked "too fast" needs fewer words or more time, a beat that lands flat needs a rewrite.
 - Lines already in your window are part of the script. Keep them unless the writer's direction says otherwise or they no longer fit what you wrote.
-- Call finish with one sentence for the writer when you are done. Do not ask questions; decide.
+- Call finish with one sentence for the writer when you are done.
+
+Asking the writer
+- Mostly, just write: the writer handed this to you. ask_writer is for when the direction is genuinely open — they gave little or no direction, and the script and beats allow very different paths.
+- Never ask when the direction from the writer already settles it, and never ask about specific lines or wording: they can change any line themselves afterwards.
+- Ask before you write, not after. Offer options that are truly different directions, not variations of one.
+- If the writer skips a question, decide yourself and don't ask again about it.
 
 The rules your tools enforce
 - You can only change lines inside your window. Lines marked "outside window" are read-only.
@@ -740,6 +858,8 @@ export interface AgentDeps {
   isCurrent: () => boolean;
   /** Describes a frame; absent when the run cannot look at the video. */
   describeFrame?: DescribeFrame;
+  /** Puts a question to the writer; absent when nobody can answer. */
+  askWriter?: AskWriter;
 }
 
 export interface AgentResult {
@@ -763,6 +883,12 @@ export async function runAgent(
   const created: string[] = [];
   const conversation = [...messages];
   const looks = createLooks();
+  const asked = { count: 0 };
+  /** Tools that wait on something outside the run: the vision model, the writer. */
+  const waiting = new Map<string, (rawArgs: string) => Promise<{ result: string; step: AgentStep }>>([
+    ["look_at_frame", (rawArgs) => look(env, looks, rawArgs, deps.describeFrame)],
+    ["ask_writer", (rawArgs) => ask(asked, rawArgs, deps.askWriter)],
+  ]);
 
   for (let turn = 0; turn < maxSteps; turn++) {
     if (!deps.isCurrent()) return { ending: "abandoned", summary: "", created };
@@ -777,11 +903,12 @@ export async function runAgent(
 
     let finished: string | null = null;
     for (const call of calls) {
-      if (call.function.name === "look_at_frame") {
-        const seen = await look(env, looks, call.function.arguments, deps.describeFrame);
+      const wait = waiting.get(call.function.name);
+      if (wait) {
+        const done = await wait(call.function.arguments);
         if (!deps.isCurrent()) return { ending: "abandoned", summary: "", created };
-        deps.onStep(seen.step);
-        conversation.push({ role: "tool", tool_call_id: call.id, content: seen.result });
+        deps.onStep(done.step);
+        conversation.push({ role: "tool", tool_call_id: call.id, content: done.result });
         continue;
       }
       const current = deps.getCues();
@@ -814,6 +941,8 @@ export function describeRun(run: AgentRun): string {
     .map(([verb, n]) => `${verb} ${n}`);
   const looked = run.steps.filter((s) => s.kind === "look").length;
   if (looked > 0) did.push(`looked at ${looked} ${looked === 1 ? "frame" : "frames"}`);
+  const questions = run.steps.filter((s) => s.kind === "ask").length;
+  if (questions > 0) did.push(`asked ${questions} ${questions === 1 ? "question" : "questions"}`);
   const head = `Continued ${span(run.from, run.to)}: ${did.length > 0 ? did.join(", ") : "no changes"}.`;
   return run.summary ? `${head} ${run.summary}` : head;
 }

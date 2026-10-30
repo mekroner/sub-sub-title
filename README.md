@@ -420,6 +420,13 @@ look shows as **👁 Looked at…** in the chat; click it to read the descriptio
 Frames go to OpenRouter and the model's provider; only the text reaches the run.
 With no vision model set, `/continue` works from the script alone.
 
+When the direction is genuinely open — you gave little of it and the scene
+could go very different ways — a run may **ask you** first, at most twice. The
+question takes the place of the chat box: pick an option (or press its number),
+answer in your own words, or **Skip** (**Esc**) to leave it to the model.
+Questions are about where the scene goes, whose beat it is, tone and pace —
+never about approving particular lines. **Stop** works there too.
+
 **📎 Last N** attaches the N lines up to and including the selected cue, or up
 to the playhead when nothing is selected. The lines appear as a chip over the
 prompt box: click it to read them, ✕ to drop them. They are captured when you

@@ -343,11 +343,23 @@ export interface ChatMessage {
 
 /** One thing a `/continue` run did, as the chat log lists it. */
 export interface AgentStep {
-  kind: "read" | "add" | "edit" | "move" | "delete" | "look" | "error";
+  kind: "read" | "add" | "edit" | "move" | "delete" | "look" | "ask" | "error";
   label: string;
-  /** More to read on demand: what a look saw. */
+  /** More to read on demand: what a look saw, how a question was answered. */
   detail?: string;
 }
+
+/** A question about direction a `/continue` run puts to the writer. */
+export interface WriterQuestion {
+  question: string;
+  /** Two to four genuinely different directions. */
+  options: Array<{ label: string; description?: string }>;
+}
+
+export type WriterAnswer =
+  | { kind: "option"; label: string }
+  | { kind: "own"; text: string }
+  | { kind: "skipped" };
 
 export interface AgentRun {
   /** Seconds: the window the run was allowed to change. */
