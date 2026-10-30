@@ -31,6 +31,25 @@ pub struct Settings {
     /// "close", "open" or "wild". A string, like `dialect`, so an unknown value
     /// degrades to the default instead of failing the load.
     pub fill_latitude: String,
+    /// Grey autocomplete while typing in a cue.
+    pub ghost_enabled: bool,
+    /// OpenRouter model id for autocomplete. Separate from `model` because it
+    /// runs on every typing pause, so it should be small, fast and cheap.
+    pub ghost_model: String,
+    /// Typing pause, in milliseconds, before a suggestion is requested.
+    pub ghost_delay_ms: u32,
+    /// Dialogue lines autocomplete shows the model before and after the cue.
+    pub ghost_lines_before: u32,
+    pub ghost_lines_after: u32,
+    /// Dialogue lines the chat panel's "Last N lines" button attaches.
+    pub chat_lines_before: u32,
+    /// OpenRouter model ids the chat panel offers. The first is the fallback.
+    pub chat_models: Vec<String>,
+    /// The chat panel's current pick. One no longer in `chat_models` falls
+    /// back to the first entry.
+    pub chat_model: String,
+    /// "", "low", "medium" or "high"; "" leaves reasoning to the model.
+    pub chat_effort: String,
     /// Default .ass styling used for export and the preview overlay.
     pub font_name: String,
     pub font_size: u32,
@@ -77,6 +96,15 @@ impl Default for Settings {
             fill_lines_after: 4,
             fill_takes: 3,
             fill_latitude: "open".to_string(),
+            ghost_enabled: true,
+            ghost_model: "google/gemini-2.5-flash-lite".to_string(),
+            ghost_delay_ms: 350,
+            ghost_lines_before: 10,
+            ghost_lines_after: 2,
+            chat_lines_before: 10,
+            chat_models: vec!["anthropic/claude-sonnet-4.5".to_string()],
+            chat_model: String::new(),
+            chat_effort: String::new(),
             font_name: "Arial".to_string(),
             font_size: 48,
             bold: false,
@@ -108,12 +136,27 @@ fn settings_path(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(dir.join("settings.json"))
 }
 
+/// A settings file's contents. A corrupt or partial file gives the defaults
+/// rather than stopping the app booting.
+fn parse_settings(bytes: &[u8]) -> Settings {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return Settings::default();
+    };
+    // From before the chat had models of its own: it used `model`, so keep
+    // chatting with whatever that was set to.
+    let predates_chat_models = value.get("chatModels").is_none();
+    let mut settings: Settings = serde_json::from_value(value).unwrap_or_default();
+    if predates_chat_models && !settings.model.trim().is_empty() {
+        settings.chat_models = vec![settings.model.trim().to_string()];
+    }
+    settings
+}
+
 #[tauri::command]
 pub fn load_settings(app: AppHandle) -> AppResult<Settings> {
     let path = settings_path(&app)?;
     match std::fs::read(&path) {
-        // A corrupt or partial settings file should not stop the app booting.
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
+        Ok(bytes) => Ok(parse_settings(&bytes)),
         Err(_) => Ok(Settings::default()),
     }
 }
@@ -174,7 +217,7 @@ pub fn read_api_key() -> AppResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{parse_settings, Settings};
 
     #[test]
     fn old_style_notes_become_fill_instructions() {
@@ -183,5 +226,36 @@ mod tests {
         assert_eq!(settings.fill_instructions, "Norwegian, dry humour");
         assert_eq!(settings.fill_takes, 3);
         assert_eq!(settings.fill_latitude, "open");
+    }
+
+    #[test]
+    fn a_settings_file_from_before_autocomplete_gets_its_defaults() {
+        let old = r#"{"model":"x","fillTakes":2}"#;
+        let settings: Settings = serde_json::from_str(old).unwrap();
+        assert!(settings.ghost_enabled);
+        assert_eq!(settings.ghost_model, "google/gemini-2.5-flash-lite");
+        assert_eq!(settings.ghost_delay_ms, 350);
+        assert_eq!(settings.chat_lines_before, 10);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_chat_models_chats_with_its_model() {
+        let settings = parse_settings(br#"{"model":"openai/gpt-5"}"#);
+        assert_eq!(settings.chat_models, ["openai/gpt-5"]);
+        assert_eq!(settings.chat_effort, "");
+    }
+
+    #[test]
+    fn a_saved_chat_model_list_is_kept_as_it_is() {
+        let settings = parse_settings(br#"{"model":"x","chatModels":["a/b","c/d"]}"#);
+        assert_eq!(settings.chat_models, ["a/b", "c/d"]);
+        let emptied = parse_settings(br#"{"model":"x","chatModels":[]}"#);
+        assert!(emptied.chat_models.is_empty());
+    }
+
+    #[test]
+    fn a_corrupt_settings_file_gives_the_defaults() {
+        let settings = parse_settings(b"{not json");
+        assert_eq!(settings.chat_models, ["anthropic/claude-sonnet-4.5"]);
     }
 }

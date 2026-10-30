@@ -76,6 +76,17 @@ describe("matchShortcut", () => {
     expect(matchShortcut({ code: "KeyT", ctrlKey: true })).toBeNull();
   });
 
+  it("toggles autocomplete on Ctrl+Shift+Space, leaving Ctrl+Space alone", () => {
+    expect(matchShortcut({ code: "Space", ctrlKey: true, shiftKey: true })).toEqual({
+      type: "toggleGhost",
+    });
+    expect(matchShortcut({ key: " ", ctrlKey: true, shiftKey: true })).toEqual({
+      type: "toggleGhost",
+    });
+    expect(matchShortcut({ code: "Space", ctrlKey: true })).toBeNull();
+    expect(matchShortcut({ code: "Space" })).toEqual({ type: "togglePlay" });
+  });
+
   it("flags a section on B, and leaves Ctrl+B to the webview", () => {
     expect(matchShortcut({ code: "KeyB" })).toEqual({ type: "addSection" });
     expect(matchShortcut({ code: "KeyB", ctrlKey: true })).toBeNull();

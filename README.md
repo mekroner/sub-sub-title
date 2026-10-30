@@ -145,6 +145,8 @@ project/cue-count label, the zoom slider, and the Follow toggle.
 | `Ctrl+D` | Duplicate the selected cue |
 | `Ctrl+F` | Find and replace across cues |
 | `Ctrl+G` | Fill the selected cues with AI, or continue after them |
+| `Tab` / `Ctrl+→` (in a cue) | Accept the grey autocomplete suggestion / its next word |
+| `Ctrl+Shift+Space` | Turn cue autocomplete on / off |
 | `Ctrl+N` | New project |
 | `Ctrl+O` | Open a project |
 | `Ctrl+S` | Save the project |
@@ -361,6 +363,56 @@ The user message carries the brief, beats, characters, scene notes, transcript a
 task, with your direction last. The prompt is assembled in the frontend
 (`src/lib/fill.ts`) so the dialog can show it exactly; the backend only adds the
 key and makes the call.
+
+## Autocomplete — grey text while typing
+
+While you type in a cue, a suggestion for the rest of the line appears in grey
+after the caret, the way a code editor completes a line. **Tab** accepts it,
+**Ctrl+→** accepts one word, **Esc** dismisses it until you type again. Focusing
+an empty cue suggests a whole line. Suggestions only appear with the caret at the
+end of the cue. **Ctrl+Shift+Space** (or View ▸ Autocomplete cue text) turns the
+feature on and off.
+
+The model sees the cues before and after the one you are typing, the speaker's
+voice notes (and inner voice, for a thought), and a character budget worked out
+from the cue's time on screen at the target reading speed.
+
+It runs on its own model, set in `Settings ▸ Autocomplete`, because it fires on
+every pause in typing: pick something small, fast and non-reasoning
+(`google/gemini-2.5-flash-lite` by default). To keep the bill down:
+
+- a request goes out only after a typing pause (350 ms by default);
+- typing the characters the suggestion already shows just shortens it — no request;
+- suggestions are cached per cue text, so backspacing and retyping is free;
+- a newer request aborts the one in flight, and leaving the cue cancels it;
+- replies are capped at a few dozen tokens and stop at a blank line;
+- the prompt puts what you have typed last, so a provider's prefix cache covers
+  the rest while you type in one cue.
+
+A failed request (no key, a retired model id) pauses autocomplete with one error
+toast until its settings change. The prompt is built in `src/lib/ghost.ts`.
+
+## Chat — thinking out loud
+
+The Chat panel under Sections is a conversation with a model that already knows
+the project: the brief, story beats, speakers with their voice notes, and the
+section you are in. Those are rebuilt on every message, so edits show up at once.
+Nothing it writes goes into the script.
+
+**📎 Last N** attaches the N lines up to and including the selected cue, or up
+to the playhead when nothing is selected. The lines appear as a chip over the
+prompt box: click it to read them, ✕ to drop them. They are captured when you
+attach them, so later edits don't change what you asked about. Set N next to the
+button; it is remembered.
+
+**Enter** sends and **Shift+Enter** starts a new line. Replies stream in, and
+**Stop** (or **Esc**) ends one early, keeping what it had written so far. Point at one of your messages and click
+**✎ Edit** to rewrite it (and drop its attached lines, if you like). Sending the
+edit throws away everything after that message and asks again from there, even
+while a reply is still streaming. **Reset**
+clears the conversation, and so does opening another video. The panel's height
+is set by dragging the divider above it. Chat uses the main model and temperature
+from Settings, and the conversation is built in `src/lib/chat.ts`.
 
 ## Burn-in
 

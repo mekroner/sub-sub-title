@@ -203,8 +203,20 @@ pub async fn transcribe_video(
         return Err(AppError::msg("The transcription was cancelled."));
     }
 
+    let srt = std::fs::read_dir(&out_dir)?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|p| {
+            p.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("srt"))
+        });
+
     match status {
         Some(s) if s.success() => {}
+        // Some models make the engine crash while tearing CUDA down, after the
+        // subtitles are written (0xC0000409 with `small` on r245.4). A run that
+        // says it finished and left an SRT behind is a success.
+        Some(_) if srt.is_some() && reports_finished(&tail) => {}
         Some(s) => {
             let _ = std::fs::remove_dir_all(&out_dir);
             return Err(exit_error(&model, &s.to_string(), &tail));
@@ -217,18 +229,11 @@ pub async fn transcribe_video(
         }
     }
 
-    let srt = std::fs::read_dir(&out_dir)?
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|p| {
-            p.extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("srt"))
-        })
-        .ok_or_else(|| {
-            AppError::msg(format!(
-                "The engine finished but produced no subtitle file.\n{tail}"
-            ))
-        })?;
+    let srt = srt.ok_or_else(|| {
+        AppError::msg(format!(
+            "The engine finished but produced no subtitle file.\n{tail}"
+        ))
+    })?;
     let text = crate::files::decode_text(&std::fs::read(&srt)?);
     let _ = std::fs::remove_dir_all(&out_dir);
     Ok(text)
@@ -244,7 +249,9 @@ fn exit_error(model: &str, status: &str, tail: &str) -> AppError {
              and try again.\n{tail}"
         ));
     }
-    if lower.contains("out of memory") || lower.contains("cuda") {
+    // Not a bare "cuda": the engine's banner says "running on: CUDA" on every
+    // GPU machine, which made every failure there look like this one.
+    if lower.contains("out of memory") || lower.contains("cudaerrormemoryallocation") {
         return AppError::msg(format!(
             "The transcription engine ran out of graphics memory. Close other GPU-heavy \
              apps and try again.\n{tail}"
@@ -253,6 +260,12 @@ fn exit_error(model: &str, status: &str, tail: &str) -> AppError {
     AppError::msg(format!(
         "The transcription engine exited with {status}.\n{tail}"
     ))
+}
+
+/// The engine's last word on a run that got all the way through.
+fn reports_finished(tail: &str) -> bool {
+    tail.lines()
+        .any(|line| line.trim_start().starts_with("Operation finished in:"))
 }
 
 fn run_id() -> String {
@@ -485,6 +498,25 @@ mod tests {
         });
         assert_eq!(phase, Phase::Transcribing);
         assert_eq!(fraction, 1.0);
+    }
+
+    #[test]
+    fn recognises_a_run_that_finished() {
+        assert!(reports_finished(REAL_OUTPUT));
+        assert!(!reports_finished(
+            "Standalone Faster-Whisper-XXL r245.4 running on: CUDA\nStarting to process: x.mp4"
+        ));
+    }
+
+    #[test]
+    fn the_cuda_banner_alone_is_not_an_out_of_memory_error() {
+        let tail = "Standalone Faster-Whisper-XXL r245.4 running on: CUDA\nStarting to process: x.mp4";
+        let message = exit_error("small", "exit code: 1", tail).to_string();
+        assert!(!message.contains("graphics memory"), "{message}");
+
+        let tail = "RuntimeError: CUDA failed with error out of memory";
+        let message = exit_error("small", "exit code: 1", tail).to_string();
+        assert!(message.contains("graphics memory"), "{message}");
     }
 
     #[test]

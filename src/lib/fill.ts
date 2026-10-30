@@ -398,7 +398,16 @@ export function buildSystemPrompt(input: PromptInput): string {
   return parts.join("\n\n");
 }
 
-export function buildUserPrompt(input: PromptInput): string {
+/**
+ * The standing picture of the project — brief, beats, cast — as prompt
+ * sections, each omitted when empty. Shared with the chat panel so both read
+ * the project the same way.
+ */
+export function renderProjectContext(input: {
+  brief: string;
+  beats: string[];
+  speakers: Speaker[];
+}): string[] {
   const sections: string[] = [];
 
   const brief = input.brief.trim();
@@ -424,6 +433,12 @@ export function buildUserPrompt(input: PromptInput): string {
     });
     sections.push(`## Characters\n${cast.join("\n")}`);
   }
+
+  return sections;
+}
+
+export function buildUserPrompt(input: PromptInput): string {
+  const sections = renderProjectContext(input);
 
   const scenes = scenesIn(input.transcript).filter((s) => oneLine(s.note ?? ""));
   if (scenes.length > 0) {

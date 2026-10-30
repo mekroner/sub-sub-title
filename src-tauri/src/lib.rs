@@ -1,10 +1,12 @@
 mod ai;
 mod beats;
+mod chat;
 mod dictionary;
 mod engine;
 mod error;
 mod files;
 mod fill;
+mod ghost;
 mod media;
 mod project_state;
 mod proofread;
@@ -22,6 +24,8 @@ pub fn run() {
         .manage(spelling::SpellState::default())
         .manage(proofread::ProofreadState::default())
         .manage(transcribe::TranscribeState::default())
+        .manage(ghost::GhostState::default())
+        .manage(chat::ChatState::default())
         .setup(|app| {
             #[cfg(debug_assertions)]
             {
@@ -55,6 +59,10 @@ pub fn run() {
             ai::list_models,
             beats::ai_story_beats,
             fill::ai_fill,
+            ghost::ai_ghost,
+            ghost::cancel_ghost,
+            chat::ai_chat,
+            chat::cancel_chat,
             render::render_burn_in,
             render::cancel_render,
             spelling::check_cues,

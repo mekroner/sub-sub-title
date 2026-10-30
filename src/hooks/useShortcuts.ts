@@ -32,6 +32,7 @@ export interface ShortcutActions {
   redo: () => void;
   zoom: (direction: number) => void;
   toggleFollow: () => void;
+  toggleGhost: () => void;
   showHelp: () => void;
 }
 
@@ -146,6 +147,9 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
           break;
         case "toggleFollow":
           a.toggleFollow();
+          break;
+        case "toggleGhost":
+          a.toggleGhost();
           break;
         case "showHelp":
           a.showHelp();

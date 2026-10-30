@@ -22,6 +22,13 @@ import {
   MIN_SIDE_WIDTH,
   SideResizer,
 } from "./components/SideResizer";
+import {
+  DEFAULT_CHAT_HEIGHT,
+  MAX_CHAT_HEIGHT,
+  MIN_CHAT_HEIGHT,
+  PanelResizer,
+} from "./components/PanelResizer";
+import { ChatPanel } from "./components/ChatPanel";
 import { MenuBar } from "./components/MenuBar";
 import type { Menu, MenuEntry } from "./components/MenuBar";
 import { ContextMenu } from "./components/ContextMenu";
@@ -35,10 +42,12 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { usePasteText } from "./hooks/usePasteText";
 import { useCueSelection } from "./hooks/useCueSelection";
 import { useSpellcheck } from "./hooks/useSpellcheck";
+import { useGhostCompletion } from "./hooks/useGhostCompletion";
 
 import * as api from "./lib/api";
 import { errorMessage } from "./lib/api";
 import { buildAss } from "./lib/ass";
+import { resolveChatModel } from "./lib/chat";
 import {
   mergeImportedSpeakers,
   parseSrt,
@@ -121,6 +130,15 @@ const DEFAULT_SETTINGS: Settings = {
   fillLinesAfter: 4,
   fillTakes: 3,
   fillLatitude: "open",
+  ghostEnabled: true,
+  ghostModel: "google/gemini-2.5-flash-lite",
+  ghostDelayMs: 350,
+  ghostLinesBefore: 10,
+  ghostLinesAfter: 2,
+  chatLinesBefore: 10,
+  chatModels: ["anthropic/claude-sonnet-4.5"],
+  chatModel: "",
+  chatEffort: "",
   fontName: "Arial",
   fontSize: 48,
   bold: false,
@@ -202,6 +220,9 @@ export default function App() {
   // Stored widths are not clamped on write, so an older range cannot outlive it.
   const [sideWidth, setSideWidth] = useState(() =>
     clamp(readStored("sideWidth", DEFAULT_SIDE_WIDTH), MIN_SIDE_WIDTH, MAX_SIDE_WIDTH),
+  );
+  const [chatHeight, setChatHeight] = useState(() =>
+    clamp(readStored("chatHeight", DEFAULT_CHAT_HEIGHT), MIN_CHAT_HEIGHT, MAX_CHAT_HEIGHT),
   );
   const [follow, setFollow] = useState(true);
 
@@ -314,6 +335,7 @@ export default function App() {
   useEffect(() => writeStored("muted", muted ? 1 : 0), [muted]);
   useEffect(() => writeStored("playbackRate", playbackRate), [playbackRate]);
   useEffect(() => writeStored("sideWidth", sideWidth), [sideWidth]);
+  useEffect(() => writeStored("chatHeight", chatHeight), [chatHeight]);
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
@@ -1240,6 +1262,28 @@ export default function App() {
     [settings, notify],
   );
 
+  // --- Autocomplete -------------------------------------------------------
+  const toggleGhost = useCallback(() => {
+    const on = !settings.ghostEnabled;
+    patchSettings({ ghostEnabled: on });
+    notify(
+      on
+        ? apiKeySet
+          ? "Cue autocomplete on."
+          : "Cue autocomplete on — add an OpenRouter key in Settings to use it."
+        : "Cue autocomplete off.",
+    );
+  }, [settings.ghostEnabled, apiKeySet, patchSettings, notify]);
+
+  const ghost = useGhostCompletion({
+    cues,
+    speakers,
+    settings,
+    apiKeySet,
+    onToggle: toggleGhost,
+    onError: (message) => notify(message, "error"),
+  });
+
   /**
    * Opens on the selection. A selection holding an empty cue is there to be
    * filled; anything else most likely wants the story carried on after it.
@@ -1587,6 +1631,7 @@ export default function App() {
       redo,
       zoom: zoomBy,
       toggleFollow: () => setFollow((f) => !f),
+      toggleGhost,
       showHelp: () => setShowHelp(true),
     },
     !modalOpen && !menuOpen && !contextMenu,
@@ -2099,6 +2144,14 @@ export default function App() {
             api.saveSettings(next).catch((e) => notify(errorMessage(e), "error"));
           },
         },
+        {
+          kind: "item",
+          label: "Autocomplete cue text",
+          accelerator: "Ctrl+Shift+Space",
+          detail: apiKeySet ? undefined : "Add an OpenRouter key in Settings",
+          checked: settings.ghostEnabled,
+          onSelect: toggleGhost,
+        },
       ],
     },
     {
@@ -2243,6 +2296,33 @@ export default function App() {
             onJump={jumpToSectionId}
             onRenamed={() => setRenamingSectionId(null)}
           />
+
+          <PanelResizer height={chatHeight} onHeight={setChatHeight} />
+
+          <ChatPanel
+            cues={cues}
+            speakers={speakers}
+            sections={sections}
+            brief={project.brief}
+            beats={project.beats}
+            primaryId={primaryId}
+            selectedIds={selectedIds}
+            currentTime={currentTime}
+            models={settings.chatModels}
+            model={resolveChatModel(settings.chatModels, settings.chatModel)}
+            effort={settings.chatEffort}
+            temperature={settings.temperature}
+            linesBefore={settings.chatLinesBefore}
+            apiKeySet={apiKeySet}
+            // The video, not the project path: saving a new project for the
+            // first time gives it a path, and must not wipe the conversation.
+            projectKey={project.videoPath}
+            height={chatHeight}
+            onLinesChange={(lines) => patchSettings({ chatLinesBefore: lines })}
+            onModelChange={(chatModel) => patchSettings({ chatModel })}
+            onEffortChange={(chatEffort) => patchSettings({ chatEffort })}
+            onOpenSettings={() => setShowSettings(true)}
+          />
         </aside>
 
         <section className="list-row">
@@ -2283,6 +2363,7 @@ export default function App() {
             onEditTiming={editTiming}
             onAssignSpeaker={assignSpeaker}
             onToggleThought={toggleThought}
+            ghost={ghost}
           />
         </section>
       </main>

@@ -159,6 +159,23 @@ export interface Settings {
   /** Alternative takes per Fill request. */
   fillTakes: number;
   fillLatitude: FillLatitude;
+  /** Grey autocomplete while typing in a cue. */
+  ghostEnabled: boolean;
+  /** Model for autocomplete — small and cheap, since it runs on every pause. */
+  ghostModel: string;
+  /** Typing pause, in milliseconds, before a suggestion is requested. */
+  ghostDelayMs: number;
+  /** Dialogue lines autocomplete shows the model around the cue. */
+  ghostLinesBefore: number;
+  ghostLinesAfter: number;
+  /** Dialogue lines the chat panel's "Last N lines" button attaches. */
+  chatLinesBefore: number;
+  /** Model ids the chat panel offers. The first is the fallback. */
+  chatModels: string[];
+  /** The chat panel's current pick; resolved by `resolveChatModel`. */
+  chatModel: string;
+  /** "" leaves reasoning to the model. A string, so an unknown value degrades. */
+  chatEffort: string;
   fontName: string;
   fontSize: number;
   bold: boolean;
@@ -292,6 +309,48 @@ export type FillLatitude = "close" | "open" | "wild";
 export interface FillRequest {
   model: string;
   temperature: number;
+  maxTokens: number;
+  system: string;
+  user: string;
+}
+
+/** A stretch of script handed to the chat, captured when it was attached. */
+export interface ChatAttachment {
+  cueCount: number;
+  /** Seconds: the first line's start and the last line's end. */
+  from: number;
+  to: number;
+  /** Rendered in Fill's transcript format. */
+  transcript: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  attachment?: ChatAttachment;
+  /** The cues selected when the message was sent. */
+  selection?: ChatAttachment;
+  /** Absent once a reply has finished normally. */
+  status?: "streaming" | "stopped" | "error";
+}
+
+/** How hard a reasoning model thinks before a chat reply. */
+export type ChatEffort = "low" | "medium" | "high";
+
+/** One chat reply request. Assembled in `lib/chat.ts`. */
+export interface ChatRequest {
+  model: string;
+  /** Ignored by the backend when an effort is set. */
+  temperature: number;
+  maxTokens: number;
+  reasoningEffort?: ChatEffort;
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+}
+
+/** One autocomplete request. Assembled in `lib/ghost.ts`. */
+export interface GhostRequest {
+  model: string;
   maxTokens: number;
   system: string;
   user: string;

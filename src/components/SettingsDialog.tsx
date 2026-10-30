@@ -8,6 +8,7 @@ import {
   setApiKey as storeApiKey,
 } from "../lib/api";
 import { DEFAULT_FILL_GUIDANCE } from "../lib/fill";
+import { MAX_CHAT_LINES } from "../lib/chat";
 
 interface Props {
   settings: Settings;
@@ -27,7 +28,6 @@ export function SettingsDialog({
   const [draft, setDraft] = useState<Settings>(settings);
   const [keyInput, setKeyInput] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [modelFilter, setModelFilter] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [overridingGuidance, setOverridingGuidance] = useState(
@@ -43,10 +43,6 @@ export function SettingsDialog({
       .then(setModels)
       .catch((e) => setError(errorMessage(e)));
   }, []);
-
-  const visibleModels = models
-    .filter((m) => m.id.toLowerCase().includes(modelFilter.toLowerCase()))
-    .slice(0, 60);
 
   const saveKey = async () => {
     setError(null);
@@ -116,44 +112,13 @@ export function SettingsDialog({
               )}
             </div>
 
-            <label className="field">
-              <span>Model</span>
-              <input
-                value={draft.model}
-                onChange={(e) => set("model", e.target.value)}
-                placeholder="anthropic/claude-sonnet-4.5"
-              />
-            </label>
-
-            <label className="field">
-              <span>Filter the model list</span>
-              <input
-                value={modelFilter}
-                placeholder={
-                  models.length ? `${models.length} models available` : "loading…"
-                }
-                onChange={(e) => setModelFilter(e.target.value)}
-              />
-            </label>
-
-            {modelFilter && (
-              <div className="model-list">
-                {visibleModels.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className={m.id === draft.model ? "model selected" : "model"}
-                    onClick={() => set("model", m.id)}
-                  >
-                    <strong>{m.id}</strong>
-                    <span>{m.name}</span>
-                  </button>
-                ))}
-                {visibleModels.length === 0 && (
-                  <p className="hint">No model ids match that filter.</p>
-                )}
-              </div>
-            )}
+            <ModelPicker
+              label="Model"
+              value={draft.model}
+              placeholder="anthropic/claude-sonnet-4.5"
+              models={models}
+              onChange={(id) => set("model", id)}
+            />
 
             <div className="field-grid">
               <label className="field">
@@ -230,6 +195,101 @@ export function SettingsDialog({
                 </div>
               </>
             )}
+          </fieldset>
+
+          <fieldset>
+            <legend>Autocomplete — grey text while typing a cue</legend>
+
+            <label className="field checkbox">
+              <input
+                type="checkbox"
+                checked={draft.ghostEnabled}
+                onChange={(e) => set("ghostEnabled", e.target.checked)}
+              />
+              <span>Suggest how a cue continues as I type (Tab accepts)</span>
+            </label>
+
+            <ModelPicker
+              label="Autocomplete model"
+              value={draft.ghostModel}
+              placeholder="google/gemini-2.5-flash-lite"
+              models={models}
+              disabled={!draft.ghostEnabled}
+              onChange={(id) => set("ghostModel", id)}
+            />
+
+            <div className="field-grid">
+              <label className="field">
+                <span>Pause before suggesting (ms)</span>
+                <input
+                  type="number"
+                  min={100}
+                  max={3000}
+                  step={50}
+                  disabled={!draft.ghostEnabled}
+                  value={draft.ghostDelayMs}
+                  onChange={(e) => set("ghostDelayMs", Number(e.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span>Cues shown before</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={40}
+                  disabled={!draft.ghostEnabled}
+                  value={draft.ghostLinesBefore}
+                  onChange={(e) => set("ghostLinesBefore", Number(e.target.value))}
+                />
+              </label>
+              <label className="field">
+                <span>Cues shown after</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10}
+                  disabled={!draft.ghostEnabled}
+                  value={draft.ghostLinesAfter}
+                  onChange={(e) => set("ghostLinesAfter", Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <p className="hint">
+              A request goes out on every pause in typing, so pick a small, fast,
+              non-reasoning model. At around $0.10 per million input tokens, an hour
+              of steady writing costs a few cents. Typing what the suggestion already
+              shows costs nothing. Ctrl+→ accepts one word, Esc dismisses, and
+              Ctrl+Shift+Space turns it on or off.
+            </p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Chat — the idea panel under Sections</legend>
+
+            <ChatModelList
+              value={draft.chatModels}
+              models={models}
+              onChange={(ids) => set("chatModels", ids)}
+            />
+
+            <div className="field-grid">
+              <label className="field">
+                <span>Lines “Last N” attaches</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_CHAT_LINES}
+                  value={draft.chatLinesBefore}
+                  onChange={(e) => set("chatLinesBefore", Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <p className="hint">
+              The chat panel offers these models and a reasoning effort to switch
+              between as you talk; the first is used when nothing else is picked.
+              With effort on Default it uses the temperature above. It always
+              knows the brief, story beats, speakers and the current section.
+            </p>
           </fieldset>
 
           <fieldset>
@@ -485,5 +545,142 @@ export function SettingsDialog({
         </footer>
       </div>
     </div>
+  );
+}
+
+/** The models the chat panel offers, in order, and a picker to add more. */
+function ChatModelList({
+  value,
+  models,
+  onChange,
+}: {
+  value: string[];
+  models: ModelInfo[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [pending, setPending] = useState("");
+  const id = pending.trim();
+  const canAdd = id !== "" && !value.includes(id);
+
+  const add = () => {
+    if (!canAdd) return;
+    onChange([...value, id]);
+    setPending("");
+  };
+
+  const moveUp = (index: number) =>
+    onChange(value.map((m, i) => (i === index - 1 ? value[index] : i === index ? value[index - 1] : m)));
+
+  return (
+    <>
+      <div className="field">
+        <span>Chat models</span>
+        {value.length === 0 ? (
+          <p className="hint">None yet — add one below to use the chat.</p>
+        ) : (
+          <ul className="chat-model-list">
+            {value.map((m, i) => (
+              <li key={m}>
+                <code>{m}</code>
+                <button
+                  type="button"
+                  className="icon-button"
+                  title="Move up"
+                  disabled={i === 0}
+                  onClick={() => moveUp(i)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  title="Remove"
+                  onClick={() => onChange(value.filter((other) => other !== m))}
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <ModelPicker
+        label="Add a chat model"
+        value={pending}
+        placeholder="openai/gpt-5"
+        models={models}
+        onChange={setPending}
+      />
+      <div className="field-row">
+        <button type="button" disabled={!canAdd} onClick={add}>
+          Add model
+        </button>
+        {id !== "" && !canAdd && <span className="hint">Already in the list.</span>}
+      </div>
+    </>
+  );
+}
+
+/** A model id field, with a filter over OpenRouter's catalogue to pick from. */
+function ModelPicker({
+  label,
+  value,
+  placeholder,
+  models,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  models: ModelInfo[];
+  disabled?: boolean;
+  onChange: (id: string) => void;
+}) {
+  const [filter, setFilter] = useState("");
+  const visible = models
+    .filter((m) => m.id.toLowerCase().includes(filter.toLowerCase()))
+    .slice(0, 60);
+
+  return (
+    <>
+      <label className="field">
+        <span>{label}</span>
+        <input
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+      </label>
+
+      <label className="field">
+        <span>Filter the model list</span>
+        <input
+          value={filter}
+          disabled={disabled}
+          placeholder={models.length ? `${models.length} models available` : "loading…"}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+      </label>
+
+      {filter && !disabled && (
+        <div className="model-list">
+          {visible.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={m.id === value ? "model selected" : "model"}
+              onClick={() => onChange(m.id)}
+            >
+              <strong>{m.id}</strong>
+              <span>{m.name}</span>
+            </button>
+          ))}
+          {visible.length === 0 && <p className="hint">No model ids match that filter.</p>}
+        </div>
+      )}
+    </>
   );
 }

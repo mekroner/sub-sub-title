@@ -38,6 +38,7 @@ export type ShortcutCommand =
   | { type: "redo" }
   | { type: "zoom"; direction: number }
   | { type: "toggleFollow" }
+  | { type: "toggleGhost" }
   | { type: "showHelp" };
 
 export interface KeyLike {
@@ -107,6 +108,9 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
         return shift ? { type: "redo" } : { type: "undo" };
       case "KeyY":
         return { type: "redo" };
+      case "Space":
+        // Plain Ctrl+Space is left alone; IMEs use it to switch input.
+        return shift ? { type: "toggleGhost" } : null;
       default:
         // Every other Ctrl chord belongs to the webview.
         return null;

@@ -23,6 +23,10 @@ const SHORTCUTS: Array<[string, string]> = [
   ["PgUp / PgDn", "Jump to the previous / next section"],
   ["Ctrl + G", "Fill the selected cues with AI, or continue after them"],
   ["Ctrl + Enter", "Write, from anywhere inside the Fill dialog"],
+  ["Tab", "Accept the grey autocomplete suggestion in a cue"],
+  ["Ctrl + →", "Accept the next word of the suggestion"],
+  ["Esc (in a cue)", "Dismiss the suggestion until you type again"],
+  ["Ctrl + Shift + Space", "Turn cue autocomplete on / off"],
   ["Ctrl + N", "New project"],
   ["Ctrl + O", "Open a project"],
   ["Ctrl + S", "Save the project"],
@@ -70,7 +74,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
           </table>
           <p className="hint">
             Shortcuts are inert while a text box has focus, so typing in a cue never
-            triggers them.
+            triggers them — except the autocomplete keys, which act inside a cue.
           </p>
         </div>
       </div>

@@ -1,11 +1,13 @@
 /** Typed wrappers around the Rust commands. */
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AppState,
+  ChatRequest,
   CueIssues,
   EngineStatus,
   FillRequest,
+  GhostRequest,
   MediaInfo,
   ModelInfo,
   Peaks,
@@ -67,7 +69,32 @@ export const aiStoryBeats = (request: StoryBeatsRequest) =>
 /** Sends a prompt built by `lib/fill.ts`; returns the model's raw reply. */
 export const aiFill = (request: FillRequest) => invoke<string>("ai_fill", { request });
 
-export const listModels = () => invoke<ModelInfo[]>("list_models");
+/** Sends a prompt built by `lib/ghost.ts`; returns the model's raw reply. */
+export const aiGhost = (request: GhostRequest) => invoke<string>("ai_ghost", { request });
+
+/** Abandons the in-flight autocomplete request, if any. */
+export const cancelGhost = () => invoke<void>("cancel_ghost");
+
+/** The error a superseded or cancelled autocomplete request rejects with. */
+export const GHOST_CANCELLED = "cancelled";
+
+/**
+ * Streams a reply to a conversation built by `lib/chat.ts`, handing each piece
+ * of text to `onDelta` as it arrives. Settles when the reply is complete.
+ */
+export function aiChat(request: ChatRequest, onDelta: (text: string) => void) {
+  const onEvent = new Channel<{ kind: "delta"; text: string }>();
+  onEvent.onmessage = (event) => onDelta(event.text);
+  return invoke<void>("ai_chat", { request, onEvent });
+}
+
+/** Stops the reply being streamed, if any. */
+export const cancelChat = () => invoke<void>("cancel_chat");
+
+/** The error a stopped chat reply rejects with. */
+export const CHAT_CANCELLED = "cancelled";
+
+export const listModels =() => invoke<ModelInfo[]>("list_models");
 
 export const renderBurnIn = (args: {
   videoPath: string;

@@ -6,6 +6,8 @@ import { lineStats } from "../lib/text";
 import { thoughtColor } from "../lib/colors";
 import { issueSeverity, issueTooltip } from "../lib/issues";
 import { selectModeOf, type SelectMode } from "../hooks/useCueSelection";
+import type { GhostBinding } from "../hooks/useGhostCompletion";
+import { GhostTextarea } from "./GhostTextarea";
 
 interface Props {
   cues: Cue[];
@@ -28,6 +30,8 @@ interface Props {
   onEditTiming: (id: string, start: number, end: number) => void;
   onAssignSpeaker: (id: string, speakerId: string | null) => void;
   onToggleThought: (id: string) => void;
+  /** Grey autocomplete in the focused cue. */
+  ghost: GhostBinding;
 }
 
 /** Above this characters-per-second a caption is hard to read; flag it. */
@@ -51,6 +55,7 @@ export function CueList({
   onEditTiming,
   onAssignSpeaker,
   onToggleThought,
+  ghost,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -206,16 +211,15 @@ export function CueList({
                 </button>
               </div>
 
-              <textarea
+              <GhostTextarea
+                cueId={cue.id}
                 className={isThought ? "cue-text thought" : "cue-text"}
                 value={cue.text}
-                rows={Math.min(4, cue.text.split("\n").length || 1)}
-                spellCheck={false}
-                onChange={(e) => onEditText(cue.id, e.target.value)}
+                ghost={ghost.ghost?.cueId === cue.id ? ghost.ghost.text : ""}
+                pending={ghost.pendingCueId === cue.id}
+                binding={ghost}
+                onChange={(text) => onEditText(cue.id, text)}
                 onFocus={() => onSelect(cue.id, "replace")}
-                // Let the textarea own its keys; the global shortcuts must not
-                // steal Space, digits, arrows or Enter while typing.
-                onKeyDown={(e) => e.stopPropagation()}
               />
 
               <div
