@@ -10,7 +10,7 @@ import { VideoPane } from "./components/VideoPane";
 import { MAX_ZOOM, MIN_ZOOM, WaveformPane } from "./components/WaveformPane";
 import { CueList } from "./components/CueList";
 import { SpeakerPanel } from "./components/SpeakerPanel";
-import { SectionPanel } from "./components/SectionPanel";
+import { StoryPanel } from "./components/StoryPanel";
 import { FillDialog } from "./components/FillDialog";
 import type { AcceptedFill } from "./components/FillDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -762,7 +762,7 @@ export default function App() {
     [update],
   );
 
-  /** Text for the chat box, set from elsewhere — the Sections panel's ✦ Story. */
+  /** Text for the chat box, set from elsewhere — the Story panel's ✦ Story. */
   const [chatPrefill, setChatPrefill] = useState<{ text: string; nonce: number } | null>(null);
 
   /**
@@ -2319,7 +2319,9 @@ export default function App() {
             onApplyDetected={applyDetectedSpeakers}
           />
 
-          <SectionPanel
+          <StoryPanel
+            brief={project.brief}
+            onBriefChange={setBrief}
             sections={sections}
             currentTime={currentTime}
             selectedId={selectedSectionId}

@@ -97,7 +97,7 @@ interface Props {
   onOpenSettings: () => void;
   /** Story beats with a time; `/story` writes them, `/continue` heads for them. */
   timedBeats: TimedBeat[];
-  /** Text to put in the chat box, e.g. `/story ` from the Sections panel. */
+  /** Text to put in the chat box, e.g. `/story ` from the Story panel. */
   prefill: { text: string; nonce: number } | null;
   /** A run changed the project; every call with one `runId` is one undo step. */
   onAgentPatch: (patch: Partial<Pick<Project, "cues" | "sections" | "beats" | "timedBeats">>, runId: string) => void;
@@ -214,7 +214,7 @@ export function ChatPanel({
 
   useEffect(() => reset, [projectKey, reset]);
 
-  // ✦ Story in the Sections panel: the command, ready for a direction.
+  // ✦ Story in the Story panel: the command, ready for a direction.
   useEffect(() => {
     if (!prefill) return;
     setDraft(prefill.text);

@@ -650,11 +650,11 @@ body.resizing {
   /*
    * A cap rather than a share of the column: the speaker list should not grow
    * past what it needs. The percentage guards a short window, where the pixel
-   * cap alone would leave the sections panel with nothing.
+   * cap alone would leave the story panel with nothing.
    */
   max-height: min(360px, 55%);
 }
-.section-panel {
+.story-panel {
   /* Takes the rest of the column, which is where scene notes open up. */
   flex: 1;
   min-height: 0;
@@ -696,7 +696,7 @@ body.resizing-rows {
 .chat-panel {
   flex: none;
   min-height: 140px;
-  /* A cap as a share, so a short window still leaves Sections some room. */
+  /* A cap as a share, so a short window still leaves the story panel some room. */
   max-height: 70%;
 }
 .chat-log {
@@ -1068,6 +1068,30 @@ button.chat-chip-label:hover {
   min-height: 0;
 }
 
+.story-panel .panel-header {
+  justify-content: flex-start;
+  gap: 10px;
+}
+.story-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.story-brief {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+}
+.story-brief textarea {
+  /* The panel already sizes itself; the brief takes all of it. */
+  flex: 1;
+  min-height: 60px;
+  resize: none;
+  line-height: 1.45;
+}
 .section-list {
   overflow-y: auto;
   padding: 6px 10px;

@@ -14,7 +14,7 @@ interface Props {
 }
 
 /**
- * The divider between the Sections panel and the chat below it. Dragging it up
+ * The divider between the Story panel and the chat below it. Dragging it up
  * makes the chat taller.
  *
  * Like `SideResizer`, it works from the pointer's delta and never measures the

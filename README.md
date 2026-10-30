@@ -429,7 +429,7 @@ never about approving particular lines. **Stop** works there too.
 
 ## Story outline — timed beats and /story
 
-Each row in the Sections panel opens with **▸**: the section's note, and its
+Each row on the **Sections** tab of the Story panel opens with **▸**: the section's note, and its
 **timed story beats** — what happens, or should happen, at a moment. **+ Beat**
 adds one at the playhead (or the section's start); click a beat's time to jump
 there and retype it. Beats belong to their moment, not to a flag, so moving or
@@ -437,7 +437,7 @@ removing a section never loses one. The note and the beats of the stretch being
 written go along with `/continue`, Fill and the chat, so new lines head where the
 story is meant to go.
 
-**/story** (or **✦ Story** in the Sections header, which puts it into the chat
+**/story** (or **✦ Story** in the Story panel header, which puts it into the chat
 box) lets a story agent work on the outline. It reads the script section by
 section, looks at key frames when a vision model is set, and asks you about the
 big forks — what the story is about, where it ends, what a character wants —
