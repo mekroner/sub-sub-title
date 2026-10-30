@@ -17,6 +17,12 @@ export interface UpdateOptions {
    * in one cue) collapse into a single undo entry instead of one per keystroke.
    */
   mergeKey?: string;
+  /**
+   * How long after the last update a same-key update still merges. A
+   * `/continue` run passes Infinity: its turns are seconds apart, and it should
+   * still undo as one step unless the writer edits in between.
+   */
+  mergeWindowMs?: number;
   /** Skip the history stack entirely — used when loading a project. */
   replace?: boolean;
 }
@@ -58,7 +64,7 @@ export function useProjectHistory(initial: Project = emptyProject) {
           options.mergeKey !== undefined &&
           lastMerge.current !== null &&
           lastMerge.current.key === options.mergeKey &&
-          now - lastMerge.current.at < MERGE_WINDOW_MS;
+          now - lastMerge.current.at < (options.mergeWindowMs ?? MERGE_WINDOW_MS);
 
         lastMerge.current = options.mergeKey
           ? { key: options.mergeKey, at: now }

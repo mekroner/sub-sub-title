@@ -16,17 +16,17 @@ use crate::settings::read_api_key;
 
 /// The error a stopped or superseded reply returns. The frontend marks the
 /// reply as stopped rather than showing it.
-const CANCELLED: &str = "cancelled";
+pub(crate) const CANCELLED: &str = "cancelled";
 
 /// Room for a long, list-heavy answer after a model's thinking, which counts
 /// against the same budget, and a ceiling on a malformed request.
-const MAX_TOKENS_CEILING: u32 = 16_000;
-const MIN_TOKENS: u32 = 256;
+pub(crate) const MAX_TOKENS_CEILING: u32 = 16_000;
+pub(crate) const MIN_TOKENS: u32 = 256;
 
 /// The reasoning efforts the chat panel offers.
-const EFFORTS: [&str; 3] = ["low", "medium", "high"];
+pub(crate) const EFFORTS: [&str; 3] = ["low", "medium", "high"];
 
-type AbortFn = Box<dyn FnOnce() + Send>;
+pub(crate) type AbortFn = Box<dyn FnOnce() + Send>;
 
 #[derive(Default)]
 pub struct ChatState {
@@ -35,7 +35,7 @@ pub struct ChatState {
 
 impl ChatState {
     /// Stores the abort for a new reply, aborting whichever one it replaces.
-    fn replace(&self, abort: Option<AbortFn>) {
+    pub(crate) fn replace(&self, abort: Option<AbortFn>) {
         let previous = {
             let mut slot = self.in_flight.lock().unwrap_or_else(|p| p.into_inner());
             std::mem::replace(&mut *slot, abort)

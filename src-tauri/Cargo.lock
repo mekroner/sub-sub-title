@@ -6191,6 +6191,7 @@ dependencies = [
 name = "sub-sub-title"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "encoding_rs",
  "futures-util",
  "harper-core",

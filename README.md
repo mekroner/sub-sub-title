@@ -397,7 +397,28 @@ toast until its settings change. The prompt is built in `src/lib/ghost.ts`.
 The Chat panel under Sections is a conversation with a model that already knows
 the project: the brief, story beats, speakers with their voice notes, and the
 section you are in. Those are rebuilt on every message, so edits show up at once.
-Nothing it writes goes into the script.
+Nothing it writes goes into the script — except when you ask it to.
+
+**/continue** hands it the next stretch of the timeline to write itself:
+`/continue 45 Ben finally admits it` gives it the 45 seconds from the playhead
+(30 when you leave the number out) and your direction. It reads the script
+around the window, then adds, edits, moves and deletes lines inside it — never
+outside — checking its own reading speed as it goes. Changes land on the
+timeline live and the chat lists each one; when it is done the whole run is a
+single **Ctrl+Z**. **Stop** ends a run early and keeps what it did. The
+conversation remembers a one-line summary, so you can talk about what it wrote.
+It needs a chat model that supports tool calling on OpenRouter. The tools and
+prompt live in `src/lib/agent.ts`.
+
+Pick a **vision model** under Chat in Settings (the list shows only models that
+take images) and a run can also look at the video. It grabs a frame with ffmpeg
+and has the vision model describe it: setting, who is in shot, what they are
+doing, the mood. It gets up to 6 looks per run. The descriptions are hints: the
+run is told they can be wrong and that the script, brief and your direction
+always win, and a failed or refused look is skipped rather than retried. Each
+look shows as **👁 Looked at…** in the chat; click it to read the description.
+Frames go to OpenRouter and the model's provider; only the text reaches the run.
+With no vision model set, `/continue` works from the script alone.
 
 **📎 Last N** attaches the N lines up to and including the selected cue, or up
 to the playhead when nothing is selected. The lines appear as a chip over the

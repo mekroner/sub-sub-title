@@ -176,6 +176,8 @@ export interface Settings {
   chatModel: string;
   /** "" leaves reasoning to the model. A string, so an unknown value degrades. */
   chatEffort: string;
+  /** Model that describes video frames for `/continue`. "" turns looking off. */
+  visionModel: string;
   fontName: string;
   fontSize: number;
   bold: boolean;
@@ -210,6 +212,8 @@ export interface Settings {
 export interface ModelInfo {
   id: string;
   name: string;
+  /** Takes images as input, so it can describe a frame. */
+  vision: boolean;
 }
 
 export interface RenderProgress {
@@ -333,6 +337,57 @@ export interface ChatMessage {
   selection?: ChatAttachment;
   /** Absent once a reply has finished normally. */
   status?: "streaming" | "stopped" | "error";
+  /** Set on the reply to a `/continue` run: what it did to the script. */
+  agent?: AgentRun;
+}
+
+/** One thing a `/continue` run did, as the chat log lists it. */
+export interface AgentStep {
+  kind: "read" | "add" | "edit" | "move" | "delete" | "look" | "error";
+  label: string;
+  /** More to read on demand: what a look saw. */
+  detail?: string;
+}
+
+export interface AgentRun {
+  /** Seconds: the window the run was allowed to change. */
+  from: number;
+  to: number;
+  steps: AgentStep[];
+  /** The model's closing words, once it has finished. */
+  summary?: string;
+}
+
+/** A tool call as OpenRouter returns it; `arguments` is a JSON string. */
+export interface AgentToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/** The assistant's side of a tool turn, sent back exactly as it came. */
+export interface AgentReply {
+  role: "assistant";
+  content: string | null;
+  tool_calls?: AgentToolCall[];
+  [extra: string]: unknown;
+}
+
+/** One turn of a `/continue` conversation, in OpenAI's shape. */
+export type AgentMessage =
+  | { role: "system" | "user"; content: string }
+  | AgentReply
+  | { role: "tool"; tool_call_id: string; content: string };
+
+/** One turn of a `/continue` run. Assembled in `lib/agent.ts`. */
+export interface AgentRequest {
+  model: string;
+  /** Ignored by the backend when an effort is set. */
+  temperature: number;
+  maxTokens: number;
+  reasoningEffort?: ChatEffort;
+  messages: AgentMessage[];
+  tools: unknown[];
 }
 
 /** How hard a reasoning model thinks before a chat reply. */

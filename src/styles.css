@@ -777,6 +777,39 @@ button.chat-edit:hover {
   color: var(--text-dim);
   font-style: italic;
 }
+.agent-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.agent-steps {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  font-size: 12px;
+}
+.agent-step + .agent-step {
+  margin-top: 2px;
+}
+.agent-step.read,
+.agent-step.error {
+  color: var(--text-dim);
+}
+.agent-step.error {
+  font-style: italic;
+}
+.agent-step summary {
+  cursor: pointer;
+}
+.agent-detail {
+  margin: 2px 0 4px 14px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+.agent-summary {
+  margin: 6px 0 0;
+}
 .chat-thinking {
   font-size: 11px;
   color: var(--text-dim);

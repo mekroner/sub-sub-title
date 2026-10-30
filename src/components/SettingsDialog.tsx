@@ -290,6 +290,21 @@ export function SettingsDialog({
               With effort on Default it uses the temperature above. It always
               knows the brief, story beats, speakers and the current section.
             </p>
+
+            <ModelPicker
+              label="Vision model — lets /continue look at frames"
+              value={draft.visionModel}
+              placeholder="Empty: /continue works from the script alone"
+              models={models.filter((m) => m.vision)}
+              onChange={(id) => set("visionModel", id)}
+            />
+            <p className="hint">
+              During a /continue run the model can grab a frame from the video and
+              have this model describe it, to fit its lines to what is on screen.
+              The list shows only models that take images. Frames are sent to
+              OpenRouter and the model's provider. A cheap, fast model is plenty;
+              descriptions are treated as hints, and a refusal is simply skipped.
+            </p>
           </fieldset>
 
           <fieldset>

@@ -228,7 +228,205 @@ pub async fn chat_completion_with_stop(
         .ok_or_else(|| AppError::msg("OpenRouter returned no completion."))
 }
 
-async fn send_chat(key: &str, body: &ChatRequest<'_>) -> AppResult<reqwest::Response> {
+/// A request whose messages carry more than a role and a string — tool turns,
+/// or an image alongside the text — so they pass through as JSON.
+#[derive(Serialize)]
+struct RawRequest<'a> {
+    model: &'a str,
+    messages: &'a [serde_json::Value],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<&'a [serde_json::Value]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<Reasoning<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<ProviderPrefs>,
+}
+
+/// Routes only to providers that honour every parameter sent — here, `tools`.
+#[derive(Serialize)]
+struct ProviderPrefs {
+    require_parameters: bool,
+}
+
+#[derive(Deserialize)]
+struct RawResponse {
+    choices: Option<Vec<RawChoice>>,
+    error: Option<ApiError>,
+}
+
+#[derive(Deserialize)]
+struct RawChoice {
+    message: Option<serde_json::Value>,
+    /// OpenRouter's normalised reason: "stop", "length", "content_filter"…
+    finish_reason: Option<String>,
+    /// The provider's own, e.g. Gemini's "SAFETY".
+    native_finish_reason: Option<String>,
+}
+
+/// The assistant's message, and why it stopped where it did.
+pub(crate) struct RawReply {
+    pub message: serde_json::Value,
+    pub finish_reason: Option<String>,
+    pub native_finish_reason: Option<String>,
+}
+
+/// One turn of a conversation with tools: the assistant's message exactly as
+/// OpenRouter returned it, tool calls and any reasoning included, so it can be
+/// sent back unchanged on the next turn.
+pub async fn chat_completion_tools(
+    key: &str,
+    model: &str,
+    messages: &[serde_json::Value],
+    tools: &[serde_json::Value],
+    temperature: f32,
+    max_tokens: u32,
+    effort: Option<&str>,
+) -> AppResult<serde_json::Value> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(AppError::msg("No model selected. Choose one in Settings."));
+    }
+    let body = RawRequest {
+        model,
+        messages,
+        tools: Some(tools),
+        // As with `with_effort`: reasoning models fix their own temperature.
+        temperature: effort.is_none().then(|| temperature.clamp(0.0, 2.0)),
+        max_tokens,
+        // Some providers refuse a tool turn whose thinking was not sent back.
+        reasoning: effort.map(|effort| Reasoning {
+            effort,
+            exclude: false,
+        }),
+        provider: Some(ProviderPrefs {
+            require_parameters: true,
+        }),
+    };
+    let resp = send_chat(key, &body).await?;
+    let status = resp.status();
+    let text = resp.text().await?;
+    reply_message(&text, status)
+}
+
+/// A single completion from messages built as JSON — an image with its
+/// question, say — returning the assistant's text. A reply with no text is an
+/// error saying why, as far as the response tells.
+pub async fn chat_completion_raw(
+    key: &str,
+    model: &str,
+    messages: &[serde_json::Value],
+    temperature: f32,
+    max_tokens: u32,
+) -> AppResult<String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(AppError::msg("No model selected. Choose one in Settings."));
+    }
+    let body = RawRequest {
+        model,
+        messages,
+        tools: None,
+        temperature: Some(temperature.clamp(0.0, 2.0)),
+        max_tokens,
+        reasoning: None,
+        provider: None,
+    };
+    let resp = send_chat(key, &body).await?;
+    let status = resp.status();
+    let text = resp.text().await?;
+    let reply = reply_choice(&text, status)?;
+    let content = message_text(&reply.message);
+    if content.is_empty() {
+        return Err(AppError::msg(why_empty(&reply)));
+    }
+    Ok(content)
+}
+
+/// Why a reply came back without text, in words a writer can act on.
+pub(crate) fn why_empty(reply: &RawReply) -> String {
+    let refusal = reply.message["refusal"].as_str().map(str::trim).unwrap_or("");
+    if !refusal.is_empty() {
+        return format!("The model refused: {refusal}");
+    }
+    let finish = reply.finish_reason.as_deref().unwrap_or("");
+    let native = reply.native_finish_reason.as_deref().unwrap_or("");
+    let blocked = ["SAFETY", "PROHIBITED", "BLOCK", "RECITATION"]
+        .iter()
+        .any(|word| native.to_ascii_uppercase().contains(word));
+    if finish == "content_filter" || blocked {
+        let detail = if native.is_empty() { finish } else { native };
+        return format!("The provider's content filter blocked the reply ({detail}).");
+    }
+    if finish == "length" || native.eq_ignore_ascii_case("max_tokens") {
+        return "The model ran out of tokens before it answered — a reasoning model may have spent them all thinking.".into();
+    }
+    match (finish, native) {
+        ("", "") => "The model returned nothing, and gave no reason.".into(),
+        (finish, "") | ("", finish) => format!("The model returned nothing (stop reason: {finish})."),
+        (finish, native) => format!("The model returned nothing (stop reason: {finish} / {native})."),
+    }
+}
+
+/// A message's text, whether `content` is a string or a list of parts.
+pub(crate) fn message_text(message: &serde_json::Value) -> String {
+    match &message["content"] {
+        serde_json::Value::String(text) => text.trim().to_string(),
+        serde_json::Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("")
+            .trim()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+/// The assistant message in a tool-turn response, or why there is none.
+pub(crate) fn reply_message(
+    text: &str,
+    status: reqwest::StatusCode,
+) -> AppResult<serde_json::Value> {
+    reply_choice(text, status).map(|reply| reply.message)
+}
+
+/// `reply_message`, with the reasons the reply stopped.
+pub(crate) fn reply_choice(text: &str, status: reqwest::StatusCode) -> AppResult<RawReply> {
+    let parsed: RawResponse = serde_json::from_str(text).map_err(|_| {
+        AppError::msg(format!(
+            "Unexpected response from OpenRouter (HTTP {status}): {}",
+            text.chars().take(300).collect::<String>()
+        ))
+    })?;
+    if let Some(err) = parsed.error {
+        return Err(AppError::msg(format!(
+            "OpenRouter error: {}",
+            err.message.unwrap_or_else(|| status.to_string())
+        )));
+    }
+    if !status.is_success() {
+        return Err(AppError::msg(format!("OpenRouter returned HTTP {status}.")));
+    }
+    let choice = parsed.choices.and_then(|c| c.into_iter().next());
+    let Some(RawChoice {
+        message: Some(message),
+        finish_reason,
+        native_finish_reason,
+    }) = choice.filter(|c| c.message.as_ref().is_some_and(|m| m.is_object()))
+    else {
+        return Err(AppError::msg("OpenRouter returned no completion."));
+    };
+    Ok(RawReply {
+        message,
+        finish_reason,
+        native_finish_reason,
+    })
+}
+
+async fn send_chat(key: &str, body: &impl Serialize) -> AppResult<reqwest::Response> {
     Ok(http_client()?
         .post(format!("{OPENROUTER_BASE}/chat/completions"))
         .bearer_auth(key)
@@ -362,6 +560,8 @@ pub(crate) fn parse_sse_line(line: &str) -> SseEvent {
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
+    /// Takes images as input, so it can describe a frame.
+    pub vision: bool,
 }
 
 #[derive(Deserialize)]
@@ -373,6 +573,21 @@ struct ModelsResponse {
 struct ModelEntry {
     id: String,
     name: Option<String>,
+    architecture: Option<Architecture>,
+}
+
+#[derive(Deserialize)]
+struct Architecture {
+    #[serde(default)]
+    input_modalities: Vec<String>,
+}
+
+impl ModelEntry {
+    fn takes_images(&self) -> bool {
+        self.architecture
+            .as_ref()
+            .is_some_and(|a| a.input_modalities.iter().any(|m| m == "image"))
+    }
 }
 
 /// Lets Settings offer a real picker instead of relying on a hardcoded model id
@@ -401,6 +616,7 @@ pub async fn list_models() -> AppResult<Vec<ModelInfo>> {
         .into_iter()
         .map(|m| ModelInfo {
             name: m.name.clone().unwrap_or_else(|| m.id.clone()),
+            vision: m.takes_images(),
             id: m.id,
         })
         .collect();
@@ -410,7 +626,77 @@ pub async fn list_models() -> AppResult<Vec<ModelInfo>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_candidates, parse_sse_line, ChatRequest, ChatTurn, SseEvent, SseLines};
+    use super::{
+        message_text, parse_candidates, parse_sse_line, reply_choice, reply_message, why_empty,
+        ChatRequest, ChatTurn,
+        ModelEntry, SseEvent, SseLines,
+    };
+    use reqwest::StatusCode;
+    use serde_json::json;
+
+    fn empty(body: &str) -> String {
+        why_empty(&reply_choice(body, StatusCode::OK).unwrap())
+    }
+
+    #[test]
+    fn an_empty_reply_says_why() {
+        let length = r#"{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"length"}]}"#;
+        assert!(empty(length).contains("ran out of tokens"));
+
+        let safety = r#"{"choices":[{"message":{"role":"assistant","content":null},
+            "finish_reason":"stop","native_finish_reason":"SAFETY"}]}"#;
+        assert_eq!(empty(safety), "The provider's content filter blocked the reply (SAFETY).");
+
+        let refused = r#"{"choices":[{"message":{"role":"assistant","content":null,
+            "refusal":"I can't describe this image."}}]}"#;
+        assert_eq!(empty(refused), "The model refused: I can't describe this image.");
+
+        let stopped = r#"{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}"#;
+        assert_eq!(empty(stopped), "The model returned nothing (stop reason: stop).");
+
+        let silent = r#"{"choices":[{"message":{"role":"assistant","content":""}}]}"#;
+        assert_eq!(empty(silent), "The model returned nothing, and gave no reason.");
+    }
+
+    #[test]
+    fn message_text_reads_a_string_or_text_parts() {
+        assert_eq!(message_text(&json!({"content": " A kitchen. "})), "A kitchen.");
+        let parts = json!({"content": [{"type": "text", "text": "Two "}, {"type": "text", "text": "people."}]});
+        assert_eq!(message_text(&parts), "Two people.");
+        assert_eq!(message_text(&json!({"content": null})), "");
+    }
+
+    #[test]
+    fn a_model_taking_images_is_marked_for_vision() {
+        let entry = |json: &str| serde_json::from_str::<ModelEntry>(json).unwrap().takes_images();
+        assert!(entry(r#"{"id":"a","architecture":{"input_modalities":["text","image"]}}"#));
+        assert!(!entry(r#"{"id":"b","architecture":{"input_modalities":["text"]}}"#));
+        assert!(!entry(r#"{"id":"c"}"#));
+    }
+
+    #[test]
+    fn a_tool_turn_returns_the_message_verbatim() {
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":null,
+            "tool_calls":[{"id":"t1","type":"function","function":{"name":"read_cues","arguments":"{}"}}]}}]}"#;
+        let got = reply_message(body, StatusCode::OK).unwrap();
+        assert_eq!(got["tool_calls"][0]["function"]["name"], "read_cues");
+        assert!(got["content"].is_null());
+    }
+
+    #[test]
+    fn a_plain_text_turn_is_returned_too() {
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"Done."}}]}"#;
+        assert_eq!(reply_message(body, StatusCode::OK).unwrap()["content"], "Done.");
+    }
+
+    #[test]
+    fn an_error_or_empty_tool_turn_is_reported() {
+        let error = r#"{"error":{"message":"No endpoints found that support tool use"}}"#;
+        let message = reply_message(error, StatusCode::NOT_FOUND).unwrap_err().to_string();
+        assert!(message.contains("tool use"));
+        assert!(reply_message(r#"{"choices":[]}"#, StatusCode::OK).is_err());
+        assert!(reply_message("<html>", StatusCode::BAD_GATEWAY).is_err());
+    }
 
     fn request<'a>(messages: &'a [ChatTurn], stop: Option<&'a [&'a str]>) -> ChatRequest<'a> {
         ChatRequest {

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Cue, CueIssue, Speaker } from "../types";
-import { charsPerSecond, formatShort, parseTimecode } from "../lib/time";
+import { CPS_WARNING, charsPerSecond, formatShort, parseTimecode } from "../lib/time";
 import { lineStats } from "../lib/text";
 import { thoughtColor } from "../lib/colors";
 import { issueSeverity, issueTooltip } from "../lib/issues";
@@ -33,9 +33,6 @@ interface Props {
   /** Grey autocomplete in the focused cue. */
   ghost: GhostBinding;
 }
-
-/** Above this characters-per-second a caption is hard to read; flag it. */
-const CPS_WARNING = 21;
 
 export function CueList({
   cues,

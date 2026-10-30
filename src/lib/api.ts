@@ -2,6 +2,8 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AgentReply,
+  AgentRequest,
   AppState,
   ChatRequest,
   CueIssues,
@@ -93,6 +95,25 @@ export const cancelChat = () => invoke<void>("cancel_chat");
 
 /** The error a stopped chat reply rejects with. */
 export const CHAT_CANCELLED = "cancelled";
+
+/**
+ * One turn of a `/continue` run built by `lib/agent.ts`: the assistant's
+ * message, tool calls and all. Stopped by `cancelChat` like a chat reply.
+ */
+export const aiAgentStep = (request: AgentRequest) =>
+  invoke<AgentReply>("ai_agent_step", { request });
+
+/**
+ * A frame of the video described in words by a vision model, for a
+ * `/continue` run. The image itself stays in the backend. Stopped by
+ * `cancelChat`.
+ */
+export const aiDescribeFrame = (request: {
+  videoPath: string;
+  time: number;
+  model: string;
+  question?: string;
+}) => invoke<string>("ai_describe_frame", { request });
 
 export const listModels =() => invoke<ModelInfo[]>("list_models");
 

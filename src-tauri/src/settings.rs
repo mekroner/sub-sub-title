@@ -50,6 +50,9 @@ pub struct Settings {
     pub chat_model: String,
     /// "", "low", "medium" or "high"; "" leaves reasoning to the model.
     pub chat_effort: String,
+    /// OpenRouter model that describes frames for `/continue`. "" leaves the
+    /// run without eyes.
+    pub vision_model: String,
     /// Default .ass styling used for export and the preview overlay.
     pub font_name: String,
     pub font_size: u32,
@@ -105,6 +108,7 @@ impl Default for Settings {
             chat_models: vec!["anthropic/claude-sonnet-4.5".to_string()],
             chat_model: String::new(),
             chat_effort: String::new(),
+            vision_model: String::new(),
             font_name: "Arial".to_string(),
             font_size: 48,
             bold: false,
@@ -243,6 +247,7 @@ mod tests {
         let settings = parse_settings(br#"{"model":"openai/gpt-5"}"#);
         assert_eq!(settings.chat_models, ["openai/gpt-5"]);
         assert_eq!(settings.chat_effort, "");
+        assert_eq!(settings.vision_model, "");
     }
 
     #[test]

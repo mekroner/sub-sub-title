@@ -83,6 +83,9 @@ export const DEFAULT_TARGET_CPS = 17;
 /** Shortest a cue should ever sit on screen, however little text it holds. */
 export const MIN_READABLE_DURATION = 1;
 
+/** Above this characters-per-second a caption is hard to read; flag it. */
+export const CPS_WARNING = 21;
+
 /**
  * The inverse of `charsPerSecond`: how long `text` needs in order to read at
  * `cps` characters per second. Empty text needs no time at all; anything else

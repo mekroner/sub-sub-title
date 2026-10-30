@@ -1,3 +1,4 @@
+mod agent;
 mod ai;
 mod beats;
 mod chat;
@@ -14,6 +15,7 @@ mod render;
 mod settings;
 mod spelling;
 mod transcribe;
+mod vision;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -57,6 +59,8 @@ pub fn run() {
             project_state::forget_project,
             project_state::clear_last_project,
             ai::list_models,
+            agent::ai_agent_step,
+            vision::ai_describe_frame,
             beats::ai_story_beats,
             fill::ai_fill,
             ghost::ai_ghost,

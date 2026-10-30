@@ -1,8 +1,30 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { ChatAttachment, ChatMessage, Cue, Section, Speaker } from "../types";
+import type {
+  AgentMessage,
+  AgentRun,
+  AgentStep,
+  ChatAttachment,
+  ChatMessage,
+  Cue,
+  Section,
+  Speaker,
+} from "../types";
 import * as api from "../lib/api";
 import { errorMessage } from "../lib/api";
+import {
+  agentTools,
+  agentWindow,
+  buildAgentRequest,
+  buildContinueKickoff,
+  buildContinueSystemPrompt,
+  createAliases,
+  describeRun,
+  parseContinueCommand,
+  runAgent,
+  type AgentEnv,
+  type DescribeFrame,
+} from "../lib/agent";
 import {
   CHAT_EFFORTS,
   MAX_CHAT_LINES,
@@ -14,11 +36,13 @@ import {
   buildChatSystemPrompt,
   buildSelection,
   chatEffort,
+  historyTurns,
   rewriteMessage,
   shortModelName,
 } from "../lib/chat";
 import { makeId } from "../lib/ids";
 import { parseMarkdown, type Inline } from "../lib/markdown";
+import { formatShort } from "../lib/time";
 
 interface Props {
   cues: Cue[];
@@ -30,6 +54,14 @@ interface Props {
   /** Sent along with every message. */
   selectedIds: ReadonlySet<string>;
   currentTime: number;
+  /** Seconds; 0 while no video is loaded. */
+  duration: number;
+  /** The limits `/continue` writes within, from Settings. */
+  reading: Pick<AgentEnv, "targetCps" | "minGap" | "maxCharsPerLine" | "maxLines">;
+  /** The video `/continue` may look at; "" when none is loaded. */
+  videoPath: string;
+  /** Describes frames for `/continue`; "" leaves it without eyes. */
+  visionModel: string;
   /** The models the select offers, from Settings. */
   models: string[];
   /** The one in use: already resolved against `models`, "" when there are none. */
@@ -47,6 +79,10 @@ interface Props {
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
   onOpenSettings: () => void;
+  /** A `/continue` run changed the script; every call with one `runId` is one undo step. */
+  onAgentCues: (cues: Cue[], runId: string) => void;
+  /** A run finished, with the cues it added that still exist. */
+  onAgentDone: (created: string[]) => void;
 }
 
 /** Within this many pixels of the bottom, the log follows a streaming reply. */
@@ -61,6 +97,10 @@ export function ChatPanel({
   primaryId,
   selectedIds,
   currentTime,
+  duration,
+  reading,
+  videoPath,
+  visionModel,
   models,
   model,
   effort,
@@ -73,6 +113,8 @@ export function ChatPanel({
   onModelChange,
   onEffortChange,
   onOpenSettings,
+  onAgentCues,
+  onAgentDone,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -94,6 +136,15 @@ export function ChatPanel({
   const generation = useRef(0);
   const streamingRef = useRef(false);
   streamingRef.current = streaming;
+
+  // The script a `/continue` run works on: its own edits at once, and the
+  // writer's (or an undo) as soon as they reach the props.
+  const cuesRef = useRef(cues);
+  const seenCues = useRef(cues);
+  if (cues !== seenCues.current) {
+    seenCues.current = cues;
+    cuesRef.current = cues;
+  }
 
   const logRef = useRef<HTMLDivElement | null>(null);
   const stick = useRef(true);
@@ -188,11 +239,116 @@ export function ChatPanel({
     }
   };
 
+  /**
+   * `/continue`: hands the model the window from the playhead and lets it
+   * write there with tools until it is done, its edits landing as it goes.
+   */
+  const runContinue = async (
+    earlier: ChatMessage[],
+    question: ChatMessage,
+    command: { seconds: number; direction: string },
+  ) => {
+    const stretch = agentWindow(currentTime, command.seconds, duration);
+    if (stretch.end - stretch.start < 1) {
+      setNotice("The playhead is at the end of the video — move it back to continue from there.");
+      return;
+    }
+    const vision = visionModel.trim() !== "" && videoPath !== "";
+    const env: AgentEnv = { window: stretch, duration, vision, speakers, sections, ...reading };
+    const aliases = createAliases();
+    const runId = makeId();
+    const run: AgentRun = { from: stretch.start, to: stretch.end, steps: [] };
+    const reply: ChatMessage = { id: makeId(), role: "assistant", text: "", status: "streaming", agent: run };
+    const history = [...earlier, question];
+
+    const opening: AgentMessage[] = [
+      { role: "system", content: buildContinueSystemPrompt({ brief, beats }, env) },
+      ...historyTurns(earlier),
+      {
+        role: "user",
+        content: buildContinueKickoff(cuesRef.current, env, aliases, command.direction, linesBefore),
+      },
+    ];
+    const settings = { model, temperature, effort: chatEffort(effort) };
+    const tools = agentTools(vision);
+    /** A failed or refused look is an answer; only a Stop ends the run. */
+    const describeFrame: DescribeFrame = async (time, question) => {
+      try {
+        const description = await api.aiDescribeFrame({ videoPath, time, model: visionModel, question });
+        return { ok: true, description };
+      } catch (e) {
+        const message = errorMessage(e);
+        if (message === api.CHAT_CANCELLED) throw e;
+        return { ok: false, error: message };
+      }
+    };
+
+    const mine = ++generation.current;
+    setMessages([...history, reply]);
+    setStreaming(true);
+    stick.current = true;
+
+    const update = (patch: (m: ChatMessage) => ChatMessage) => {
+      if (generation.current !== mine) return;
+      setMessages((all) => all.map((m) => (m.id === reply.id ? patch(m) : m)));
+    };
+    let steps: AgentStep[] = [];
+    /** The run as it ends, remembered by the conversation as one line. */
+    const end = (summary: string | undefined, status?: ChatMessage["status"]) => {
+      const done: AgentRun = { ...run, steps, ...(summary ? { summary } : {}) };
+      update(({ status: _, ...m }) => ({ ...m, agent: done, text: describeRun(done), ...(status ? { status } : {}) }));
+    };
+
+    try {
+      const result = await runAgent(opening, env, aliases, {
+        send: (conversation) => api.aiAgentStep(buildAgentRequest(conversation, settings, tools)),
+        ...(vision ? { describeFrame } : {}),
+        getCues: () => cuesRef.current,
+        applyCues: (next) => {
+          cuesRef.current = next;
+          onAgentCues(next, runId);
+        },
+        onStep: (step) => {
+          steps = [...steps, step];
+          update((m) => ({ ...m, agent: { ...run, steps } }));
+        },
+        isCurrent: () => generation.current === mine,
+      });
+      if (result.ending === "abandoned") return;
+      end(result.summary, result.ending === "limit" ? "stopped" : undefined);
+      onAgentDone(result.created.filter((id) => cuesRef.current.some((c) => c.id === id)));
+    } catch (e) {
+      const message = errorMessage(e);
+      if (message === api.CHAT_CANCELLED) {
+        end(undefined, "stopped");
+      } else {
+        update((m) => ({ ...m, agent: { ...run, steps }, status: "error", text: message }));
+      }
+    } finally {
+      if (generation.current === mine) setStreaming(false);
+    }
+  };
+
+  /** Asks `question`, or runs it when it is a `/continue`. */
+  const dispatch = (earlier: ChatMessage[], question: ChatMessage) => {
+    const command = parseContinueCommand(question.text);
+    if (command) void runContinue(earlier, question, command);
+    else void ask(earlier, question);
+  };
+
   const ready = apiKeySet && model !== "";
 
   const send = () => {
     if (streaming || !ready) return;
     if (!draft.trim() && !attachment) return;
+
+    setDraft("");
+    setNotice(null);
+    if (parseContinueCommand(draft)) {
+      // The run reads the script itself; an attachment waits for a question.
+      dispatch(messages, { id: makeId(), role: "user", text: draft.trim() });
+      return;
+    }
 
     const question: ChatMessage = {
       id: makeId(),
@@ -201,11 +357,9 @@ export function ChatPanel({
       ...(attachment ? { attachment } : {}),
       ...(selection ? { selection } : {}),
     };
-    setDraft("");
     setAttachment(null);
     setDraftOpen(false);
-    setNotice(null);
-    void ask(messages, question);
+    dispatch(messages, question);
   };
 
   const startEditing = (message: ChatMessage) =>
@@ -218,7 +372,7 @@ export function ChatPanel({
     const rewritten = rewriteMessage(messages, editing.id, editing, makeId());
     if (!rewritten) return;
     setEditing(null);
-    void ask(rewritten.earlier, rewritten.question);
+    dispatch(rewritten.earlier, rewritten.question);
   };
 
   const toggleAttachment = (id: string) =>
@@ -259,7 +413,8 @@ export function ChatPanel({
             Talk through ideas with a model that knows the brief, beats, speakers and
             current section. Selected cues go along with every message.{" "}
             <strong>📎 Last {linesBefore}</strong> hands it the lines up to the selected
-            cue, or the playhead.
+            cue, or the playhead. <strong>/continue 30</strong> lets it write the next 30
+            seconds from the playhead itself, with your direction after the number.
           </p>
         )}
 
@@ -310,6 +465,8 @@ export function ChatPanel({
                     ✎ Edit
                   </button>
                 </>
+              ) : message.agent ? (
+                <AgentLog run={message.agent} status={message.status} error={message.text} />
               ) : message.status === "error" ? (
                 <div className="chat-text error">{message.text}</div>
               ) : (
@@ -372,7 +529,7 @@ export function ChatPanel({
         <textarea
           ref={inputRef}
           rows={2}
-          placeholder="Ask about a scene, a character, what could happen next…"
+          placeholder="Ask about a scene, a character… or /continue 30 to write from the playhead"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -592,6 +749,47 @@ function AttachmentChip({ attachment, kind = "attachment", open, onToggle, onRem
         )}
       </div>
       {open && <pre className="chat-transcript">{attachment.transcript}</pre>}
+    </div>
+  );
+}
+
+/** A `/continue` run: what it was allowed to change, and what it did there. */
+function AgentLog({
+  run,
+  status,
+  error,
+}: {
+  run: AgentRun;
+  status: ChatMessage["status"];
+  /** The message text, shown when the run failed. */
+  error: string;
+}) {
+  const stretch = `${formatShort(run.from)}–${formatShort(run.to)}`;
+  return (
+    <div className="chat-text agent-log">
+      <div className="agent-head">
+        {status === "streaming" ? "Continuing" : "Continued"} {stretch}
+      </div>
+      {run.steps.length > 0 && (
+        <ul className="agent-steps">
+          {run.steps.map((step, i) => (
+            <li key={i} className={`agent-step ${step.kind}`}>
+              {step.detail ? (
+                <details>
+                  <summary>{step.label}</summary>
+                  <p className="agent-detail">{step.detail}</p>
+                </details>
+              ) : (
+                step.label
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {status === "streaming" && <span className="chat-thinking">working…</span>}
+      {status === "error" && <div className="chat-text error">{error}</div>}
+      {run.summary && <p className="agent-summary">{run.summary}</p>}
+      {status === "stopped" && <span className="chat-stopped">stopped</span>}
     </div>
   );
 }

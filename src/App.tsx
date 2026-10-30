@@ -139,6 +139,7 @@ const DEFAULT_SETTINGS: Settings = {
   chatModels: ["anthropic/claude-sonnet-4.5"],
   chatModel: "",
   chatEffort: "",
+  visionModel: "",
   fontName: "Arial",
   fontSize: 48,
   bold: false,
@@ -695,6 +696,17 @@ export default function App() {
         const next = fn(current.cues);
         return next === current.cues ? current : { ...current, cues: next };
       }, mergeKey ? { mergeKey } : undefined);
+    },
+    [update],
+  );
+
+  /** A `/continue` run's edits: however long it takes, one undo step. */
+  const applyAgentCues = useCallback(
+    (next: Cue[], runId: string) => {
+      update(
+        (current) => (next === current.cues ? current : { ...current, cues: next }),
+        { mergeKey: `agent:${runId}`, mergeWindowMs: Infinity },
+      );
     },
     [update],
   );
@@ -2308,6 +2320,15 @@ export default function App() {
             primaryId={primaryId}
             selectedIds={selectedIds}
             currentTime={currentTime}
+            duration={duration}
+            reading={{
+              targetCps: settings.targetCps,
+              minGap: settings.minGap,
+              maxCharsPerLine: settings.maxCharsPerLine,
+              maxLines: settings.maxLines,
+            }}
+            videoPath={project.videoPath}
+            visionModel={settings.visionModel}
             models={settings.chatModels}
             model={resolveChatModel(settings.chatModels, settings.chatModel)}
             effort={settings.chatEffort}
@@ -2322,6 +2343,10 @@ export default function App() {
             onModelChange={(chatModel) => patchSettings({ chatModel })}
             onEffortChange={(chatEffort) => patchSettings({ chatEffort })}
             onOpenSettings={() => setShowSettings(true)}
+            onAgentCues={applyAgentCues}
+            onAgentDone={(created) => {
+              if (created.length > 0) selectOnly(created[created.length - 1]);
+            }}
           />
         </aside>
 

@@ -20,6 +20,7 @@ const settings: Settings = {
   chatModels: ["x"],
   chatModel: "",
   chatEffort: "",
+  visionModel: "",
   fontName: "Arial",
   fontSize: 48,
   bold: false,

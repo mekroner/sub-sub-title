@@ -64,7 +64,7 @@ export function shortModelName(id: string): string {
 /** What a message holding only an attachment asks. */
 export const ATTACHMENT_ONLY_PROMPT = "Here's the latest stretch. Thoughts?";
 
-export const CHAT_SYSTEM_PROMPT = `You are a writing partner for someone writing the dialogue and inner thoughts of a subtitled video. They come to you to develop ideas: what could happen next, why a scene isn't working, what a character really wants, how a line could land harder. Nothing you write is inserted into the script — this is a conversation, so be direct and conversational.
+export const CHAT_SYSTEM_PROMPT = `You are a writing partner for someone writing the dialogue and inner thoughts of a subtitled video. They come to you to develop ideas: what could happen next, why a scene isn't working, what a character really wants, how a line could land harder. Nothing you write here is inserted into the script — this is a conversation, so be direct and conversational. The one exception is when the writer sends "/continue": you then write lines straight into the script, and the conversation keeps a one-line summary of what you did.
 
 How to help
 - Engage with the actual material. Quote or point to specific lines when it helps.
@@ -164,16 +164,19 @@ export interface ChatContext {
 
 export function buildChatSystemPrompt(context: ChatContext): string {
   const parts = [CHAT_SYSTEM_PROMPT, ...renderProjectContext(context)];
-
-  const scene = sectionAt(context.sections, context.anchor);
-  if (scene) {
-    const lines = [`## Current scene\n${scene.label.trim() || "Untitled"} (from ${formatShort(scene.start)})`];
-    const note = scene.note?.trim();
-    if (note) lines.push(`Note: ${note}`);
-    parts.push(lines.join("\n"));
-  }
-
+  const scene = renderCurrentScene(context.sections, context.anchor);
+  if (scene) parts.push(scene);
   return parts.join("\n\n");
+}
+
+/** The scene `anchor` falls in, with its note, as a prompt section. */
+export function renderCurrentScene(sections: Section[], anchor: number): string | null {
+  const scene = sectionAt(sections, anchor);
+  if (!scene) return null;
+  const lines = [`## Current scene\n${scene.label.trim() || "Untitled"} (from ${formatShort(scene.start)})`];
+  const note = scene.note?.trim();
+  if (note) lines.push(`Note: ${note}`);
+  return lines.join("\n");
 }
 
 /** What the model reads for one of the writer's messages. */
@@ -228,19 +231,26 @@ export function rewriteMessage(
  * ones that never got a word out; a reply stopped part-way is kept, since the
  * writer may be following up on what it did say.
  */
+export function historyTurns(
+  history: ChatMessage[],
+): Array<{ role: "user" | "assistant"; content: string }> {
+  const turns: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const message of history) {
+    if (message.role === "user") {
+      turns.push({ role: "user", content: userContent(message) });
+    } else if (message.status !== "error" && message.status !== "streaming" && message.text.trim()) {
+      turns.push({ role: "assistant", content: message.text });
+    }
+  }
+  return turns;
+}
+
 export function buildChatRequest(
   system: string,
   history: ChatMessage[],
   settings: { model: string; temperature: number; effort?: ChatEffort | null },
 ): ChatRequest {
-  const messages: ChatRequest["messages"] = [{ role: "system", content: system }];
-  for (const message of history) {
-    if (message.role === "user") {
-      messages.push({ role: "user", content: userContent(message) });
-    } else if (message.status !== "error" && message.status !== "streaming" && message.text.trim()) {
-      messages.push({ role: "assistant", content: message.text });
-    }
-  }
+  const messages: ChatRequest["messages"] = [{ role: "system", content: system }, ...historyTurns(history)];
   const effort = settings.effort ?? null;
   return {
     model: settings.model,
