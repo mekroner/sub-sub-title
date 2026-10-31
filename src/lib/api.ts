@@ -129,6 +129,8 @@ export const renderBurnIn = (args: {
   outputPath: string;
   duration: number;
   crf?: number;
+  /** The voiceover mix to use as the video's audio; absent keeps its own. */
+  audio?: Omit<MixdownRequest, "outputPath"> | null;
 }) => invoke<void>("render_burn_in", args);
 
 export const cancelRender = () => invoke<void>("cancel_render");

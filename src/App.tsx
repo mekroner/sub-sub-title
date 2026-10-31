@@ -433,6 +433,19 @@ export default function App() {
 
   const canExportAudio = Boolean(project.videoPath && paths && tools?.ffmpeg);
 
+  /** The mix as the preview plays it, for an audio export or a render to use. */
+  const mixdownRequest = useMemo(
+    () => ({
+      videoPath: project.videoPath,
+      includeOriginal: media?.hasAudio ?? false,
+      duration,
+      tracks: project.voiceover.tracks,
+      clips: project.voiceover.clips,
+      duck: duckPoints,
+    }),
+    [project.videoPath, media?.hasAudio, duration, project.voiceover, duckPoints],
+  );
+
   // Set while a cue is auditioned as a cloning reference (see `previewCue`).
   const [previewCueId, setPreviewCueId] = useState<string | null>(null);
 
@@ -3399,6 +3412,7 @@ export default function App() {
           assPath={paths.ass}
           assText={assText}
           duration={duration}
+          mix={mixdownRequest}
           onClose={() => setShowRender(false)}
         />
       )}
@@ -3436,14 +3450,7 @@ export default function App() {
       {showExportAudio && paths && (
         <ExportAudioDialog
           defaultOutput={`${paths.dir}${paths.dir.includes("\\") ? "\\" : "/"}${paths.stem}.voiceover.wav`}
-          request={{
-            videoPath: project.videoPath,
-            includeOriginal: media?.hasAudio ?? false,
-            duration,
-            tracks: project.voiceover.tracks,
-            clips: project.voiceover.clips,
-            duck: duckPoints,
-          }}
+          request={mixdownRequest}
           onClose={() => setShowExportAudio(false)}
         />
       )}

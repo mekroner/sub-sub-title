@@ -396,6 +396,8 @@ export interface ModelInfo {
 }
 
 export interface RenderProgress {
+  /** The voiceover is mixed down first when the render uses it. */
+  phase: "mixing" | "encoding";
   fraction: number;
   timeSeconds: number;
   speed: string;

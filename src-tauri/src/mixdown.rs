@@ -70,6 +70,9 @@ pub struct MixdownRequest {
     pub video_path: String,
     /// False when the video has no audio stream, which ffmpeg would refuse.
     pub include_original: bool,
+    /// Where an export goes. A render mixes to a file of its own, and leaves
+    /// this empty.
+    #[serde(default)]
     pub output_path: String,
     /// The video's length; the mix runs to this or the last clip's end.
     pub duration: f64,
@@ -213,11 +216,12 @@ pub async fn mixdown_voiceover(
     let cancelled = state.cancelled.clone();
     cancelled.store(false, Ordering::SeqCst);
 
+    let target = output.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let progress = |fraction: f64| {
             let _ = app.emit("mixdown-progress", MixdownProgress { fraction });
         };
-        mix(&request, codec, &cancelled, &progress)
+        mix(&request, &target, codec, &cancelled, &progress)
     })
     .await
     .map_err(|e| AppError::msg(format!("The export task failed: {e}")))?;
@@ -249,8 +253,20 @@ fn codec_args(output: &Path) -> AppResult<&'static [&'static str]> {
     })
 }
 
+/// Mixes to `path` as 32-bit float WAV, losing nothing: the intermediate a
+/// render muxes with the video. The caller removes it.
+pub fn mix_to_file(
+    request: &MixdownRequest,
+    path: &Path,
+    cancelled: &AtomicBool,
+    progress: &dyn Fn(f64),
+) -> AppResult<MixdownResult> {
+    mix(request, path, &["-c:a", "pcm_f32le"], cancelled, progress)
+}
+
 fn mix(
     request: &MixdownRequest,
+    output: &Path,
     codec: &[&str],
     cancelled: &AtomicBool,
     progress: &dyn Fn(f64),
@@ -329,7 +345,7 @@ fn mix(
         .args(["-f", "f32le", "-ar", &RATE.to_string(), "-ac", &CHANNELS.to_string()])
         .args(["-i", "-"])
         .args(codec)
-        .arg(&request.output_path)
+        .arg(output)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -660,7 +676,7 @@ mod tests {
                 GainPoint { time: 3.01, db: 0.0 },
             ],
         };
-        let result = mix(&request, codec_args(&out).unwrap(), &AtomicBool::new(false), &|_| {})
+        let result = mix_to_file(&request, &out, &AtomicBool::new(false), &|_| {})
             .expect("mix succeeds");
         assert!((result.seconds - 6.0).abs() < 0.01);
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { RenderProgress } from "../types";
+import type { MixdownRequest, RenderProgress } from "../types";
 import { cancelRender, errorMessage, renderBurnIn, writeTextFile } from "../lib/api";
 import { formatDuration } from "../lib/time";
 
@@ -11,6 +11,8 @@ interface Props {
   assPath: string;
   assText: string;
   duration: number;
+  /** The Voiceover tab's mix, offered as the video's audio once it has clips. */
+  mix: Omit<MixdownRequest, "outputPath">;
   onClose: () => void;
 }
 
@@ -20,10 +22,14 @@ export function RenderDialog({
   assPath,
   assText,
   duration,
+  mix,
   onClose,
 }: Props) {
   const [output, setOutput] = useState(defaultOutput);
   const [crf, setCrf] = useState(18);
+  // Without clips the "mix" would only be the soundtrack ducked under silence.
+  const hasMix = mix.clips.length > 0;
+  const [useMix, setUseMix] = useState(hasMix);
   const [progress, setProgress] = useState<RenderProgress | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +58,7 @@ export function RenderDialog({
         outputPath: output,
         duration,
         crf,
+        audio: hasMix && useMix ? mix : null,
       });
       setDone(true);
     } catch (e) {
@@ -120,9 +127,25 @@ export function RenderDialog({
             />
           </label>
 
+          {hasMix && (
+            <label className="field">
+              <span>Audio</span>
+              <select
+                value={useMix ? "mix" : "original"}
+                disabled={busy}
+                onChange={(e) => setUseMix(e.target.value === "mix")}
+              >
+                <option value="mix">Voiceover mix — as the Voiceover tab plays it</option>
+                <option value="original">Original — the video's own soundtrack</option>
+              </select>
+            </label>
+          )}
+
           <p className="hint">
-            Re-encodes the video with libx264 and copies the audio untouched. Expect
-            this to take a while for a {formatDuration(duration)} file.
+            {hasMix && useMix
+              ? "Mixes the voiceover, then re-encodes the video with libx264 and the mix as AAC."
+              : "Re-encodes the video with libx264 and copies the audio untouched."}{" "}
+            Expect this to take a while for a {formatDuration(duration)} file.
           </p>
 
           {busy && (
@@ -131,11 +154,15 @@ export function RenderDialog({
                 <div className="progress-fill" style={{ width: `${pct * 100}%` }} />
               </div>
               <span className="hint">
-                {progress
-                  ? `${formatDuration(progress.timeSeconds)} of ${formatDuration(
-                      duration,
-                    )} · ${Math.round(pct * 100)}% · ${progress.speed}`
-                  : "Starting ffmpeg…"}
+                {!progress
+                  ? hasMix && useMix
+                    ? "Mixing the voiceover…"
+                    : "Starting ffmpeg…"
+                  : progress.phase === "mixing"
+                    ? `Mixing the voiceover · ${Math.round(pct * 100)}%`
+                    : `${formatDuration(progress.timeSeconds)} of ${formatDuration(
+                        duration,
+                      )} · ${Math.round(pct * 100)}% · ${progress.speed}`}
               </span>
             </div>
           )}

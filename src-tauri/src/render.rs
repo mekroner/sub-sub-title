@@ -1,7 +1,9 @@
-//! Phase 7: burn an .ass subtitle file into the video with ffmpeg.
+//! Burn an .ass subtitle file into the video with ffmpeg, with the video's
+//! own soundtrack or the Voiceover tab's mix in its place.
 
 use crate::error::{AppError, AppResult};
 use crate::media::{ffmpeg_bin, quiet_command};
+use crate::mixdown::{mix_to_file, MixdownRequest};
 use serde::Serialize;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -20,11 +22,17 @@ pub struct RenderState {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderProgress {
+    /// "mixing" while the voiceover is mixed down, then "encoding".
+    pub phase: &'static str,
     /// 0.0..1.0, or -1.0 when the total duration is unknown.
     pub fraction: f64,
     pub time_seconds: f64,
     pub speed: String,
 }
+
+/// The voiceover mix the video gets in place of its own soundtrack, encoded
+/// once for the video: AAC at a bitrate that leaves dialogue intact.
+const MIX_AUDIO: [&str; 4] = ["-c:a", "aac", "-b:a", "192k"];
 
 #[tauri::command]
 pub fn cancel_render(state: tauri::State<'_, RenderState>) -> AppResult<()> {
@@ -66,6 +74,7 @@ pub async fn render_burn_in(
     output_path: String,
     duration: f64,
     crf: Option<u32>,
+    audio: Option<MixdownRequest>,
 ) -> AppResult<()> {
     if PathBuf::from(&output_path) == PathBuf::from(&video_path) {
         return Err(AppError::msg(
@@ -77,23 +86,78 @@ pub async fn render_burn_in(
     let crf = crf.unwrap_or(18).clamp(0, 51);
     state.cancelled.store(false, Ordering::SeqCst);
 
-    let mut child = quiet_command(&ffmpeg_bin())
+    // The mix is rendered first, whole, so the encode below reads it like any
+    // other input. It is removed whatever happens.
+    let mix = work_dir.join("mix.wav");
+    let _ = std::fs::remove_file(&mix);
+    if let Some(request) = audio {
+        let cancelled = state.cancelled.clone();
+        let mix_path = mix.clone();
+        let mix_app = app.clone();
+        let mixed = tauri::async_runtime::spawn_blocking(move || {
+            let progress = |fraction: f64| {
+                let _ = mix_app.emit(
+                    "render-progress",
+                    RenderProgress {
+                        phase: "mixing",
+                        fraction,
+                        time_seconds: fraction * request.duration,
+                        speed: String::new(),
+                    },
+                );
+            };
+            mix_to_file(&request, &mix_path, &cancelled, &progress)
+        })
+        .await
+        .map_err(|e| AppError::msg(format!("Mixing the voiceover failed: {e}")));
+        if let Err(e) = mixed.and_then(|r| r) {
+            let _ = std::fs::remove_file(&mix);
+            return Err(if state.cancelled.swap(false, Ordering::SeqCst) {
+                AppError::msg("The render was cancelled.")
+            } else {
+                e
+            });
+        }
+    }
+    let with_mix = mix.is_file();
+
+    let mut command = quiet_command(&ffmpeg_bin());
+    command
         .current_dir(&work_dir)
         .args(["-hide_banner", "-nostdin", "-y", "-i"])
-        .arg(&video_path)
+        .arg(&video_path);
+    if with_mix {
+        // Relative, like the subtitles: the work dir is the current dir.
+        command.args(["-i", "mix.wav", "-map", "0:v:0", "-map", "1:a:0"]);
+    }
+    command
         // Relative name only; see stage_subtitles above.
         .args(["-vf", "subtitles=subs.ass"])
         .args([
             "-c:v", "libx264", "-crf", &crf.to_string(), "-preset", "medium",
-        ])
-        .args(["-c:a", "copy", "-movflags", "+faststart"])
+        ]);
+    if with_mix {
+        // The mix runs to the last clip, which may end after the picture.
+        command.args(MIX_AUDIO).arg("-shortest");
+    } else {
+        command.args(["-c:a", "copy"]);
+    }
+    let spawned = command
+        .args(["-movflags", "+faststart"])
         .args(["-nostats", "-progress", "pipe:1"])
         .arg(&output_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| AppError::msg(format!("Could not start ffmpeg: {e}")))?;
+        .map_err(|e| AppError::msg(format!("Could not start ffmpeg: {e}")));
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => {
+            let _ = std::fs::remove_file(&mix);
+            return Err(e);
+        }
+    };
 
     let stdout = child
         .stdout
@@ -131,6 +195,7 @@ pub async fn render_burn_in(
                         let _ = progress_app.emit(
                             "render-progress",
                             RenderProgress {
+                                phase: "encoding",
                                 fraction,
                                 time_seconds: seconds,
                                 speed: speed.clone(),
@@ -181,6 +246,7 @@ pub async fn render_burn_in(
 
     let _ = progress_thread.join();
     let stderr_tail = stderr_thread.join().unwrap_or_default();
+    let _ = std::fs::remove_file(&mix);
 
     if let Ok(mut guard) = state.child.lock() {
         *guard = None;
