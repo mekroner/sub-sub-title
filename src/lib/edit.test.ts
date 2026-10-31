@@ -14,13 +14,18 @@ import {
   itemsAt,
   mainTrackOverlaps,
   moveItem,
+  moveTrack,
   naturalSize,
+  overlayTarget,
+  patchTextStyle,
   placeSource,
   placeText,
   removeItem,
   resolveRect,
   setCanvas,
   setFade,
+  setStaticTransform,
+  setText,
   sourceFromInfo,
   splitItem,
   startEditFromVideo,
@@ -296,5 +301,84 @@ describe("project file", () => {
     // Clamped to what the source holds, and given a default transform.
     expect(edit.items[0]).toMatchObject({ duration: 5, opacity: 1, transform: [{ time: 0, x: 0.5, y: 0.5, scale: 1 }] });
     expect(coerceEdit("nope")).toBeUndefined();
+  });
+});
+
+describe("overlays", () => {
+  it("finds the topmost overlay track free at the time, adding one when none is", () => {
+    const { edit: e0 } = twoSources();
+    const first = overlayTarget(e0, 1, 3);
+    expect(first.edit.tracks.map((t) => t.kind)).toEqual(["main", "overlay"]);
+    const { edit: e2, id: top } = addOverlayTrack(first.edit);
+    const again = overlayTarget(e2, 1, 3);
+    expect(again.edit).toBe(e2);
+    expect(again.trackId).toBe(top);
+    // Something already there: the next track down if it is free, else a new one.
+    const busy = placeText(e2, top, 1).edit;
+    expect(overlayTarget(busy, 2, 3).trackId).toBe(first.trackId);
+    const full = placeText(busy, first.trackId, 0).edit;
+    const added = overlayTarget(full, 2, 3);
+    expect(added.edit.tracks).toHaveLength(4);
+    // After it ends, the top track is free again.
+    expect(overlayTarget(full, 4, 1).trackId).toBe(top);
+  });
+
+  it("reorders overlay tracks but never moves the main track", () => {
+    const { edit: e0 } = twoSources();
+    const { edit: e1, id: a } = addOverlayTrack(e0);
+    const { edit: e2, id: b } = addOverlayTrack(e1);
+    expect(moveTrack(e2, a, 1).tracks.map((t) => t.id)).toEqual([MAIN_TRACK_ID, b, a]);
+    expect(moveTrack(e2, a, -1)).toBe(e2);
+    expect(moveTrack(e2, b, 1)).toBe(e2);
+    expect(moveTrack(e2, MAIN_TRACK_ID, 1)).toBe(e2);
+  });
+
+  it("keeps text off the main track", () => {
+    const { edit: e0 } = twoSources();
+    expect(placeText(e0, MAIN_TRACK_ID, 0).id).toBeNull();
+    const { edit: e1, id: track } = addOverlayTrack(e0);
+    const { edit, id } = placeText(e1, track, 1);
+    expect(moveItem(edit, id!, 2, MAIN_TRACK_ID).items.find((i) => i.id === id)).toMatchObject({
+      trackId: track,
+      start: 2,
+    });
+    // An image may go either way.
+    const image = addSource(edit, sourceFromInfo("/v/logo.png", info({ duration: 0 }), "image"));
+    const placed = placeSource(image.edit, image.id, track, 0);
+    const moved = moveItem(placed.edit, placed.id!, 20, MAIN_TRACK_ID);
+    expect(moved.items.find((i) => i.id === placed.id)).toMatchObject({ trackId: MAIN_TRACK_ID, start: 20 });
+  });
+});
+
+describe("static transforms and text", () => {
+  it("moves and sizes a single-key item, clamping the scale", () => {
+    const { edit: e0 } = twoSources();
+    const id = e0.items[0].id;
+    const edit = setStaticTransform(e0, id, { x: 0.25, scale: 0 });
+    expect(edit.items[0].transform).toEqual([{ time: 0, x: 0.25, y: 0.5, scale: 0.01 }]);
+    expect(setStaticTransform(edit, id, { x: 0.25 })).toBe(edit);
+  });
+
+  it("leaves an animated item to be edited key by key", () => {
+    const { edit: e0 } = twoSources();
+    const animated: Edit = {
+      ...e0,
+      items: [{ ...e0.items[0], transform: [{ time: 0, x: 0.5, y: 0.5, scale: 1 }, { time: 2, x: 0.5, y: 0.5, scale: 2 }] }],
+    };
+    expect(setStaticTransform(animated, e0.items[0].id, { x: 0 })).toBe(animated);
+  });
+
+  it("changes words and looks, and takes effects away with null", () => {
+    const { edit: e0 } = twoSources();
+    const { edit: e1, id: track } = addOverlayTrack(e0);
+    const { edit: e2, id } = placeText(e1, track, 0);
+    let edit = setText(e2, id!, "Hello\nworld");
+    edit = patchTextStyle(edit, id!, { fontSize: 0, outline: null, shadow: { color: "#000", blur: 4, dx: 2, dy: 2 } });
+    const text = edit.items.find((i) => i.id === id)!;
+    expect(text.kind === "text" && text.text).toBe("Hello\nworld");
+    expect(text.kind === "text" && text.style).toMatchObject({ fontSize: 1, shadow: { blur: 4 } });
+    expect(text.kind === "text" && "outline" in text.style).toBe(false);
+    // Not a text item: nothing happens.
+    expect(setText(edit, edit.items[0].id, "x")).toBe(edit);
   });
 });

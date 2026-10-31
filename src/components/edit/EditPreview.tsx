@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { MutableRefObject } from "react";
+import type { MutableRefObject, PointerEvent as ReactPointerEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Edit, EditItem } from "../../types";
 import {
@@ -30,6 +30,10 @@ interface Props {
   stalled: MutableRefObject<() => boolean>;
   /** Drawn text, by item id: an image URL and its size in canvas pixels. */
   textImages?: ReadonlyMap<string, { url: string; width: number; height: number }>;
+  /** Outlined on the stage, and draggable when it is static. */
+  selectedId?: string | null;
+  /** Moves the selected item's centre to (x, y), as fractions of the canvas. */
+  onMoveSelected?: (id: string, x: number, y: number, drag: string) => void;
 }
 
 interface Layer {
@@ -45,7 +49,15 @@ interface Layer {
  * from the same functions the bake plan uses, in canvas pixels, and the stage
  * is scaled as a whole — so what is drawn here is where the bake puts it.
  */
-export function EditPreview({ edit, time, playing, stalled, textImages }: Props) {
+export function EditPreview({
+  edit,
+  time,
+  playing,
+  stalled,
+  textImages,
+  selectedId,
+  onMoveSelected,
+}: Props) {
   const { canvas } = edit;
   const paneRef = useRef<HTMLDivElement>(null);
   const [pane, setPane] = useState({ width: 0, height: 0 });
@@ -155,6 +167,37 @@ export function EditPreview({ edit, time, playing, stalled, textImages }: Props)
     [stalled],
   );
 
+  // Dragging the selected item around the stage. Screen pixels become canvas
+  // pixels through the stage's scale, then fractions of the canvas.
+  const drag = useRef<{ id: string; x0: number; y0: number; px: number; py: number; key: string } | null>(null);
+  const selectedLayer = selectedId ? layerById.get(selectedId) : undefined;
+  const movable = Boolean(selectedLayer && selectedLayer.item.transform.length === 1 && onMoveSelected);
+
+  const startDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !selectedLayer || !movable) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const key = selectedLayer.item.transform[0];
+    drag.current = {
+      id: selectedLayer.item.id,
+      x0: key.x,
+      y0: key.y,
+      px: e.clientX,
+      py: e.clientY,
+      key: `stage:${selectedLayer.item.id}:${e.timeStamp}`,
+    };
+  };
+  const moveDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || scale <= 0 || !onMoveSelected) return;
+    const dx = (e.clientX - d.px) / scale / canvas.width;
+    const dy = (e.clientY - d.py) / scale / canvas.height;
+    onMoveSelected(d.id, d.x0 + dx, d.y0 + dy, d.key);
+  };
+  const endDrag = () => {
+    drag.current = null;
+  };
+
   const place = (layer: Layer | undefined) =>
     layer
       ? {
@@ -223,6 +266,24 @@ export function EditPreview({ edit, time, playing, stalled, textImages }: Props)
           }
           return null;
         })}
+        {selectedLayer && (
+          <div
+            className={movable ? "edit-selection movable" : "edit-selection"}
+            title={movable ? "Drag to move" : undefined}
+            style={{
+              left: selectedLayer.rect.x,
+              top: selectedLayer.rect.y,
+              width: selectedLayer.rect.w,
+              height: selectedLayer.rect.h,
+              // Drawn at screen thickness whatever the stage's scale.
+              borderWidth: scale > 0 ? 1.5 / scale : 1,
+            }}
+            onPointerDown={startDrag}
+            onPointerMove={moveDrag}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          />
+        )}
       </div>
     </div>
   );

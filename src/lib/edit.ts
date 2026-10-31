@@ -251,7 +251,7 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   outline: { color: "#000000", width: 4 },
 };
 
-/** A text item at `start` on an overlay track. */
+/** A text item at `start` on an overlay track. Text never goes on the main track. */
 export function placeText(
   edit: Edit,
   trackId: string,
@@ -259,7 +259,7 @@ export function placeText(
   text = "Text",
   newId = makeId(),
 ): { edit: Edit; id: string | null } {
-  if (!edit.tracks.some((t) => t.id === trackId)) return { edit, id: null };
+  if (edit.tracks.find((t) => t.id === trackId)?.kind !== "overlay") return { edit, id: null };
   const at = freeStart(edit, trackId, start, DEFAULT_STILL_SECONDS);
   const item: TextItem = {
     ...baseItem(trackId, at, DEFAULT_STILL_SECONDS, newId),
@@ -270,12 +270,16 @@ export function placeText(
   return { edit: { ...edit, items: [...edit.items, item] }, id: item.id };
 }
 
-/** Moves an item in time and, optionally, onto another track. */
+/**
+ * Moves an item in time and, optionally, onto another track. The main track
+ * takes video and images; text stays on the overlays.
+ */
 export function moveItem(edit: Edit, id: string, start: number, trackId?: string): Edit {
   const item = edit.items.find((i) => i.id === id);
   if (!item) return edit;
-  const target =
-    trackId !== undefined && edit.tracks.some((t) => t.id === trackId) ? trackId : item.trackId;
+  const wanted = trackId === undefined ? undefined : edit.tracks.find((t) => t.id === trackId);
+  const allowed = wanted && !(wanted.kind === "main" && item.kind === "text");
+  const target = allowed ? wanted.id : item.trackId;
   const at = freeStart(edit, target, start, item.duration, id);
   return mapItem(edit, id, (i) => ({ ...i, start: at, trackId: target }));
 }
@@ -423,16 +427,114 @@ export function patchTrack(edit: Edit, id: string, patch: Partial<Pick<EditTrack
 }
 
 /** Adds an overlay track on top of the others. */
-export function addOverlayTrack(edit: Edit): { edit: Edit; id: string } {
+export function addOverlayTrack(edit: Edit, id = makeId()): { edit: Edit; id: string } {
   const count = edit.tracks.filter((t) => t.kind === "overlay").length;
   const track: EditTrack = {
-    id: makeId(),
+    id,
     kind: "overlay",
     name: `Overlay ${count + 1}`,
     hidden: false,
     muted: false,
   };
   return { edit: { ...edit, tracks: [...edit.tracks, track] }, id: track.id };
+}
+
+/**
+ * The overlay track a new still or text goes on: the topmost one that is free
+ * from `start` for `duration`, or a new track on top when none is — so two
+ * things placed at the same moment never share a lane.
+ */
+export function overlayTarget(
+  edit: Edit,
+  start: number,
+  duration: number,
+  newId = makeId(),
+): { edit: Edit; trackId: string } {
+  const end = start + duration;
+  const free = [...edit.tracks]
+    .reverse()
+    .find(
+      (t) =>
+        t.kind === "overlay" &&
+        !edit.items.some((i) => i.trackId === t.id && i.start < end - 1e-9 && itemEnd(i) > start + 1e-9),
+    );
+  if (free) return { edit, trackId: free.id };
+  const added = addOverlayTrack(edit, newId);
+  return { edit: added.edit, trackId: added.id };
+}
+
+/**
+ * Moves an overlay track one place up (+1, drawn above more) or down (-1).
+ * The main track stays at the bottom.
+ */
+export function moveTrack(edit: Edit, id: string, direction: number): Edit {
+  const index = edit.tracks.findIndex((t) => t.id === id);
+  const target = index + Math.sign(direction);
+  if (index < 1 || target < 1 || target >= edit.tracks.length || target === index) return edit;
+  const tracks = [...edit.tracks];
+  [tracks[index], tracks[target]] = [tracks[target], tracks[index]];
+  return { ...edit, tracks };
+}
+
+export const MIN_SCALE = 0.01;
+export const MAX_SCALE = 20;
+
+/**
+ * Changes a static item's place or size. An item with more than one key is
+ * animated, and is edited key by key instead; this leaves it alone.
+ */
+export function setStaticTransform(
+  edit: Edit,
+  id: string,
+  patch: Partial<Omit<TransformKey, "time">>,
+): Edit {
+  return mapItem(edit, id, (item) => {
+    if (item.transform.length !== 1) return item;
+    const key = item.transform[0];
+    const next: TransformKey = {
+      time: key.time,
+      x: Number.isFinite(patch.x) ? patch.x! : key.x,
+      y: Number.isFinite(patch.y) ? patch.y! : key.y,
+      scale: Number.isFinite(patch.scale)
+        ? Math.min(MAX_SCALE, Math.max(MIN_SCALE, patch.scale!))
+        : key.scale,
+    };
+    if (next.x === key.x && next.y === key.y && next.scale === key.scale) return item;
+    return { ...item, transform: [next] };
+  });
+}
+
+/** Changes a text item's words. */
+export function setText(edit: Edit, id: string, text: string): Edit {
+  return mapItem(edit, id, (item) =>
+    item.kind === "text" && item.text !== text ? { ...item, text } : item,
+  );
+}
+
+/**
+ * Changes a text item's look. `null` for outline, shadow or background takes
+ * that effect away; an object replaces it whole.
+ */
+export function patchTextStyle(
+  edit: Edit,
+  id: string,
+  patch: Partial<Omit<TextStyle, "outline" | "shadow" | "background">> & {
+    outline?: TextStyle["outline"] | null;
+    shadow?: TextStyle["shadow"] | null;
+    background?: TextStyle["background"] | null;
+  },
+): Edit {
+  return mapItem(edit, id, (item) => {
+    if (item.kind !== "text") return item;
+    const style: TextStyle = { ...item.style };
+    for (const [key, value] of Object.entries(patch) as Array<[keyof TextStyle, unknown]>) {
+      if (value === undefined) continue;
+      if (value === null) delete style[key];
+      else (style as unknown as Record<string, unknown>)[key] = value;
+    }
+    style.fontSize = Math.max(1, style.fontSize);
+    return { ...item, style };
+  });
 }
 
 /** Removes an overlay track and its items. The main track stays. */

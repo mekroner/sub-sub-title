@@ -3254,3 +3254,57 @@ button.fill-alt.on {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* The selected item on the Edit stage. Its border width is set inline, in
+   canvas pixels, so it stays thin however far the stage is scaled. */
+.edit-selection {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed #cfe6ff;
+  z-index: 10000;
+  pointer-events: none;
+}
+.edit-selection.movable {
+  pointer-events: auto;
+  cursor: move;
+  touch-action: none;
+}
+
+.edit-section {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.edit-text-input {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
+.edit-align {
+  margin-left: auto;
+}
+.edit-effect {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.edit-effect-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.edit-effect-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 20px;
+}
+
+/* Overlay headers carry a name field and four buttons. */
+.edit-timeline {
+  grid-template-columns: 210px minmax(0, 1fr);
+}

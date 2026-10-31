@@ -124,9 +124,12 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
     let mut graph = String::new();
     let mut audio_labels: Vec<String> = Vec::new();
 
+    // Composited in planar RGB, and only made 4:2:0 at the very end: an
+    // overlay onto a yuv420p base snaps to even pixels, which would put
+    // anything at an odd position a pixel away from where the preview draws it.
     let _ = writeln!(
         graph,
-        "color=c=black:s={}x{}:r={fps}:d={}[b0];",
+        "color=c=black:s={}x{}:r={fps}:d={},format=gbrp[b0];",
         plan.width,
         plan.height,
         num(plan.total)
@@ -192,7 +195,7 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
         graph.push_str(&chain);
         let _ = writeln!(
             graph,
-            "[b{base}][v{index}]overlay=x={}:y={}:eof_action=pass:enable='between(t,{},{})'[b{}];",
+            "[b{base}][v{index}]overlay=x={}:y={}:eof_action=pass:format=gbrp:enable='between(t,{},{})'[b{}];",
             rect.x.round(),
             rect.y.round(),
             num(layer.start),
@@ -428,11 +431,11 @@ mod tests {
             inputs,
             ["-ss", "0", "-t", "4", "-i", "/v/a.mp4", "-ss", "12.5", "-t", "6", "-i", "/v/a.mp4"]
         );
-        assert!(graph.starts_with("color=c=black:s=640x360:r=25:d=11[b0];"));
+        assert!(graph.starts_with("color=c=black:s=640x360:r=25:d=11,format=gbrp[b0];"));
         assert!(graph.contains("[1:v]setpts=PTS-STARTPTS,fps=25,scale=640:360,format=rgba,setpts=PTS+5/TB[v1];"));
         // The gap from 4 to 5 s is the black base: nothing is enabled over it.
-        assert!(graph.contains("[b0][v0]overlay=x=0:y=0:eof_action=pass:enable='between(t,0,4)'[b1];"));
-        assert!(graph.contains("[b1][v1]overlay=x=0:y=0:eof_action=pass:enable='between(t,5,11)'[b2];"));
+        assert!(graph.contains("[b0][v0]overlay=x=0:y=0:eof_action=pass:format=gbrp:enable='between(t,0,4)'[b1];"));
+        assert!(graph.contains("[b1][v1]overlay=x=0:y=0:eof_action=pass:format=gbrp:enable='between(t,5,11)'[b2];"));
         assert!(graph.contains("[b2]format=yuv420p[vout];"));
         assert!(graph.contains("adelay=5000:all=1[a1];"));
         assert!(graph.contains("[bed][a0][a1]amix=inputs=3:normalize=0:duration=first[aout]"));
@@ -449,6 +452,22 @@ mod tests {
             "format=rgba,colorchannelmixer=aa=0.8,fade=t=in:st=0:d=0.5:alpha=1,fade=t=out:st=3:d=1:alpha=1,setpts=PTS+2/TB"
         ));
         assert!(graph.contains("afade=t=in:st=0:d=0.5,afade=t=out:st=3:d=1,adelay=2000:all=1"));
+    }
+
+    #[test]
+    fn lays_a_translucent_overlay_where_its_rect_says() {
+        let main = video(0.0, 5.0, 0.0, true);
+        let mut logo = video(1.0, 3.0, 0.0, false);
+        logo.kind = "image".into();
+        logo.path = "/v/logo.png".into();
+        logo.opacity = 0.5;
+        logo.rects = vec![PlanRect { time: 0.0, x: 410.4, y: -12.6, w: 191.0, h: 115.0 }];
+        let (inputs, graph) = build_graph(&plan(vec![main, logo], 5.0)).unwrap();
+        assert_eq!(&inputs[6..], ["-loop", "1", "-framerate", "25", "-t", "3", "-i", "/v/logo.png"]);
+        assert!(graph.contains("[1:v]setpts=PTS-STARTPTS,fps=25,scale=191:115,format=rgba,colorchannelmixer=aa=0.5,setpts=PTS+1/TB[v1];"));
+        // Drawn over the main clip, partly off the top edge.
+        assert!(graph.contains("[b1][v1]overlay=x=410:y=-13:eof_action=pass:format=gbrp:enable='between(t,1,4)'[b2];"));
+        assert!(!graph.contains("[1:a]"));
     }
 
     #[test]

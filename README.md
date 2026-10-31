@@ -483,6 +483,19 @@ behaves as before.
   onto the track, or double-click it to add it at the end.
 - **Fades** go to and from black, picture and sound together, so a clip that
   fades out followed by one that fades in dips to black between them.
+- **Overlays** draw over the main track: images and text on overlay tracks,
+  the top lane drawn on top (rename and reorder them in their headers).
+  **+ Text** adds a text item at the playhead; double-clicking an image in
+  *Media* places it there too, each on the topmost overlay track that is free
+  at that moment. Overlay video plays silent.
+- **Place and size** every item, the main clip included, in the *Item* tab: X
+  and Y are the centre as a percentage of the canvas, and 100% scale fits a
+  picture inside the canvas (for text, its drawn size). Drag the selected item
+  on the picture to move it.
+- **Text** has a font (any installed family), size, weight, colour, alignment,
+  and optional outline, shadow and box. It is drawn to a PNG in the app, and
+  the bake overlays that same image, so the preview shows exactly what is
+  baked and ffmpeg never needs the font.
 - **Keys:** `Space` plays, `S` splits at the playhead, `Delete` removes the
   selected clip, and `←` `→` (or `[` `]`) move it by a frame. Every change undoes
   like any other.
@@ -558,7 +571,8 @@ sub-sub-title.exe "D:\footage\scene.mp4"
   turns the plan into an ffmpeg filter graph (`src-tauri/src/edit.rs`): a black
   base, each clip seeked at the demuxer (`-ss`/`-t` per input, so a clip late in
   a long file does not decode what comes before it), faded in alpha and laid
-  over with `overlay`. The graph holds no paths and goes in a file
+  over with `overlay` in planar RGB (a 4:2:0 base would snap odd positions to
+  even pixels). The graph holds no paths and goes in a file
   (`-filter_complex_script`), since Windows caps a command line at 32k
   characters.
 - **The video is served over Tauri's asset protocol**, and each opened file is

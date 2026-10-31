@@ -92,6 +92,15 @@ describe("planHash", () => {
     expect(planHash(buildRenderPlan(faded))).not.toBe(hash);
   });
 
+  it("changes when the drawn text does", () => {
+    const { edit: e1, id: track } = addOverlayTrack(fixture());
+    const { edit, id } = placeText(e1, track, 1);
+    const hashWith = (name: string) =>
+      planHash(buildRenderPlan(edit, new Map([[id!, { name, width: 200, height: 80 }]])));
+    expect(hashWith("t-abc.png")).toBe(hashWith("t-abc.png"));
+    expect(hashWith("t-abc.png")).not.toBe(hashWith("t-def.png"));
+  });
+
   it("ignores float noise below a microsecond", () => {
     const plan = buildRenderPlan(fixture());
     const noisy = { ...plan, layers: plan.layers.map((l) => ({ ...l, start: l.start + 1e-9 })) };

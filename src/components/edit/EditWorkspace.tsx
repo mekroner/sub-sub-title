@@ -5,21 +5,32 @@ import type { Edit, EditSource, MediaInfo } from "../../types";
 import * as api from "../../lib/api";
 import { errorMessage } from "../../lib/api";
 import {
+  DEFAULT_STILL_SECONDS,
   MAIN_TRACK_ID,
+  addOverlayTrack,
   addSource,
   canvasFor,
   editEnd,
   mainTrack,
+  moveTrack,
+  overlayTarget,
   patchItem,
+  patchTextStyle,
   patchTrack,
   placeSource,
+  placeText,
   removeSource,
+  removeTrack,
   setCanvas,
   setFade,
+  setStaticTransform,
+  setText,
   sourceFromInfo,
   startEditFromVideo,
   type ItemPatch,
 } from "../../lib/edit";
+import { makeId } from "../../lib/ids";
+import { useTextRasters } from "../../hooks/useTextRasters";
 import { bakeBase, buildRenderPlan, nextBakePath, planHash, samePath } from "../../lib/editPlan";
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../../lib/dropPaths";
 import { formatShort } from "../../lib/time";
@@ -207,9 +218,18 @@ export function EditWorkspace({
   };
 
   // --- Baking ---------------------------------------------------------------------
-  const plan = useMemo(() => (edit ? buildRenderPlan(edit) : null), [edit]);
+  // Text is drawn to PNGs first: the preview shows them and the bake overlays them.
+  const rasters = useTextRasters(edit);
+  const plan = useMemo(() => (edit ? buildRenderPlan(edit, rasters.byItem) : null), [edit, rasters.byItem]);
   const hash = useMemo(() => (plan ? planHash(plan) : ""), [plan]);
-  const bakeState = !edit?.baked ? "none" : edit.baked.planHash === hash ? "current" : "stale";
+  // Until the text is drawn the plan lacks it, and would read as changed.
+  const bakeState = !edit?.baked
+    ? "none"
+    : !rasters.ready
+      ? "checking"
+      : edit.baked.planHash === hash
+        ? "current"
+        : "stale";
 
   const openBake = useCallback(async () => {
     if (!edit) return;
@@ -227,6 +247,16 @@ export function EditWorkspace({
       notify(errorMessage(e), "error");
     }
   }, [edit, projectPath, notify, state]);
+
+  /** Writes every drawn text into the bake's work dir, once per distinct drawing. */
+  const stageText = useCallback(async () => {
+    const staged = new Set<string>();
+    for (const drawn of rasters.byItem.values()) {
+      if (staged.has(drawn.name)) continue;
+      await api.stageEditImage(drawn.name, drawn.bytes);
+      staged.add(drawn.name);
+    }
+  }, [rasters.byItem]);
 
   // Pause while the bake dialog is open.
   useEffect(() => {
@@ -257,6 +287,37 @@ export function EditWorkspace({
       </main>
     );
   }
+
+  /** A new text item at the playhead, on the top overlay track. */
+  const addText = () => {
+    const trackId = makeId();
+    const itemId = makeId();
+    const at = state.time;
+    setDefined((e) => {
+      const target = overlayTarget(e, at, DEFAULT_STILL_SECONDS, trackId);
+      return placeText(target.edit, target.trackId, at, "Text", itemId).edit;
+    });
+    state.setSelectedId(itemId);
+    setTab("item");
+  };
+
+  /** Double-click in the media list: videos go on the end of the cut, stills over it at the playhead. */
+  const appendSource = (sourceId: string) => {
+    const source = edit.sources.find((s) => s.id === sourceId);
+    if (!source) return;
+    if (source.kind === "video") {
+      state.place(sourceId, MAIN_TRACK_ID, editEnd(edit));
+      return;
+    }
+    const trackId = makeId();
+    const itemId = makeId();
+    const at = state.time;
+    setDefined((e) => {
+      const target = overlayTarget(e, at, DEFAULT_STILL_SECONDS, trackId);
+      return placeSource(target.edit, sourceId, target.trackId, at, itemId).edit;
+    });
+    state.setSelectedId(itemId);
+  };
 
   const patchSelected = (id: string, patch: ItemPatch, field: string) => {
     const key = `item:${id}:${field}`;
@@ -294,23 +355,43 @@ export function EditWorkspace({
           >
             Delete
           </button>
+          <button type="button" className="small" onClick={addText} title="Add a text item at the playhead">
+            + Text
+          </button>
           <span className="toolbar-spacer" />
           <span
             className={`edit-bake-state ${bakeState}`}
             title={edit.baked ? `Last baked to ${edit.baked.path}` : undefined}
           >
-            {bakeState === "none" ? "Not baked" : bakeState === "current" ? "Baked" : "Bake out of date"}
+            {bakeState === "none"
+              ? "Not baked"
+              : bakeState === "checking"
+                ? "Baked…"
+                : bakeState === "current"
+                  ? "Baked"
+                  : "Bake out of date"}
           </span>
           <button
             type="button"
             className="small primary"
-            disabled={!plan || plan.total <= 0}
+            disabled={!plan || plan.total <= 0 || !rasters.ready}
+            title={rasters.ready ? undefined : "Drawing the text…"}
             onClick={() => void openBake()}
           >
             Bake…
           </button>
         </div>
-        <EditPreview edit={edit} time={state.time} playing={state.playing} stalled={state.stalled} />
+        <EditPreview
+          edit={edit}
+          time={state.time}
+          playing={state.playing}
+          stalled={state.stalled}
+          textImages={rasters.byItem}
+          selectedId={state.selectedId}
+          onMoveSelected={(id, x, y, drag) =>
+            setDefined((e) => setStaticTransform(e, id, { x, y }), `drag:${drag}`)
+          }
+        />
       </div>
 
       <SideResizer width={sideWidth} onWidth={onSideWidth} />
@@ -323,9 +404,16 @@ export function EditWorkspace({
           selected={selected}
           onAddFiles={() => void pickFiles()}
           onSourcePointerDown={startBinDrag}
-          onAppendSource={(id) => state.place(id, MAIN_TRACK_ID, editEnd(edit))}
+          onAppendSource={appendSource}
           onRemoveSource={(id) => setDefined((e) => removeSource(e, id))}
           onPatchItem={patchSelected}
+          onTransform={(id, patch, field) =>
+            setDefined((e) => setStaticTransform(e, id, patch), `item:${id}:${field}`)
+          }
+          onText={(id, text) => setDefined((e) => setText(e, id, text), `item:${id}:text`)}
+          onTextStyle={(id, patch, field) =>
+            setDefined((e) => patchTextStyle(e, id, patch), `item:${id}:style:${field}`)
+          }
           onCanvas={(canvas) => setDefined((e) => setCanvas(e, canvas))}
         />
       </aside>
@@ -348,6 +436,10 @@ export function EditWorkspace({
           onTrimEnd={state.trimEnd}
           onFade={state.fade}
           onPatchTrack={(id, patch) => setDefined((e) => patchTrack(e, id, patch))}
+          onAddTrack={() => setDefined((e) => addOverlayTrack(e).edit)}
+          onRemoveTrack={(id) => setDefined((e) => removeTrack(e, id))}
+          onRenameTrack={(id, name) => setDefined((e) => patchTrack(e, id, { name }), `track:${id}:name`)}
+          onMoveTrack={(id, direction) => setDefined((e) => moveTrack(e, id, direction))}
         />
       </section>
 
@@ -364,6 +456,7 @@ export function EditWorkspace({
           defaultOutput={bake.output}
           sources={edit.sources.map((s) => s.path)}
           rebakeWarning={hasTimedWork}
+          prepare={stageText}
           onBaked={onBaked}
           onClose={() => setBake(null)}
         />

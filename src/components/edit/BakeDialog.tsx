@@ -14,13 +14,24 @@ interface Props {
   sources: string[];
   /** Cues or voice clips exist, timed against the current video. */
   rebakeWarning: boolean;
+  /** Run before the encode: writes the drawn text where the bake reads it. */
+  prepare?: () => Promise<void>;
   /** Called once the file is written; the dialog closes after. */
   onBaked: (path: string, planHash: string) => Promise<void>;
   onClose: () => void;
 }
 
 /** Bakes the edit to an MP4, which then becomes the project's video. */
-export function BakeDialog({ plan, planHash, defaultOutput, sources, rebakeWarning, onBaked, onClose }: Props) {
+export function BakeDialog({
+  plan,
+  planHash,
+  defaultOutput,
+  sources,
+  rebakeWarning,
+  prepare,
+  onBaked,
+  onClose,
+}: Props) {
   const [output, setOutput] = useState(defaultOutput);
   const [crf, setCrf] = useState(18);
   const [progress, setProgress] = useState<BakeProgress | null>(null);
@@ -43,6 +54,7 @@ export function BakeDialog({ plan, planHash, defaultOutput, sources, rebakeWarni
     setError(null);
     setProgress(null);
     try {
+      await prepare?.();
       await bakeEdit({ plan, outputPath: output, crf });
       await onBaked(output, planHash);
       onClose();

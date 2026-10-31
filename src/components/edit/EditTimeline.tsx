@@ -36,6 +36,9 @@ interface Props {
   onPatchTrack: (id: string, patch: Partial<Pick<EditTrack, "hidden" | "muted">>) => void;
   onAddTrack?: () => void;
   onRemoveTrack?: (id: string) => void;
+  onRenameTrack?: (id: string, name: string) => void;
+  /** +1 draws the track above the next one up; -1 below. */
+  onMoveTrack?: (id: string, direction: number) => void;
 }
 
 /** The lane under a screen point, and the timeline time there: for drops from the media bin. */
@@ -81,6 +84,8 @@ export function EditTimeline({
   onPatchTrack,
   onAddTrack,
   onRemoveTrack,
+  onRenameTrack,
+  onMoveTrack,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLCanvasElement>(null);
@@ -278,7 +283,16 @@ export function EditTimeline({
             style={{ height: laneHeight(track) }}
           >
             <div className="vo-header-row">
-              <span className="vo-track-name">{track.name}</span>
+              {track.kind === "overlay" && onRenameTrack ? (
+                <input
+                  className="vo-track-name-input"
+                  value={track.name}
+                  aria-label="Track name"
+                  onChange={(e) => onRenameTrack(track.id, e.target.value)}
+                />
+              ) : (
+                <span className="vo-track-name">{track.name}</span>
+              )}
               {track.kind === "main" && (
                 <button
                   type="button"
@@ -299,6 +313,28 @@ export function EditTimeline({
               >
                 H
               </button>
+              {track.kind === "overlay" && onMoveTrack && (
+                <>
+                  <button
+                    type="button"
+                    className="vo-ms"
+                    title="Draw this track above the one over it"
+                    disabled={edit.tracks[edit.tracks.length - 1].id === track.id}
+                    onClick={() => onMoveTrack(track.id, 1)}
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    className="vo-ms"
+                    title="Draw this track below the one under it"
+                    disabled={edit.tracks[1]?.id === track.id}
+                    onClick={() => onMoveTrack(track.id, -1)}
+                  >
+                    ▼
+                  </button>
+                </>
+              )}
               {track.kind === "overlay" && onRemoveTrack && (
                 <button
                   type="button"
