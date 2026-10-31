@@ -13,6 +13,26 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Whether ffmpeg has the Rubber Band time-stretcher, which speeds up speech
+/// far more cleanly than `atempo`. Not every build includes it. Asked once a
+/// run: a build's filters do not change while the app is open.
+pub fn has_rubberband() -> bool {
+    static RUBBERBAND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *RUBBERBAND.get_or_init(|| {
+        quiet_command(&ffmpeg_bin())
+            .args(["-hide_banner", "-filters"])
+            .stdin(Stdio::null())
+            .output()
+            .map(|out| {
+                // Lines read " .. rubberband        A->A       Apply …".
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .any(|line| line.split_whitespace().nth(1) == Some("rubberband"))
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// Build a Command that never flashes a console window on Windows.
 pub fn quiet_command(program: &str) -> Command {
     let mut cmd = Command::new(program);

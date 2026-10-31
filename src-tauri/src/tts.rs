@@ -14,7 +14,7 @@
 
 use crate::engine::{free_space, human_bytes, local_dir, tar_bin};
 use crate::error::{AppError, AppResult};
-use crate::media::{ffmpeg_bin, ffprobe_bin, measure_loudness, quiet_command};
+use crate::media::{ffmpeg_bin, ffprobe_bin, has_rubberband, measure_loudness, quiet_command};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -979,11 +979,10 @@ fn stretch(input: &str, output: &str, ratio: f64) -> AppResult<f64> {
     if Path::new(input) == Path::new(output) {
         return Err(AppError::msg("The stretched take would overwrite the original."));
     }
-    // `atempo` keeps the pitch; within 0.5..2 it is a single pass.
     let out = quiet_command(&ffmpeg_bin())
         .args(["-hide_banner", "-nostdin", "-v", "error", "-y", "-i"])
         .arg(input)
-        .args(["-af", &format!("atempo={ratio:.4}"), "-c:a", "pcm_s16le"])
+        .args(["-af", &stretch_filter(ratio, has_rubberband()), "-c:a", "pcm_s16le"])
         .arg(output)
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
@@ -996,6 +995,20 @@ fn stretch(input: &str, output: &str, ratio: f64) -> AppResult<f64> {
         )));
     }
     probe_seconds(output)
+}
+
+/// The filter playing a take `ratio` times as fast at the same pitch. Rubber
+/// Band where ffmpeg has it: `atempo` splices overlapping slices of the
+/// waveform, which smears vowels and doubles consonants into a phasey,
+/// processed sound well before the limit. Its "mixed" transients keep
+/// consonants sharp without resetting the phase of the voice's harmonics.
+fn stretch_filter(ratio: f64, rubberband: bool) -> String {
+    if rubberband {
+        format!("rubberband=tempo={ratio:.4}:transients=mixed:window=standard")
+    } else {
+        // Within 0.5..2, a single pass.
+        format!("atempo={ratio:.4}")
+    }
 }
 
 /// A file's length in seconds, as ffprobe reads it.
@@ -1141,6 +1154,21 @@ mod tests {
         assert!((seconds - 2.5).abs() < 0.03, "got {seconds}");
         assert!(stretch(&take, &fast, 1.5).is_err(), "past the limit");
         assert!(stretch(&take, &take, 1.1).is_err(), "over itself");
+
+        // Both stretchers land on the length asked for: Rubber Band where
+        // this ffmpeg has it, and `atempo`, which every build has.
+        for rubberband in [has_rubberband(), false] {
+            let out = quiet_command(&ffmpeg_bin())
+                .args(["-v", "error", "-y", "-i"])
+                .arg(&take)
+                .args(["-af", &stretch_filter(1.15, rubberband)])
+                .arg(&fast)
+                .status()
+                .unwrap();
+            assert!(out.success(), "rubberband: {rubberband}");
+            let seconds = probe_seconds(&fast).unwrap();
+            assert!((seconds - 3.0 / 1.15).abs() < 0.03, "rubberband {rubberband}: got {seconds}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
