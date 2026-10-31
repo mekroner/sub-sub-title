@@ -4,9 +4,31 @@
  * at the cost of breaking if the video is renamed, which the app reports.
  */
 
-import type { Cue, Project, ProjectFile, Section, Speaker, TimedBeat } from "../types";
+import type {
+  Cue,
+  DuckSettings,
+  GainPoint,
+  Project,
+  ProjectFile,
+  Section,
+  Speaker,
+  TimedBeat,
+  VoiceClip,
+  VoiceTrack,
+  Voiceover,
+} from "../types";
 import { sortCues } from "./cues";
 import { makeId } from "./ids";
+import {
+  DEFAULT_DUCK,
+  MAX_VOICE_TRACKS,
+  ORIGINAL_TRACK_ID,
+  basename,
+  clampDb,
+  defaultVoiceover,
+  originalTrack,
+  patchDuck,
+} from "./voiceover";
 import { sortSections } from "./sections";
 import { sortBeats } from "./timedBeats";
 
@@ -87,6 +109,105 @@ function coerceSection(raw: unknown): Section | null {
   };
 }
 
+function finite(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function coerceGainPoint(raw: unknown): GainPoint | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const p = raw as Partial<GainPoint>;
+  if (typeof p.time !== "number" || !Number.isFinite(p.time)) return null;
+  return { time: Math.max(0, p.time), db: clampDb(finite(p.db, 0)) };
+}
+
+function coerceTrack(raw: unknown): VoiceTrack | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const t = raw as Partial<VoiceTrack>;
+  if (t.kind !== "original" && t.kind !== "voice") return null;
+  return {
+    id: t.kind === "original" ? ORIGINAL_TRACK_ID : typeof t.id === "string" && t.id ? t.id : makeId(),
+    kind: t.kind,
+    name: typeof t.name === "string" ? t.name : t.kind === "original" ? "Original" : "VO",
+    gainDb: clampDb(finite(t.gainDb, 0)),
+    muted: t.muted === true,
+    solo: t.solo === true,
+    automation: Array.isArray(t.automation)
+      ? t.automation
+          .map(coerceGainPoint)
+          .filter((p): p is GainPoint => p !== null)
+          .sort((a, b) => a.time - b.time)
+      : [],
+  };
+}
+
+function coerceClip(raw: unknown): VoiceClip | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const c = raw as Partial<VoiceClip>;
+  // Without a file or a place on a track there is nothing to play.
+  if (typeof c.file !== "string" || !c.file) return null;
+  if (typeof c.trackId !== "string") return null;
+  const sourceDuration = finite(c.sourceDuration, 0);
+  const offset = Math.min(Math.max(0, finite(c.offset, 0)), sourceDuration);
+  const duration = Math.min(finite(c.duration, 0), sourceDuration - offset);
+  if (!(duration > 0)) return null;
+  return {
+    id: typeof c.id === "string" && c.id ? c.id : makeId(),
+    trackId: c.trackId,
+    file: c.file,
+    name: typeof c.name === "string" ? c.name : basename(c.file),
+    start: Math.max(0, finite(c.start, 0)),
+    offset,
+    duration,
+    sourceDuration,
+    gainDb: clampDb(finite(c.gainDb, 0)),
+  };
+}
+
+/**
+ * Always yields exactly one original track, first, and at most the allowed
+ * number of voice tracks; clips on a track that did not survive are dropped.
+ */
+function coerceVoiceover(raw: unknown): Voiceover {
+  if (typeof raw !== "object" || raw === null) return defaultVoiceover();
+  const v = raw as Partial<Voiceover>;
+  const tracks = Array.isArray(v.tracks)
+    ? v.tracks.map(coerceTrack).filter((t): t is VoiceTrack => t !== null)
+    : [];
+  const original = tracks.find((t) => t.kind === "original") ?? originalTrack();
+  // Duplicate ids would make two lanes answer to one clip.
+  const seen = new Set<string>([ORIGINAL_TRACK_ID]);
+  const voices: VoiceTrack[] = [];
+  for (const t of tracks) {
+    if (t.kind !== "voice" || seen.has(t.id)) continue;
+    seen.add(t.id);
+    voices.push(t);
+  }
+  voices.splice(MAX_VOICE_TRACKS);
+  const voiceIds = new Set(voices.map((t) => t.id));
+  const clips = Array.isArray(v.clips)
+    ? v.clips
+        .map(coerceClip)
+        .filter((c): c is VoiceClip => c !== null && voiceIds.has(c.trackId))
+    : [];
+  const rawDuck =
+    typeof v.duck === "object" && v.duck !== null ? (v.duck as Partial<DuckSettings>) : {};
+  // patchDuck clamps every field, so a hand-edited value cannot escape the range.
+  const withDuck = patchDuck(
+    { tracks: [original, ...voices], clips, duck: { ...DEFAULT_DUCK }, unduckedCueIds: [] },
+    {
+      enabled: rawDuck.enabled !== false,
+      depthDb: finite(rawDuck.depthDb, DEFAULT_DUCK.depthDb),
+      attack: finite(rawDuck.attack, DEFAULT_DUCK.attack),
+      release: finite(rawDuck.release, DEFAULT_DUCK.release),
+      bridge: finite(rawDuck.bridge, DEFAULT_DUCK.bridge),
+    },
+  );
+  const unduckedCueIds = Array.isArray(v.unduckedCueIds)
+    ? [...new Set(v.unduckedCueIds.filter((id): id is string => typeof id === "string" && id !== ""))]
+    : [];
+  return { ...withDuck, unduckedCueIds };
+}
+
 /**
  * Tolerant of hand-edited and partial files: anything unusable is dropped
  * rather than failing the whole load. Only unparseable JSON throws.
@@ -146,5 +267,8 @@ export function parseProjectFile(raw: string): Project {
     beats,
     sections,
     timedBeats,
+    // Written only since the Voiceover tab existed; older files get the
+    // original track alone.
+    voiceover: coerceVoiceover(file.voiceover),
   };
 }

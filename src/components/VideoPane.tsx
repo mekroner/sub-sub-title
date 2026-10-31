@@ -97,6 +97,9 @@ export const VideoPane = forwardRef<HTMLVideoElement, Props>(function VideoPane(
           <video
             ref={ref}
             className="video-el"
+            // Lets the voiceover mixer take the audio: without it the element
+            // counts as cross-origin to the page and Web Audio hears silence.
+            crossOrigin="anonymous"
             src={src}
             onTimeUpdate={(e) => onTimeUpdate(e.currentTarget.currentTime)}
             onDurationChange={(e) => onDurationChange(e.currentTarget.duration)}

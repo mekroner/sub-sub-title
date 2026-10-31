@@ -74,6 +74,76 @@ export interface TimedBeat {
   by?: "agent";
 }
 
+/** A point on a track's gain curve. Phase 3 interpolates between them. */
+export interface GainPoint {
+  /** Seconds. */
+  time: number;
+  /** Relative to the track's own gain. */
+  db: number;
+}
+
+/**
+ * A lane in the voiceover mix. There is always exactly one `original` track —
+ * the video's own audio — and up to `MAX_VOICE_TRACKS` voice tracks.
+ */
+export interface VoiceTrack {
+  id: string;
+  kind: "original" | "voice";
+  name: string;
+  /** Static gain in dB, applied on top of the curve. */
+  gainDb: number;
+  muted: boolean;
+  solo: boolean;
+  automation: GainPoint[];
+}
+
+/**
+ * A stretch of an audio file placed on a voice track. The file is referenced,
+ * never copied — like the video itself.
+ */
+export interface VoiceClip {
+  id: string;
+  trackId: string;
+  /** Absolute path of the audio file. */
+  file: string;
+  /** Display name; the file's basename unless renamed. */
+  name: string;
+  /** Seconds on the timeline where the clip begins. */
+  start: number;
+  /** Seconds into the file where playback begins — the trimmed-off head. */
+  offset: number;
+  /** Seconds of the file that play, from `offset`. */
+  duration: number;
+  /** Length of the whole file, so a trim can never reach past its end. */
+  sourceDuration: number;
+  gainDb: number;
+}
+
+/** How the original track ducks under the cues. Applied live, never baked. */
+export interface DuckSettings {
+  enabled: boolean;
+  /** How far the original drops under a cue, in dB (zero or negative). */
+  depthDb: number;
+  /** Seconds the fade down takes, ending where the cue begins. */
+  attack: number;
+  /** Seconds the fade back up takes, starting where the cue ends. */
+  release: number;
+  /** Gaps between ducked cues shorter than this (after the fades) stay down. */
+  bridge: number;
+}
+
+export interface Voiceover {
+  /** The original track first, then the voice tracks top to bottom. */
+  tracks: VoiceTrack[];
+  clips: VoiceClip[];
+  duck: DuckSettings;
+  /**
+   * Cues the original does not duck under. Every cue ducks by default, so the
+   * exceptions are what is stored — a new or split cue ducks without asking.
+   */
+  unduckedCueIds: string[];
+}
+
 export interface Project {
   videoPath: string;
   cues: Cue[];
@@ -99,6 +169,8 @@ export interface Project {
   sections: Section[];
   /** Story beats with a time, in time order. Never exported. */
   timedBeats: TimedBeat[];
+  /** The Voiceover tab's tracks and clips. */
+  voiceover: Voiceover;
 }
 
 /** The `.sstproj` project file. Versioned so the format can move later. */

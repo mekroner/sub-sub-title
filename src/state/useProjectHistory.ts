@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { Project } from "../types";
+import { defaultVoiceover } from "../lib/voiceover";
 
 const LIMIT = 200;
 /** Edits sharing a merge key inside this window collapse into one undo step. */
@@ -36,6 +37,7 @@ export const emptyProject: Project = {
   beats: [],
   sections: [],
   timedBeats: [],
+  voiceover: defaultVoiceover(),
 };
 
 export function useProjectHistory(initial: Project = emptyProject) {

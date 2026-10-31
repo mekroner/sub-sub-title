@@ -36,9 +36,12 @@ import type { ContextMenuState } from "./components/ContextMenu";
 import { FindBar } from "./components/FindBar";
 import { ProofreadDialog } from "./components/ProofreadDialog";
 import { TranscribeDialog } from "./components/TranscribeDialog";
+import { VoiceoverTimeline } from "./components/VoiceoverTimeline";
+import { ClipInspector } from "./components/ClipInspector";
+import { VoiceoverMixer } from "./audio/mixer";
 
 import { emptyProject, useProjectHistory } from "./state/useProjectHistory";
-import { useShortcuts } from "./hooks/useShortcuts";
+import { useShortcuts, type ShortcutActions } from "./hooks/useShortcuts";
 import { usePasteText } from "./hooks/usePasteText";
 import { useCueSelection } from "./hooks/useCueSelection";
 import { useSpellcheck } from "./hooks/useSpellcheck";
@@ -77,6 +80,25 @@ import {
 import { layoutContinuation } from "./lib/fill";
 import { addBeat, editBeat, removeBeat } from "./lib/timedBeats";
 import { DEFAULT_WHISPER_MODEL } from "./lib/whisper";
+import { cueDuckCurve } from "./lib/automation";
+import {
+  addClips,
+  addTrack,
+  defaultVoiceover,
+  moveClip,
+  newClip,
+  patchClip,
+  patchTrack,
+  removeClip,
+  patchDuck,
+  removeTrack,
+  setAutomation,
+  toggleCueDuck,
+  trimClipEnd,
+  trimClipStart,
+  type ClipPatch,
+  type TrackPatch,
+} from "./lib/voiceover";
 import { DEFAULT_TARGET_CPS, clamp, durationForText, formatShort } from "./lib/time";
 import {
   DEFAULT_MIN_GAP,
@@ -121,6 +143,8 @@ import type {
   Speaker,
   TimedBeat,
   ToolStatus,
+  VoiceClip,
+  Voiceover,
 } from "./types";
 
 const DEFAULT_SETTINGS: Settings = {
@@ -171,6 +195,10 @@ interface FindState {
 const STORAGE_PREFIX = "sub-sub-title:";
 
 /** localStorage can throw outright (blocked site data), so never let it escape. */
+type Workspace = "subtitles" | "voiceover";
+
+const AUDIO_EXTENSIONS = ["wav", "mp3", "flac", "ogg", "opus", "m4a", "aac"];
+
 function readStored(key: string, fallback: number): number {
   try {
     const raw = localStorage.getItem(STORAGE_PREFIX + key);
@@ -228,6 +256,10 @@ export default function App() {
     clamp(readStored("chatHeight", DEFAULT_CHAT_HEIGHT), MIN_CHAT_HEIGHT, MAX_CHAT_HEIGHT),
   );
   const [follow, setFollow] = useState(true);
+  /** Which tab fills the window below the menu: subtitle editing, or the voiceover mix. */
+  const [workspace, setWorkspace] = useState<Workspace>(() =>
+    readStored("workspace", 0) === 1 ? "voiceover" : "subtitles",
+  );
 
   // An open menu suspends the editor shortcuts, so `S` picks a menu item rather
   // than splitting a cue.
@@ -320,26 +352,93 @@ export default function App() {
   const frameStep = media && media.fps > 0 ? 1 / media.fps : 0.04;
   const duration = media?.duration ?? 0;
 
+  // --- Voiceover mixer ----------------------------------------------------
+  /**
+   * Created the first time the Voiceover tab opens — a click, so the audio
+   * context is allowed to start — and kept from then on: once the video feeds
+   * the mixer it cannot play to the speakers any other way.
+   */
+  const [mixer, setMixer] = useState<VoiceoverMixer | null>(null);
+  const [decodeVersion, setDecodeVersion] = useState(0);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const voiceoverMode = workspace === "voiceover";
+
+  useEffect(() => {
+    if (voiceoverMode && !mixer) setMixer(new VoiceoverMixer());
+  }, [voiceoverMode, mixer]);
+
+  useEffect(() => {
+    if (!mixer) return;
+    const unsubscribe = mixer.onDecoded(() => setDecodeVersion((v) => v + 1));
+    return () => {
+      unsubscribe();
+      mixer.dispose();
+    };
+  }, [mixer]);
+
+  useEffect(() => mixer?.attach(videoEl), [mixer, videoEl]);
+
+  /** The original's duck under the cues: derived live, so it follows every cue edit. */
+  const duckPoints = useMemo(
+    () => cueDuckCurve(project.voiceover, project.cues),
+    [project.voiceover, project.cues],
+  );
+
+  useEffect(() => {
+    mixer?.setMix(project.voiceover, voiceoverMode, duckPoints);
+  }, [mixer, project.voiceover, voiceoverMode, duckPoints]);
+
+  // Decode every clip's file up front, so a reopened project draws its clip
+  // waveforms and the first clip plays on time. Loads are cached per file.
+  // A missing file is reported once, not on every edit that re-runs this.
+  const reportedMissing = useRef(new Set<string>());
+  useEffect(() => {
+    if (!mixer) return;
+    for (const file of new Set(project.voiceover.clips.map((c) => c.file))) {
+      mixer.load(file).catch((e) => {
+        if (reportedMissing.current.has(file)) return;
+        reportedMissing.current.add(file);
+        notify(`Could not read ${file}: ${errorMessage(e)}`, "error");
+      });
+    }
+  }, [mixer, project.voiceover.clips, notify]);
+
+  const selectedClip = useMemo(
+    () => project.voiceover.clips.find((c) => c.id === selectedClipId) ?? null,
+    [project.voiceover.clips, selectedClipId],
+  );
+
+  // A clip removed by an undo, or with its track, must not stay selected.
+  useEffect(() => {
+    if (selectedClipId && !project.voiceover.clips.some((c) => c.id === selectedClipId)) {
+      setSelectedClipId(null);
+    }
+  }, [project.voiceover.clips, selectedClipId]);
+
   // --- Transport ----------------------------------------------------------
   // Loading a new source resets volume/rate on the element, so re-apply on
-  // `loadeddata` as well as whenever the values change.
+  // `loadeddata` as well as whenever the values change. With the mixer in the
+  // path, volume and mute belong to its master gain and the element stays at
+  // full volume.
   useEffect(() => {
     if (!videoEl) return;
     const apply = () => {
-      videoEl.volume = clamp(volume, 0, 1);
-      videoEl.muted = muted;
+      videoEl.volume = mixer ? 1 : clamp(volume, 0, 1);
+      videoEl.muted = mixer ? false : muted;
       videoEl.playbackRate = playbackRate;
     };
     apply();
+    mixer?.setMaster(volume, muted);
     videoEl.addEventListener("loadeddata", apply);
     return () => videoEl.removeEventListener("loadeddata", apply);
-  }, [videoEl, volume, muted, playbackRate, videoUrl]);
+  }, [videoEl, volume, muted, playbackRate, videoUrl, mixer]);
 
   useEffect(() => writeStored("volume", volume), [volume]);
   useEffect(() => writeStored("muted", muted ? 1 : 0), [muted]);
   useEffect(() => writeStored("playbackRate", playbackRate), [playbackRate]);
   useEffect(() => writeStored("sideWidth", sideWidth), [sideWidth]);
   useEffect(() => writeStored("chatHeight", chatHeight), [chatHeight]);
+  useEffect(() => writeStored("workspace", workspace === "voiceover" ? 1 : 0), [workspace]);
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
@@ -452,6 +551,7 @@ export default function App() {
           beats: [],
           sections: [],
           timedBeats: [],
+          voiceover: defaultVoiceover(),
         };
         if (await api.fileExists(derived.project)) {
           const raw = await api.readTextFile(derived.project);
@@ -471,6 +571,7 @@ export default function App() {
             beats: [],
             sections: [],
             timedBeats: [],
+            voiceover: defaultVoiceover(),
           };
           notify(`Loaded ${loaded.cues.length} cues from the project sidecar.`);
         } else if (await api.fileExists(derived.srt)) {
@@ -487,6 +588,7 @@ export default function App() {
             beats: [],
             sections: [],
             timedBeats: [],
+            voiceover: defaultVoiceover(),
           };
           notify(
             `Imported ${merged.cues.length} cues from ${derived.stem}.srt` +
@@ -760,6 +862,79 @@ export default function App() {
       }, mergeKey ? { mergeKey } : undefined);
     },
     [update],
+  );
+
+  // --- Voiceover ----------------------------------------------------------
+  const setVoiceover = useCallback(
+    (fn: (voiceover: Voiceover) => Voiceover, mergeKey?: string) => {
+      update((current) => {
+        const next = fn(current.voiceover);
+        return next === current.voiceover ? current : { ...current, voiceover: next };
+      }, mergeKey ? { mergeKey } : undefined);
+    },
+    [update],
+  );
+
+  /**
+   * A timeline drag is one undo step however long it is held: its key is unique
+   * to the gesture, so it can merge without a time limit.
+   */
+  const dragVoiceover = useCallback(
+    (fn: (voiceover: Voiceover) => Voiceover, drag: string) => {
+      update((current) => {
+        const next = fn(current.voiceover);
+        return next === current.voiceover ? current : { ...current, voiceover: next };
+      }, { mergeKey: `drag:${drag}`, mergeWindowMs: Infinity });
+    },
+    [update],
+  );
+
+  const patchTrackById = useCallback(
+    (id: string, patch: TrackPatch) =>
+      // Typing a name or sweeping a fader is one step, not one per change.
+      setVoiceover((v) => patchTrack(v, id, patch), `track:${id}:${Object.keys(patch).join()}`),
+    [setVoiceover],
+  );
+
+  const patchClipById = useCallback(
+    (id: string, patch: ClipPatch) =>
+      setVoiceover((v) => patchClip(v, id, patch), `clip:${id}:${Object.keys(patch).join()}`),
+    [setVoiceover],
+  );
+
+  const removeClipById = useCallback(
+    (id: string) => setVoiceover((v) => removeClip(v, id)),
+    [setVoiceover],
+  );
+
+  /** Places the chosen files end to end on a track, starting at the playhead. */
+  const importAudio = useCallback(
+    async (trackId: string) => {
+      if (!mixer) return;
+      const picked = await openDialog({
+        multiple: true,
+        filters: [{ name: "Audio", extensions: AUDIO_EXTENSIONS }],
+      });
+      const files = typeof picked === "string" ? [picked] : picked ?? [];
+      if (files.length === 0) return;
+
+      const clips: VoiceClip[] = [];
+      let at = currentTimeRef.current;
+      for (const file of files) {
+        try {
+          const buffer = await mixer.load(file);
+          const clip = newClip(trackId, file, at, buffer.duration);
+          clips.push(clip);
+          at += clip.duration;
+        } catch (e) {
+          notify(`Could not read ${file}: ${errorMessage(e)}`, "error");
+        }
+      }
+      if (clips.length === 0) return;
+      setVoiceover((v) => addClips(v, clips));
+      setSelectedClipId(clips[clips.length - 1].id);
+    },
+    [mixer, notify, setVoiceover],
   );
 
   /** Text for the chat box, set from elsewhere — the Story panel's ✦ Story. */
@@ -1602,8 +1777,7 @@ export default function App() {
     showTranscribe ||
     fillOpen !== null;
 
-  useShortcuts(
-    {
+  const subtitleShortcuts: ShortcutActions = {
       togglePlay,
       assignSpeakerIndex: (index) => {
         const speaker = speakers[index];
@@ -1669,11 +1843,49 @@ export default function App() {
       toggleFollow: () => setFollow((f) => !f),
       toggleGhost,
       showHelp: () => setShowHelp(true),
+  };
+
+  /**
+   * Cues are read-only in the Voiceover tab, so every key that edits them does
+   * nothing there; Delete and Escape act on the selected clip instead.
+   */
+  const voiceoverShortcuts: ShortcutActions = {
+    ...subtitleShortcuts,
+    assignSpeakerIndex: () => undefined,
+    clearSpeaker: () => undefined,
+    splitAtPlayhead: () => undefined,
+    mergeWithNext: () => undefined,
+    nudge: () => undefined,
+    selectPrevious: () => undefined,
+    selectNext: () => undefined,
+    jumpToSelected: () => undefined,
+    newCueAtPlayhead: () => undefined,
+    fitReadingSpeed: () => undefined,
+    toggleThought: () => undefined,
+    addSectionAtPlayhead: () => undefined,
+    duplicateSelected: () => undefined,
+    deleteSelected: () => {
+      if (selectedClipId) removeClipById(selectedClipId);
     },
+    selectAll: () => undefined,
+    clearSelection: () => {
+      if (contextMenu) setContextMenu(null);
+      else setSelectedClipId(null);
+    },
+    openFind: () => undefined,
+    openFill: () => undefined,
+    toggleGhost: () => undefined,
+  };
+
+  useShortcuts(
+    voiceoverMode ? voiceoverShortcuts : subtitleShortcuts,
     !modalOpen && !menuOpen && !contextMenu,
   );
 
-  usePasteText(pasteCueAtPlayhead, !modalOpen && !menuOpen && !contextMenu);
+  usePasteText(
+    pasteCueAtPlayhead,
+    !voiceoverMode && !modalOpen && !menuOpen && !contextMenu,
+  );
 
   // --- Context menu -------------------------------------------------------
   /** Right-clicking a flag on the timeline lane. */
@@ -2208,6 +2420,27 @@ export default function App() {
       <header className="toolbar">
         <MenuBar menus={menus} onOpenChange={setMenuOpen} />
 
+        <div className="segmented workspace-tabs" role="tablist" aria-label="Workspace">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!voiceoverMode}
+            className={voiceoverMode ? "small" : "small on"}
+            onClick={() => setWorkspace("subtitles")}
+          >
+            Subtitles
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={voiceoverMode}
+            className={voiceoverMode ? "small on" : "small"}
+            onClick={() => setWorkspace("voiceover")}
+          >
+            Voiceover
+          </button>
+        </div>
+
         <div className="toolbar-spacer">
           <span className="file-label">
             {hasProject
@@ -2242,7 +2475,7 @@ export default function App() {
       </header>
 
       <main
-        className="layout"
+        className={voiceoverMode ? "layout voiceover" : "layout"}
         style={{ "--side-width": `${sideWidth}px` } as CSSProperties}
       >
         <div className="stage-column">
@@ -2280,6 +2513,7 @@ export default function App() {
             onPlaybackRateChange={setPlaybackRate}
           />
 
+          {!voiceoverMode && (
           <WaveformPane
             videoEl={videoEl}
             peaks={peaks}
@@ -2303,11 +2537,29 @@ export default function App() {
             onContextMenuSection={openSectionContextMenu}
             onContextMenuLane={openLaneContextMenu}
           />
+          )}
         </div>
 
         <SideResizer width={sideWidth} onWidth={setSideWidth} />
 
         <aside className="side-column">
+          {voiceoverMode ? (
+            <ClipInspector
+              clip={selectedClip}
+              track={
+                selectedClip
+                  ? project.voiceover.tracks.find((t) => t.id === selectedClip.trackId) ?? null
+                  : null
+              }
+              onPatch={(patch) => selectedClip && patchClipById(selectedClip.id, patch)}
+              onMoveToPlayhead={() =>
+                selectedClip &&
+                setVoiceover((v) => moveClip(v, selectedClip.id, currentTime))
+              }
+              onRemove={() => selectedClip && removeClipById(selectedClip.id)}
+            />
+          ) : (
+          <>
           <SpeakerPanel
             speakers={speakers}
             cues={cues}
@@ -2343,6 +2595,8 @@ export default function App() {
             onRemoveBeat={(id) => setTimedBeats((list) => removeBeat(list, id))}
             onStory={() => setChatPrefill((p) => ({ text: "/story ", nonce: (p?.nonce ?? 0) + 1 }))}
           />
+          </>
+          )}
 
           <PanelResizer height={chatHeight} onHeight={setChatHeight} />
 
@@ -2388,6 +2642,55 @@ export default function App() {
         </aside>
 
         <section className="list-row">
+          {voiceoverMode ? (
+            <VoiceoverTimeline
+              voiceover={project.voiceover}
+              cues={cues}
+              speakers={speakers}
+              peaks={peaks}
+              peaksPerSecond={settings.peaksResolution}
+              duration={duration}
+              currentTime={currentTime}
+              playing={playing}
+              zoom={zoom}
+              follow={follow}
+              selectedClipId={selectedClipId}
+              clipPeaks={(file) => mixer?.peaksFor(file) ?? null}
+              decodeVersion={decodeVersion}
+              onSeek={seek}
+              onZoomChange={setZoom}
+              onSelectClip={setSelectedClipId}
+              onPatchTrack={patchTrackById}
+              onAddTrack={() => setVoiceover(addTrack)}
+              onRemoveTrack={(id) => setVoiceover((v) => removeTrack(v, id))}
+              onImport={(trackId) => void importAudio(trackId)}
+              onMoveClip={(id, start, trackId, drag) =>
+                dragVoiceover((v) => moveClip(v, id, start, trackId), drag)
+              }
+              onTrimClip={(id, edge, time, drag) =>
+                dragVoiceover(
+                  (v) => (edge === "start" ? trimClipStart(v, id, time) : trimClipEnd(v, id, time)),
+                  drag,
+                )
+              }
+              duck={duckPoints}
+              onToggleCueDuck={(cueId) => setVoiceover((v) => toggleCueDuck(v, cueId))}
+              onDuckChange={(patch) =>
+                setVoiceover((v) => patchDuck(v, patch), `duck:${Object.keys(patch).join()}`)
+              }
+              onDuckAllCues={() =>
+                setVoiceover((v) =>
+                  v.unduckedCueIds.length ? { ...v, unduckedCueIds: [] } : v,
+                )
+              }
+              onCurveChange={(trackId, points, drag) =>
+                drag
+                  ? dragVoiceover((v) => setAutomation(v, trackId, points), drag)
+                  : setVoiceover((v) => setAutomation(v, trackId, points))
+              }
+            />
+          ) : (
+          <>
           {find && (
             <FindBar
               query={find.query}
@@ -2427,6 +2730,8 @@ export default function App() {
             onToggleThought={toggleThought}
             ghost={ghost}
           />
+          </>
+          )}
         </section>
       </main>
 

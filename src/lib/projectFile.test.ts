@@ -6,6 +6,7 @@ import {
   serializeProjectFile,
 } from "./projectFile";
 import type { Project } from "../types";
+import { defaultVoiceover } from "./voiceover";
 
 const project: Project = {
   videoPath: "D:/clips/interview.mp4",
@@ -27,6 +28,35 @@ const project: Project = {
     { id: "tb1", time: 0.5, text: "Ada asks" },
     { id: "tb2", time: 2.5, text: "She walks", by: "agent" },
   ],
+  voiceover: {
+    tracks: [
+      {
+        id: "original",
+        kind: "original",
+        name: "Original",
+        gainDb: -6,
+        muted: false,
+        solo: false,
+        automation: [{ time: 1, db: -12 }],
+      },
+      { id: "vo1", kind: "voice", name: "Ada VO", gainDb: 0, muted: true, solo: false, automation: [] },
+    ],
+    clips: [
+      {
+        id: "c1",
+        trackId: "vo1",
+        file: "D:/vo/line1.wav",
+        name: "line1",
+        start: 1.5,
+        offset: 0.25,
+        duration: 2,
+        sourceDuration: 3,
+        gainDb: 3,
+      },
+    ],
+    duck: { enabled: false, depthDb: -20, attack: 0.1, release: 0.5, bridge: 1 },
+    unduckedCueIds: ["b"],
+  },
 };
 
 describe("serializeProjectFile / parseProjectFile", () => {
@@ -62,6 +92,7 @@ describe("serializeProjectFile / parseProjectFile", () => {
       beats: [],
       sections: [],
       timedBeats: [],
+      voiceover: defaultVoiceover(),
     });
   });
 
@@ -156,6 +187,7 @@ describe("cue modes and speaker colours", () => {
     beats: [],
     sections: [],
     timedBeats: [],
+    voiceover: defaultVoiceover(),
   };
 
   it("survives a save and load", () => {
