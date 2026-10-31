@@ -11,7 +11,7 @@
 //! output file's extension asks for.
 
 use crate::error::{AppError, AppResult};
-use crate::media::{ffmpeg_bin, quiet_command};
+use crate::media::{ffmpeg_bin, measure_loudness, quiet_command};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -20,7 +20,7 @@ use std::process::{Child, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 const RATE: u32 = 48_000;
 const CHANNELS: usize = 2;
@@ -80,6 +80,10 @@ pub struct MixdownRequest {
     pub clips: Vec<MixClip>,
     /// The original's automatic duck under the cues, as the preview plays it.
     pub duck: Vec<GainPoint>,
+    /// Integrated loudness to bring the whole mix to, in LUFS; none leaves it
+    /// as mixed.
+    #[serde(default)]
+    pub target_lufs: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +94,40 @@ pub struct MixdownResult {
     pub peak_db: f64,
     /// Samples that went past full scale and were clamped.
     pub clipped: u64,
+    /// The file's integrated loudness, when a target was set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lufs: Option<f64>,
+    /// True when the target could not be reached without the true peak
+    /// passing `PEAK_CEILING_DBTP`.
+    pub limited_by_peak: bool,
+}
+
+/// A loudness target never pushes the mix's true peak past this.
+pub const PEAK_CEILING_DBTP: f64 = -1.0;
+
+/// How a mixed file is brought to a loudness target.
+pub struct Levelling {
+    pub gain_db: f64,
+    /// The loudness it will have once the gain is applied.
+    pub lufs: f64,
+    pub limited_by_peak: bool,
+}
+
+/// Measures the mixed file at `path` and works out the gain to `target`. None
+/// when it cannot be measured (silence, or too short), which leaves the mix
+/// as it is.
+pub fn levelling(path: &Path, seconds: f64, target: f64) -> Option<Levelling> {
+    let measured = measure_loudness(&path.to_string_lossy(), 0.0, seconds + 1.0)?;
+    if !measured.integrated.is_finite() || measured.integrated < -70.0 {
+        return None;
+    }
+    let gain_db = measured.gain_to(target, PEAK_CEILING_DBTP);
+    Some(Levelling {
+        gain_db,
+        lufs: measured.integrated + gain_db,
+        // A tenth of a dB short is rounding, not the peak holding it back.
+        limited_by_peak: gain_db < target - measured.integrated - 0.1,
+    })
 }
 
 #[derive(Clone, Serialize)]
@@ -215,13 +253,38 @@ pub async fn mixdown_voiceover(
     let codec = codec_args(&output)?;
     let cancelled = state.cancelled.clone();
     cancelled.store(false, Ordering::SeqCst);
+    // With a loudness target the mix goes to an intermediate first, which is
+    // measured and then encoded with the gain that reaches the target.
+    let staging = match request.target_lufs {
+        Some(_) => Some(
+            app.path()
+                .app_cache_dir()
+                .map_err(|e| AppError::msg(format!("No cache directory: {e}")))?
+                .join("mixdown"),
+        ),
+        None => None,
+    };
 
     let target = output.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let progress = |fraction: f64| {
             let _ = app.emit("mixdown-progress", MixdownProgress { fraction });
         };
-        mix(&request, &target, codec, &cancelled, &progress)
+        match (request.target_lufs, staging) {
+            (Some(lufs), Some(dir)) => {
+                std::fs::create_dir_all(&dir)?;
+                let mixed = dir.join("mix.wav");
+                // Mixing is most of the work; measuring and encoding the rest.
+                let result = mix_to_file(&request, &mixed, &cancelled, &|f| progress(f * 0.8))
+                    .and_then(|result| {
+                        progress(0.85);
+                        encode_levelled(&mixed, &target, codec, lufs, result)
+                    });
+                let _ = std::fs::remove_file(&mixed);
+                result
+            }
+            _ => mix(&request, &target, codec, &cancelled, &progress),
+        }
     })
     .await
     .map_err(|e| AppError::msg(format!("The export task failed: {e}")))?;
@@ -253,8 +316,42 @@ fn codec_args(output: &Path) -> AppResult<&'static [&'static str]> {
     })
 }
 
+/// Encodes a mixed intermediate to `output`, brought to `target` LUFS.
+fn encode_levelled(
+    mixed: &Path,
+    output: &Path,
+    codec: &[&str],
+    target: f64,
+    result: MixdownResult,
+) -> AppResult<MixdownResult> {
+    let levelling = levelling(mixed, result.seconds, target);
+    let gain_db = levelling.as_ref().map_or(0.0, |l| l.gain_db);
+    let out = quiet_command(&ffmpeg_bin())
+        .args(["-hide_banner", "-nostdin", "-v", "error", "-y", "-i"])
+        .arg(mixed)
+        .args(["-af", &format!("volume={gain_db:.2}dB")])
+        .args(codec)
+        .arg(output)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| AppError::msg(format!("Could not run ffmpeg: {e}")))?;
+    if !out.status.success() {
+        return Err(AppError::msg(format!(
+            "ffmpeg could not write the file.\n{}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(MixdownResult {
+        lufs: levelling.as_ref().map(|l| l.lufs),
+        limited_by_peak: levelling.is_some_and(|l| l.limited_by_peak),
+        peak_db: result.peak_db + gain_db,
+        ..result
+    })
+}
+
 /// Mixes to `path` as 32-bit float WAV, losing nothing: the intermediate a
-/// render muxes with the video. The caller removes it.
+/// render muxes with the video, or an export levels. The caller removes it.
 pub fn mix_to_file(
     request: &MixdownRequest,
     path: &Path,
@@ -471,6 +568,8 @@ fn mix(
         seconds: end as f64 / RATE as f64,
         peak_db: if peak > 0.0 { 20.0 * (peak as f64).log10() } else { f64::NEG_INFINITY },
         clipped,
+        lufs: None,
+        limited_by_peak: false,
     })
 }
 
@@ -659,6 +758,7 @@ mod tests {
             include_original: true,
             output_path: out.to_string_lossy().into(),
             duration: 6.0,
+            target_lufs: None,
             tracks: vec![track("original", "original"), track("vo", "voice")],
             clips: vec![MixClip {
                 track_id: "vo".into(),
@@ -692,6 +792,43 @@ mod tests {
         assert!((duck_db + 20.0).abs() < 0.5, "duck was {duck_db} dB");
         assert!(with_clip > bed * 1.2, "the clip should add to the bed");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A quiet tone brought to -16 LUFS, then a loud one held back by its peak.
+    #[test]
+    fn brings_a_mix_to_a_loudness_target() {
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg not found; skipping");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("sst-loudness-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mixed = dir.join("mixed.wav");
+        let out = dir.join("out.flac");
+        let mixed_result = || MixdownResult {
+            seconds: 4.0,
+            peak_db: -26.0,
+            clipped: 0,
+            lufs: None,
+            limited_by_peak: false,
+        };
+        generate(&mixed, "aevalsrc=0.05*sin(2*PI*440*t):s=48000", 4.0);
+
+        let quiet = encode_levelled(&mixed, &out, codec_args(&out).unwrap(), -16.0, mixed_result())
+            .expect("levels");
+        assert!((quiet.lufs.unwrap() + 16.0).abs() < 0.5, "{:?}", quiet.lufs);
+        assert!(!quiet.limited_by_peak);
+        let measured = measure_loudness(&out.to_string_lossy(), 0.0, 5.0).unwrap();
+        assert!((measured.integrated + 16.0).abs() < 0.5, "{measured:?}");
+
+        // A sine's loudness sits a few dB under its peak: -2 LUFS cannot be
+        // reached without passing the -1 dBTP ceiling.
+        let held = encode_levelled(&mixed, &out, codec_args(&out).unwrap(), -2.0, mixed_result())
+            .expect("levels");
+        assert!(held.limited_by_peak);
+        let measured = measure_loudness(&out.to_string_lossy(), 0.0, 5.0).unwrap();
+        assert!(measured.true_peak <= PEAK_CEILING_DBTP + 0.3, "{measured:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -15,6 +15,12 @@ export const MIN_CLIP_SECONDS = 0.05;
 export const MIN_DB = -60;
 export const MAX_DB = 12;
 
+/** Loudness targets an export or render can be brought to, in LUFS. */
+export const LOUDNESS_TARGETS = [
+  { lufs: -16, label: "−16 LUFS — web and podcasts" },
+  { lufs: -23, label: "−23 LUFS — broadcast (EBU R128)" },
+] as const;
+
 export function originalTrack(): VoiceTrack {
   return {
     id: ORIGINAL_TRACK_ID,

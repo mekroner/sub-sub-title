@@ -14,7 +14,7 @@
 
 use crate::engine::{free_space, human_bytes, local_dir, tar_bin};
 use crate::error::{AppError, AppResult};
-use crate::media::{ffmpeg_bin, ffprobe_bin, quiet_command};
+use crate::media::{ffmpeg_bin, ffprobe_bin, measure_loudness, quiet_command};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -810,77 +810,9 @@ const REFERENCE_LUFS: f64 = -27.0;
 /// Gain never pushes a line's true peak above this.
 const REFERENCE_PEAK_DBTP: f64 = -1.0;
 
-/// A stretch of audio's loudness, as ffmpeg's EBU R128 meter reports it.
-#[derive(Debug, Clone, Copy)]
-struct Loudness {
-    /// Integrated loudness, LUFS.
-    integrated: f64,
-    /// True peak, dBTP.
-    true_peak: f64,
-}
-
-impl Loudness {
-    /// The gain, in dB, that brings this to `target` LUFS without the true
-    /// peak passing `ceiling`. Silence, or a stretch too short to measure, is
-    /// left as it is.
-    fn gain_to(self, target: f64, ceiling: f64) -> f64 {
-        if !self.integrated.is_finite() || self.integrated < -70.0 {
-            return 0.0;
-        }
-        let wanted = target - self.integrated;
-        if self.true_peak.is_finite() {
-            wanted.min(ceiling - self.true_peak)
-        } else {
-            wanted
-        }
-    }
-}
-
-/// Measures one stretch of a file with ffmpeg's `loudnorm` in analysis mode.
-fn measure_loudness(path: &str, start: f64, end: f64) -> Option<Loudness> {
-    let out = quiet_command(&ffmpeg_bin())
-        .args(["-hide_banner", "-nostdin", "-ss", &format!("{start:.3}"), "-to", &format!("{end:.3}"), "-i"])
-        .arg(path)
-        .args(["-vn", "-af", "loudnorm=print_format=json", "-f", "null", "-"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .ok()?;
-    parse_loudnorm(&String::from_utf8_lossy(&out.stderr))
-}
-
-/// The JSON block `loudnorm` prints last on stderr. Its numbers are strings,
-/// and "-inf" for silence.
-fn parse_loudnorm(stderr: &str) -> Option<Loudness> {
-    let json = &stderr[stderr.rfind('{')?..=stderr.rfind('}')?];
-    let value: serde_json::Value = serde_json::from_str(json).ok()?;
-    let number = |key: &str| value.get(key)?.as_str()?.trim().parse::<f64>().ok();
-    Some(Loudness {
-        integrated: number("input_i")?,
-        true_peak: number("input_tp").unwrap_or(f64::NAN),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn levels_a_line_without_letting_it_clip() {
-        // 13 dB too quiet, with room to spare: the full lift.
-        let quiet = Loudness { integrated: -40.0, true_peak: -20.0 };
-        assert!((quiet.gain_to(-27.0, -1.0) - 13.0).abs() < 1e-9);
-        // Loud enough already: turned down.
-        let loud = Loudness { integrated: -14.0, true_peak: -2.0 };
-        assert!((loud.gain_to(-27.0, -1.0) + 13.0).abs() < 1e-9);
-        // Peaky: lifted only as far as the peak allows.
-        let peaky = Loudness { integrated: -40.0, true_peak: -5.0 };
-        assert!((peaky.gain_to(-27.0, -1.0) - 4.0).abs() < 1e-9);
-        // Silence is left alone rather than amplified into noise.
-        let silent = Loudness { integrated: f64::NEG_INFINITY, true_peak: f64::NEG_INFINITY };
-        assert_eq!(silent.gain_to(-27.0, -1.0), 0.0);
-    }
 
     /// End to end through real ffmpeg: a quiet line and a loud one come out
     /// of the reference equally loud, at the target. Skipped without ffmpeg.
@@ -928,15 +860,6 @@ mod tests {
         assert!((first.integrated - REFERENCE_LUFS).abs() < 1.0, "{first:?}");
         assert!(second.true_peak <= REFERENCE_PEAK_DBTP + 0.5, "{second:?}");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn reads_loudnorm_output() {
-        let stderr = "[Parsed_loudnorm_0 @ 0x1] \n{\n\t\"input_i\" : \"-31.52\",\n\t\"input_tp\" : \"-12.03\",\n\t\"input_lra\" : \"1.20\"\n}\n";
-        let m = parse_loudnorm(stderr).expect("parses");
-        assert_eq!(m.integrated, -31.52);
-        assert_eq!(m.true_peak, -12.03);
-        assert!(parse_loudnorm("no json here").is_none());
     }
 
     #[test]

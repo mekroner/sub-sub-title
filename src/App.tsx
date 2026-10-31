@@ -433,6 +433,10 @@ export default function App() {
 
   const canExportAudio = Boolean(project.videoPath && paths && tools?.ffmpeg);
 
+  /** Loudness an export or render brings the mix to, in LUFS; 0 leaves it as mixed. */
+  const [targetLufs, setTargetLufs] = useState(() => readStored("targetLufs", 0));
+  useEffect(() => writeStored("targetLufs", targetLufs), [targetLufs]);
+
   /** The mix as the preview plays it, for an audio export or a render to use. */
   const mixdownRequest = useMemo(
     () => ({
@@ -442,8 +446,9 @@ export default function App() {
       tracks: project.voiceover.tracks,
       clips: project.voiceover.clips,
       duck: duckPoints,
+      targetLufs: targetLufs || null,
     }),
-    [project.videoPath, media?.hasAudio, duration, project.voiceover, duckPoints],
+    [project.videoPath, media?.hasAudio, duration, project.voiceover, duckPoints, targetLufs],
   );
 
   // Set while a cue is auditioned as a cloning reference (see `previewCue`).
@@ -3413,6 +3418,7 @@ export default function App() {
           assText={assText}
           duration={duration}
           mix={mixdownRequest}
+          onTargetLufs={setTargetLufs}
           onClose={() => setShowRender(false)}
         />
       )}
@@ -3451,6 +3457,7 @@ export default function App() {
         <ExportAudioDialog
           defaultOutput={`${paths.dir}${paths.dir.includes("\\") ? "\\" : "/"}${paths.stem}.voiceover.wav`}
           request={mixdownRequest}
+          onTargetLufs={setTargetLufs}
           onClose={() => setShowExportAudio(false)}
         />
       )}

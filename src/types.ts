@@ -414,6 +414,8 @@ export interface MixdownRequest {
   clips: VoiceClip[];
   /** The original's automatic duck under the cues. */
   duck: GainPoint[];
+  /** Integrated loudness to bring the whole mix to, in LUFS; null leaves it as mixed. */
+  targetLufs: number | null;
 }
 
 export interface MixdownResult {
@@ -422,6 +424,10 @@ export interface MixdownResult {
   peakDb: number;
   /** Samples past full scale, clamped. */
   clipped: number;
+  /** The file's integrated loudness, when a target was set and could be measured. */
+  lufs?: number;
+  /** The target was out of reach without the true peak passing -1 dBTP. */
+  limitedByPeak: boolean;
 }
 
 export interface MixdownProgress {

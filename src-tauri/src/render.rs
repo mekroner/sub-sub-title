@@ -3,7 +3,7 @@
 
 use crate::error::{AppError, AppResult};
 use crate::media::{ffmpeg_bin, quiet_command};
-use crate::mixdown::{mix_to_file, MixdownRequest};
+use crate::mixdown::{levelling, mix_to_file, MixdownRequest};
 use serde::Serialize;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -90,6 +90,8 @@ pub async fn render_burn_in(
     // other input. It is removed whatever happens.
     let mix = work_dir.join("mix.wav");
     let _ = std::fs::remove_file(&mix);
+    // The gain that brings the mix to its loudness target, if it has one.
+    let mut mix_gain_db = 0.0;
     if let Some(request) = audio {
         let cancelled = state.cancelled.clone();
         let mix_path = mix.clone();
@@ -106,17 +108,24 @@ pub async fn render_burn_in(
                     },
                 );
             };
-            mix_to_file(&request, &mix_path, &cancelled, &progress)
+            let result = mix_to_file(&request, &mix_path, &cancelled, &progress)?;
+            Ok(request
+                .target_lufs
+                .and_then(|target| levelling(&mix_path, result.seconds, target))
+                .map_or(0.0, |l| l.gain_db))
         })
         .await
         .map_err(|e| AppError::msg(format!("Mixing the voiceover failed: {e}")));
-        if let Err(e) = mixed.and_then(|r| r) {
-            let _ = std::fs::remove_file(&mix);
-            return Err(if state.cancelled.swap(false, Ordering::SeqCst) {
-                AppError::msg("The render was cancelled.")
-            } else {
-                e
-            });
+        match mixed.and_then(|r: AppResult<f64>| r) {
+            Ok(gain) => mix_gain_db = gain,
+            Err(e) => {
+                let _ = std::fs::remove_file(&mix);
+                return Err(if state.cancelled.swap(false, Ordering::SeqCst) {
+                    AppError::msg("The render was cancelled.")
+                } else {
+                    e
+                });
+            }
         }
     }
     let with_mix = mix.is_file();
@@ -138,7 +147,10 @@ pub async fn render_burn_in(
         ]);
     if with_mix {
         // The mix runs to the last clip, which may end after the picture.
-        command.args(MIX_AUDIO).arg("-shortest");
+        command
+            .args(["-af", &format!("volume={mix_gain_db:.2}dB")])
+            .args(MIX_AUDIO)
+            .arg("-shortest");
     } else {
         command.args(["-c:a", "copy"]);
     }

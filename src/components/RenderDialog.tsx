@@ -4,6 +4,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import type { MixdownRequest, RenderProgress } from "../types";
 import { cancelRender, errorMessage, renderBurnIn, writeTextFile } from "../lib/api";
 import { formatDuration } from "../lib/time";
+import { LoudnessField } from "./ExportAudioDialog";
 
 interface Props {
   videoPath: string;
@@ -13,6 +14,8 @@ interface Props {
   duration: number;
   /** The Voiceover tab's mix, offered as the video's audio once it has clips. */
   mix: Omit<MixdownRequest, "outputPath">;
+  /** Sets the mix's loudness target, shared with the audio export; 0 for none. */
+  onTargetLufs: (lufs: number) => void;
   onClose: () => void;
 }
 
@@ -23,6 +26,7 @@ export function RenderDialog({
   assText,
   duration,
   mix,
+  onTargetLufs,
   onClose,
 }: Props) {
   const [output, setOutput] = useState(defaultOutput);
@@ -139,6 +143,9 @@ export function RenderDialog({
                 <option value="original">Original — the video's own soundtrack</option>
               </select>
             </label>
+          )}
+          {hasMix && useMix && (
+            <LoudnessField value={mix.targetLufs} disabled={busy} onChange={onTargetLufs} />
           )}
 
           <p className="hint">

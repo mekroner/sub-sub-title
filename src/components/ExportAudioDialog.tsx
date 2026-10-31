@@ -4,12 +4,48 @@ import { save } from "@tauri-apps/plugin-dialog";
 import type { MixdownProgress, MixdownRequest, MixdownResult } from "../types";
 import { cancelMixdown, errorMessage, mixdownVoiceover } from "../lib/api";
 import { formatDuration } from "../lib/time";
+import { LOUDNESS_TARGETS } from "../lib/voiceover";
 
 interface Props {
   defaultOutput: string;
   /** The mix as it stands, minus where it goes. */
   request: Omit<MixdownRequest, "outputPath">;
+  /** Sets the loudness target, shared with the render; 0 for none. */
+  onTargetLufs: (lufs: number) => void;
   onClose: () => void;
+}
+
+/** The loudness a mix is brought to, shared by the export and the render. */
+export function LoudnessField({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: number | null;
+  disabled: boolean;
+  onChange: (lufs: number) => void;
+}) {
+  return (
+    <label className="field">
+      <span>Loudness</span>
+      <select value={value ?? 0} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))}>
+        <option value={0}>As mixed — faders decide</option>
+        {LOUDNESS_TARGETS.map((t) => (
+          <option key={t.lufs} value={t.lufs}>
+            {t.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** "Peak −3.1 dBFS · −16.0 LUFS", with a note when the peak held the level back. */
+export function describeLevel(result: MixdownResult): string {
+  const peak = Number.isFinite(result.peakDb) ? `peak ${result.peakDb.toFixed(1)} dBFS` : "silent";
+  if (result.lufs === undefined) return peak;
+  const held = result.limitedByPeak ? " (held back by its peaks)" : "";
+  return `${result.lufs.toFixed(1)} LUFS${held}, ${peak}`;
 }
 
 const FORMATS = [
@@ -20,7 +56,7 @@ const FORMATS = [
 ];
 
 /** Renders the Voiceover tab's mix to an audio file: what the preview plays. */
-export function ExportAudioDialog({ defaultOutput, request, onClose }: Props) {
+export function ExportAudioDialog({ defaultOutput, request, onTargetLufs, onClose }: Props) {
   const [output, setOutput] = useState(defaultOutput);
   const [fraction, setFraction] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -89,6 +125,8 @@ export function ExportAudioDialog({ defaultOutput, request, onClose }: Props) {
             </div>
           </label>
 
+          <LoudnessField value={request.targetLufs} disabled={busy} onChange={onTargetLufs} />
+
           <p className="hint">
             Mixes the original audio with {clipCount} clip{clipCount === 1 ? "" : "s"} exactly as
             the Voiceover tab plays them — faders, mute and solo, curves and the duck under the
@@ -110,8 +148,7 @@ export function ExportAudioDialog({ defaultOutput, request, onClose }: Props) {
           {result && (
             <>
               <p className="status">
-                Saved {formatDuration(result.seconds)} to {output}. Peak{" "}
-                {Number.isFinite(result.peakDb) ? `${result.peakDb.toFixed(1)} dBFS` : "silent"}.
+                Saved {formatDuration(result.seconds)} to {output}: {describeLevel(result)}.
               </p>
               {result.clipped > 0 && (
                 <p className="error">
