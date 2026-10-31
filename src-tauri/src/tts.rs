@@ -14,7 +14,7 @@
 
 use crate::engine::{free_space, human_bytes, local_dir, tar_bin};
 use crate::error::{AppError, AppResult};
-use crate::media::{ffmpeg_bin, quiet_command};
+use crate::media::{ffmpeg_bin, ffprobe_bin, quiet_command};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -745,6 +745,64 @@ fn extract_reference(
     Ok(segments.iter().map(|[a, b]| b - a).sum())
 }
 
+/// How far a take may be sped up or slowed down: past this a voice starts to
+/// sound processed, and a new take is the better fix.
+const MAX_STRETCH: f64 = 1.25;
+
+/// Writes `input` played `ratio` times as fast, at the same pitch, to
+/// `output`. Returns the new file's length in seconds.
+#[tauri::command]
+pub async fn tts_stretch(input: String, output: String, ratio: f64) -> AppResult<f64> {
+    tauri::async_runtime::spawn_blocking(move || stretch(&input, &output, ratio))
+        .await
+        .map_err(|e| AppError::msg(format!("Stretching the take failed: {e}")))?
+}
+
+fn stretch(input: &str, output: &str, ratio: f64) -> AppResult<f64> {
+    if !ratio.is_finite() || !(1.0 / MAX_STRETCH..=MAX_STRETCH).contains(&ratio) {
+        return Err(AppError::msg(format!(
+            "A take can be stretched by up to {MAX_STRETCH}× either way, not {ratio:.2}×."
+        )));
+    }
+    if Path::new(input) == Path::new(output) {
+        return Err(AppError::msg("The stretched take would overwrite the original."));
+    }
+    // `atempo` keeps the pitch; within 0.5..2 it is a single pass.
+    let out = quiet_command(&ffmpeg_bin())
+        .args(["-hide_banner", "-nostdin", "-v", "error", "-y", "-i"])
+        .arg(input)
+        .args(["-af", &format!("atempo={ratio:.4}"), "-c:a", "pcm_s16le"])
+        .arg(output)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| AppError::msg(format!("Could not run ffmpeg: {e}")))?;
+    if !out.status.success() {
+        return Err(AppError::msg(format!(
+            "Could not stretch the take: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    probe_seconds(output)
+}
+
+/// A file's length in seconds, as ffprobe reads it.
+fn probe_seconds(path: &str) -> AppResult<f64> {
+    let out = quiet_command(&ffprobe_bin())
+        .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| AppError::msg(format!("Could not run ffprobe: {e}")))?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .ok_or_else(|| AppError::msg(format!("Could not read the length of {path}.")))
+}
+
 /// Every reference is brought to this integrated loudness — the level
 /// Chatterbox Turbo itself normalises a reference to, so the two agree and
 /// every voice in a project is cloned from equally loud speech.
@@ -916,6 +974,31 @@ mod tests {
         assert!((measured - 3.5).abs() < 0.05, "measured {measured}");
 
         assert!(extract_reference(&video.to_string_lossy(), vec![], &out.to_string_lossy()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stretches_a_take_within_limits() {
+        let ok = quiet_command(&ffmpeg_bin()).arg("-version").stdout(Stdio::null()).status();
+        if !ok.is_ok_and(|s| s.success()) {
+            eprintln!("ffmpeg not found; skipping");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("sst-stretch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let take = dir.join("take.wav").to_string_lossy().into_owned();
+        let fast = dir.join("take-x1.2.wav").to_string_lossy().into_owned();
+        let made = quiet_command(&ffmpeg_bin())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:duration=3"])
+            .arg(&take)
+            .status()
+            .unwrap();
+        assert!(made.success());
+
+        let seconds = stretch(&take, &fast, 1.2).expect("stretches");
+        assert!((seconds - 2.5).abs() < 0.03, "got {seconds}");
+        assert!(stretch(&take, &fast, 1.5).is_err(), "past the limit");
+        assert!(stretch(&take, &take, 1.1).is_err(), "over itself");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

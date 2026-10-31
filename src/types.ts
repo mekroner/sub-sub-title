@@ -153,6 +153,10 @@ export interface ClipTake {
   speech?: [number, number];
   /** How well the take says its line, when that was checked. */
   check?: TakeCheck;
+  /** Set on a take sped up to fit its cue: how much faster than spoken. */
+  stretch?: number;
+  /** For a stretched take: the file of the take as spoken. */
+  original?: string;
 }
 
 export interface TakeCheck {

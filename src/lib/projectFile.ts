@@ -223,6 +223,17 @@ function coerceCheck(raw: unknown): { check?: TakeCheck } {
     : {};
 }
 
+/** Both or neither: a stretch means nothing without the take it came from. */
+function coerceStretch(stretch: unknown, original: unknown): { stretch?: number; original?: string } {
+  const valid =
+    typeof stretch === "number" &&
+    Number.isFinite(stretch) &&
+    stretch > 0 &&
+    typeof original === "string" &&
+    original !== "";
+  return valid ? { stretch, original } : {};
+}
+
 function coerceTakes(raw: unknown): { takes?: ClipTake[] } {
   if (!Array.isArray(raw)) return {};
   const takes = raw.flatMap((t): ClipTake[] => {
@@ -239,6 +250,7 @@ function coerceTakes(raw: unknown): { takes?: ClipTake[] } {
             ...coerceMarks(take.marks),
             ...coerceSpeech(take.speech, duration),
             ...coerceCheck(take.check),
+            ...coerceStretch(take.stretch, take.original),
           },
         ]
       : [];

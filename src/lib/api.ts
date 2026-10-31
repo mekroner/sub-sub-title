@@ -204,3 +204,7 @@ export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
 }
+
+/** Writes `input` played `ratio` times as fast, same pitch; resolves to its length. */
+export const ttsStretch = (input: string, output: string, ratio: number) =>
+  invoke<number>("tts_stretch", { input, output, ratio });

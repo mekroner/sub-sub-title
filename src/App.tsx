@@ -114,10 +114,14 @@ import {
   type TrackPatch,
 } from "./lib/voiceover";
 import {
+  MAX_STRETCH,
   NO_SPEAKER,
+  addTake,
   castKey,
   clipForCue,
+  currentTake,
   fitCuesToLines,
+  fitRatio,
   hasSomethingToSay,
   lineIndex,
   overrun,
@@ -131,6 +135,8 @@ import {
   setVoice,
   setVoicing,
   speechText,
+  stretchPath,
+  stretchedTake,
   suggestedReferenceCues,
   voiceFor,
 } from "./lib/tts";
@@ -1235,6 +1241,41 @@ export default function App() {
     [setCues, project.voiceover, duration, settings.minGap],
   );
 
+  /**
+   * Speeds up overrunning lines so each ends with its last cue, as a new take
+   * on its clip; the take as spoken stays, to switch back to. Clips that do
+   * not overrun, or would need too much, are left alone. One undo step.
+   */
+  const speedUpClips = useCallback(
+    async (clipIds: string[]) => {
+      const batch = `stretch:${makeId()}`;
+      let done = 0;
+      try {
+        for (const id of clipIds) {
+          const clip = project.voiceover.clips.find((c) => c.id === id);
+          const take = clip && currentTake(clip);
+          const ratio = clip && fitRatio(clip, cues);
+          if (!clip || !take || !ratio) continue;
+          const original = take.original ?? take.file;
+          const file = stretchPath(original, ratio);
+          const seconds = await api.ttsStretch(original, file, ratio);
+          dragVoiceover((v) => addTake(v, id, stretchedTake(take, ratio, file, seconds)), batch);
+          done += 1;
+        }
+        if (clipIds.length > 1) notify(`Sped up ${done} line${done === 1 ? "" : "s"} to fit.`);
+      } catch (e) {
+        notify(errorMessage(e), "error");
+      }
+    },
+    [project.voiceover.clips, cues, dragVoiceover, notify],
+  );
+
+  /** Every generated clip that overruns and can be sped up to fit. */
+  const fittableClipIds = useMemo(
+    () => project.voiceover.clips.filter((c) => fitRatio(c, cues) !== null).map((c) => c.id),
+    [project.voiceover.clips, cues],
+  );
+
   /** Right-click on a cue in the Voiceover tab: its voice line and its duck. */
   const openVoiceCueMenu = useCallback(
     (cueId: string, x: number, y: number) => {
@@ -1334,6 +1375,26 @@ export default function App() {
             disabled: project.voiceover.clips.every((c) => !c.source),
             onSelect: () => fitCues(),
           },
+          {
+            kind: "item",
+            label: "Speed up its line to fit",
+            detail: !clip
+              ? "It has no line yet"
+              : overrun(clip, cues) === 0
+                ? "It already fits"
+                : fitRatio(clip, cues) === null
+                  ? `Needs more than ${MAX_STRETCH}× — try a new take`
+                  : `${fitRatio(clip, cues)!.toFixed(2)}×, as a new take`,
+            disabled: !clip || fitRatio(clip, cues) === null,
+            onSelect: () => clip && void speedUpClips([clip.id]),
+          },
+          {
+            kind: "item",
+            label: "Speed up every overrunning line",
+            detail: fittableClipIds.length ? `${fittableClipIds.length} lines` : undefined,
+            disabled: fittableClipIds.length === 0,
+            onSelect: () => void speedUpClips(fittableClipIds),
+          },
           { kind: "separator" },
           {
             kind: "item",
@@ -1344,7 +1405,19 @@ export default function App() {
         ],
       });
     },
-    [cues, project.voiceover, lines, voices, paths, setVoiceover, fitCues, editCueLine, selectClip],
+    [
+      cues,
+      project.voiceover,
+      lines,
+      voices,
+      paths,
+      setVoiceover,
+      fitCues,
+      editCueLine,
+      selectClip,
+      speedUpClips,
+      fittableClipIds,
+    ],
   );
 
   /** Text for the chat box, set from elsewhere — the Story panel's ✦ Story. */
@@ -3023,6 +3096,8 @@ export default function App() {
               cueText={selectedCueOfClip ? selectedCueOfClip.text : null}
               stale={selectedClip ? clipWarnings.get(selectedClip.id) === "stale" : false}
               overrun={selectedClip ? overrun(selectedClip, cues) : 0}
+              fitRatio={selectedClip ? fitRatio(selectedClip, cues) : null}
+              onSpeedUp={() => selectedClip && void speedUpClips([selectedClip.id])}
               canSpeak={Boolean(voices.status?.installed && paths)}
               onPatch={(patch) => selectedClip && patchClipById(selectedClip.id, patch)}
               onMoveToPlayhead={() =>

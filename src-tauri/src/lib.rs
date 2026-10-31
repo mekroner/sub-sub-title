@@ -83,6 +83,7 @@ pub fn run() {
             tts::tts_generate,
             tts::tts_unload,
             tts::tts_extract_reference,
+            tts::tts_stretch,
             spelling::check_cues,
             proofread::ai_proofread,
             proofread::cancel_proofread,

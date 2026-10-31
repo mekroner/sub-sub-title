@@ -333,6 +333,77 @@ export function overrun(clip: VoiceClip, cues: Cue[]): number {
 }
 
 /**
+ * The most a take is sped up, counted from the take as spoken. Past this a
+ * voice starts to sound processed, and a new take is the better fix.
+ */
+export const MAX_STRETCH = 1.2;
+
+/** The take a clip is playing, if it has takes. */
+export function currentTake(clip: VoiceClip): ClipTake | undefined {
+  return clip.takes?.find((t) => t.file === clip.file);
+}
+
+/**
+ * How much faster an overrunning clip must play to end with its last cue,
+ * counted from the take as spoken; null when it does not overrun, has no
+ * take, or would need more than `MAX_STRETCH`.
+ */
+export function fitRatio(clip: VoiceClip, cues: Cue[]): number | null {
+  const take = currentTake(clip);
+  if (!take || overrun(clip, cues) === 0) return null;
+  const own = cues.filter((c) => clip.source!.cueIds.includes(c.id));
+  const room = Math.max(...own.map((c) => c.end)) - clip.start;
+  if (room <= 0) return null;
+  // Rounded up a little, so the result lands inside the cue rather than on it.
+  const ratio = Math.ceil(((take.stretch ?? 1) * clip.duration * 1000) / room) / 1000;
+  return ratio <= MAX_STRETCH ? ratio : null;
+}
+
+/**
+ * The take a stretch makes: `from` played `ratio` times as fast (counted from
+ * the take as spoken), written to `file`, `duration` seconds long. Its words
+ * and speech move with the audio; it remembers the take it came from, so a
+ * second stretch starts from the spoken audio rather than compounding.
+ */
+export function stretchedTake(from: ClipTake, ratio: number, file: string, duration: number): ClipTake {
+  const scale = (from.stretch ?? 1) / ratio;
+  const at = (t: number) => Math.min(duration, t * scale);
+  return {
+    ...from,
+    file,
+    duration,
+    stretch: ratio,
+    original: from.original ?? from.file,
+    ...(from.marks ? { marks: from.marks.map(([a, b]): [number, number] => [at(a), at(b)]) } : {}),
+    ...(from.speech ? { speech: [at(from.speech[0]), at(from.speech[1])] } : {}),
+  };
+}
+
+/** Where a stretched take is written: beside the take it was spoken as. */
+export function stretchPath(original: string, ratio: number): string {
+  return original.replace(/(\.[^.\\/]+)?$/, `-x${ratio.toFixed(3)}.wav`);
+}
+
+/**
+ * Adds a take to a clip and plays it, keeping where the clip sits. A take of
+ * the same file — the same stretch made again — replaces the old entry.
+ */
+export function addTake(voiceover: Voiceover, clipId: string, take: ClipTake): Voiceover {
+  return {
+    ...voiceover,
+    clips: voiceover.clips.map((c) =>
+      c.id === clipId
+        ? {
+            ...c,
+            ...playTake(take),
+            takes: [...(c.takes ?? []).filter((t) => t.file !== take.file), take],
+          }
+        : c,
+    ),
+  };
+}
+
+/**
  * The voice track a speaker's lines land on: theirs if it still exists,
  * otherwise the first voice track, otherwise a new one.
  */

@@ -1,7 +1,7 @@
 import type { VoiceClip, VoiceTrack } from "../types";
 import { formatShort } from "../lib/time";
 import { MAX_DB, MIN_DB, clipEnd, type ClipPatch } from "../lib/voiceover";
-import { isSuspect } from "../lib/tts";
+import { MAX_STRETCH, isSuspect } from "../lib/tts";
 import { formatDb } from "./VoiceoverTimeline";
 
 interface Props {
@@ -12,6 +12,9 @@ interface Props {
   stale: boolean;
   /** Seconds the clip runs past its cue; 0 when it fits. */
   overrun: number;
+  /** How much faster it would have to play to fit; null when it fits or cannot. */
+  fitRatio: number | null;
+  onSpeedUp: () => void;
   /** Whether a new take can be spoken now. */
   canSpeak: boolean;
   onPatch: (patch: ClipPatch) => void;
@@ -30,6 +33,8 @@ export function ClipInspector({
   cueText,
   stale,
   overrun,
+  fitRatio,
+  onSpeedUp,
   canSpeak,
   onPatch,
   onMoveToPlayhead,
@@ -64,7 +69,19 @@ export function ClipInspector({
               )}
               {overrun > 0 && (
                 <p className="clip-warning">
-                  Runs {overrun.toFixed(2)} s past the end of its cue.
+                  Runs {overrun.toFixed(2)} s past the end of its cue.{" "}
+                  {fitRatio !== null ? (
+                    <button
+                      type="button"
+                      className="small"
+                      onClick={onSpeedUp}
+                      title="Play it faster, at the same pitch, as a new take — the take as spoken stays"
+                    >
+                      Speed up {fitRatio.toFixed(2)}×
+                    </button>
+                  ) : (
+                    `Too far to speed up past ${MAX_STRETCH}× — try a new take.`
+                  )}
                 </p>
               )}
             </div>
@@ -132,6 +149,7 @@ export function ClipInspector({
                   <span className="clip-take-meta">
                     {(take.speech ? take.speech[1] - take.speech[0] : take.duration).toFixed(2)} s · seed{" "}
                     {take.seed}
+                    {take.stretch && ` · ${take.stretch.toFixed(2)}×`}
                   </span>
                   {isSuspect(take) && (
                     <span

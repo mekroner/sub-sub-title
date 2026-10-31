@@ -62,6 +62,8 @@ const project: Project = {
             marks: [[0, 1], [1.2, 2.9]],
             speech: [0.25, 2.25],
             check: { score: 0.82, rate: 14.5 },
+            stretch: 1.1,
+            original: "D:/vo/line1-spoken.wav",
           },
         ],
       },

@@ -9,6 +9,10 @@ import {
   lineGroups,
   SUSPECT_RATE,
   SUSPECT_SCORE,
+  addTake,
+  fitRatio,
+  stretchPath,
+  stretchedTake,
   isSuspect,
   lineIndex,
   nextLine,
@@ -212,6 +216,37 @@ describe("generated lines", () => {
     const again = placeTakes(vo, line, [t("z", 2)], 0);
     expect(again.clips[0].takes?.map((k) => k.file)).toEqual(["x", "y", "z"]);
     expect(again.clips[0].file).toBe("z");
+  });
+
+  it("speeds up an overrunning line to end with its cue, as a new take", () => {
+    const line = [cue("c1", 4, 6, "Hello there")];
+    const spoken = {
+      ...take("D:/vo/a.wav", 2.4),
+      speech: [0.1, 2.3] as [number, number],
+      marks: [[0.1, 2.3]] as Array<[number, number]>,
+    };
+    let vo = placeTake(defaultVoiceover(), line, spoken);
+    // 2.2 s of speech in 2 s of cue.
+    expect(fitRatio(vo.clips[0], line)).toBeCloseTo(1.1, 3);
+    expect(fitRatio(vo.clips[0], [{ ...line[0], end: 6.5 }])).toBeNull();
+    expect(fitRatio(vo.clips[0], [{ ...line[0], end: 5.5 }])).toBeNull(); // past MAX_STRETCH
+
+    const ratio = fitRatio(vo.clips[0], line)!;
+    const file = stretchPath(spoken.file, ratio);
+    expect(file).toBe("D:/vo/a-x1.100.wav");
+    const fast = stretchedTake(spoken, ratio, file, 2.4 / ratio);
+    expect(fast).toMatchObject({ stretch: ratio, original: "D:/vo/a.wav", seed: 1 });
+    expect(fast.speech![1]).toBeCloseTo(2.3 / ratio, 9);
+    vo = addTake(vo, vo.clips[0].id, fast);
+    expect(vo.clips[0]).toMatchObject({ file, start: 4 });
+    expect(overrun(vo.clips[0], line)).toBe(0);
+    expect(vo.clips[0].takes?.map((t) => t.file)).toEqual([spoken.file, file]);
+
+    // Stretching again starts from the take as spoken, and replaces a repeat.
+    const again = stretchedTake(fast, 1.15, stretchPath(fast.original!, 1.15), 2.4 / 1.15);
+    expect(again.original).toBe("D:/vo/a.wav");
+    expect(again.speech![1]).toBeCloseTo(2.3 / 1.15, 9);
+    expect(addTake(vo, vo.clips[0].id, fast).clips[0].takes).toHaveLength(2);
   });
 
   it("replaces the separate clips of cues that are now spoken as one line", () => {
