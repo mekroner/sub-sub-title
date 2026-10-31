@@ -361,7 +361,20 @@ function coerceVoiceover(raw: unknown): Voiceover {
   const unduckedCueIds = Array.isArray(v.unduckedCueIds)
     ? [...new Set(v.unduckedCueIds.filter((id): id is string => typeof id === "string" && id !== ""))]
     : [];
-  return { ...withDuck, unduckedCueIds };
+  const pronunciations = coercePronunciations(v.pronunciations);
+  return { ...withDuck, unduckedCueIds, ...(pronunciations ? { pronunciations } : {}) };
+}
+
+/** Words and how they are said; an entry missing either is dropped. */
+function coercePronunciations(raw: unknown): Record<string, string> | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const pronunciations: Record<string, string> = {};
+  for (const [word, spoken] of Object.entries(raw)) {
+    if (word.trim() && typeof spoken === "string" && spoken.trim()) {
+      pronunciations[word.trim()] = spoken.trim();
+    }
+  }
+  return Object.keys(pronunciations).length ? pronunciations : undefined;
 }
 
 /**

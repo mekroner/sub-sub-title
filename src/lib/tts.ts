@@ -7,6 +7,7 @@
 import type { CastVoice, ClipTake, Cue, CueVoicing, VoiceClip, Voiceover } from "../types";
 import { directionIntensity, directionTags, hasTag, stripTags } from "./direction";
 import { resizeCue, sortCues } from "./cues";
+import { speakable } from "./speakable";
 import { makeId } from "./ids";
 import { addTrack, canAddTrack, clipEnd, voiceTracks } from "./voiceover";
 
@@ -93,6 +94,24 @@ export function voicingFor(voiceover: Voiceover, cueId: string): CueVoicing {
  * text identical to the cue's own (`cueText`), so an entry exists only while
  * it says something the cue does not.
  */
+/**
+ * Sets how `word` is said, or with an empty `spoken` forgets it. Lines with
+ * the word go stale, as their spoken text changes.
+ */
+export function setPronunciation(voiceover: Voiceover, word: string, spoken: string): Voiceover {
+  const key = word.trim();
+  if (!key) return voiceover;
+  const pronunciations = { ...voiceover.pronunciations };
+  // One entry per word, whatever its case.
+  for (const existing of Object.keys(pronunciations)) {
+    if (existing.toLowerCase() === key.toLowerCase()) delete pronunciations[existing];
+  }
+  if (spoken.trim()) pronunciations[key] = spoken.trim();
+  const next: Voiceover = { ...voiceover, pronunciations };
+  if (!Object.keys(pronunciations).length) delete next.pronunciations;
+  return next;
+}
+
 export function setVoicing(
   voiceover: Voiceover,
   cueId: string,
@@ -120,13 +139,14 @@ export interface RenderedLine {
 
 /**
  * What one cue's part comes out as for its voice's model: its spoken text (or
- * its own), with the direction turned into tags for Turbo, or into an
- * intensity for Expressive — which reads tags aloud, so it gets none.
+ * its own) with numbers and symbols spelled out and the project's
+ * pronunciations applied, and the direction turned into tags for Turbo, or
+ * into an intensity for Expressive — which reads tags aloud, so it gets none.
  */
 export function renderLine(voiceover: Voiceover, cue: Cue): RenderedLine {
   const voice = voiceFor(voiceover, castKey(cue));
   const voicing = voicingFor(voiceover, cue.id);
-  const base = speechText({ text: voicing.spoken ?? cue.text });
+  const base = speakable(speechText({ text: voicing.spoken ?? cue.text }), voiceover.pronunciations);
   const direction = voicing.direction ?? "";
   if (voice.engine === "standard") {
     return {

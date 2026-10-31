@@ -2708,6 +2708,27 @@ button.fill-alt.on {
   gap: 4px;
   padding-left: 58px;
 }
+.pronunciations .hint {
+  margin: 0;
+}
+.pronunciation {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.pronunciation-word,
+.pronunciation-spoken {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pronunciation-arrow {
+  flex: none;
+  color: var(--text-dim);
+}
 
 
 .clip-line {

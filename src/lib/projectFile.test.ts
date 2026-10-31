@@ -88,6 +88,7 @@ const project: Project = {
       b: { direction: "whispered" },
     },
     joins: { a: "join", b: "split" },
+    pronunciations: { Siobhan: "shi-VAWN" },
   },
 };
 
@@ -126,6 +127,16 @@ describe("serializeProjectFile / parseProjectFile", () => {
       timedBeats: [],
       voiceover: defaultVoiceover(),
     });
+  });
+
+  it("keeps only pronunciations with both a word and how it is said", () => {
+    const raw = JSON.stringify({
+      voiceover: { pronunciations: { " Siobhan ": " shi-VAWN ", GIF: "", "": "x", Ng: 7 } },
+    });
+    expect(parseProjectFile(raw).voiceover.pronunciations).toEqual({ Siobhan: "shi-VAWN" });
+    expect(parseProjectFile(JSON.stringify({ voiceover: { pronunciations: {} } })).voiceover).not.toHaveProperty(
+      "pronunciations",
+    );
   });
 
   it("keeps only usable words in the project dictionary", () => {

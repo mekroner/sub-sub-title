@@ -222,6 +222,11 @@ export interface Voiceover {
    * boundary: "join" speaks it together with the next cue, "split" apart.
    */
   joins: Record<string, "join" | "split">;
+  /**
+   * How words the voices get wrong are said, e.g. "Siobhan" → "shi-VAWN":
+   * whole words, any case, in every line before it is spoken.
+   */
+  pronunciations?: Record<string, string>;
 }
 
 /**

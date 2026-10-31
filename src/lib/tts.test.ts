@@ -29,6 +29,7 @@ import {
   selectTake,
   setJoin,
   setVoice,
+  setPronunciation,
   setVoicing,
   speechText,
   suggestedReferenceCues,
@@ -489,6 +490,17 @@ describe("voice scripts and direction", () => {
     vo = setVoicing(vo, "c1", line.text, { direction: "tired" });
     vo = setVoicing(vo, "c1", line.text, { direction: " " });
     expect(vo.voicing).toEqual({});
+  });
+
+  it("spells out numbers and says words as the project spells them", () => {
+    const named = cue("c2", 7, 9, "Siobhan owes me $20 since 1984.");
+    let vo = setPronunciation(defaultVoiceover(), "Siobhan", "shi-VAWN");
+    expect(renderLine(vo, named).text).toBe("shi-VAWN owes me twenty dollars since nineteen eighty-four.");
+    // One entry per word, whatever its case; an empty one forgets it.
+    vo = setPronunciation(vo, "siobhan", "shiv-AWN");
+    expect(vo.pronunciations).toEqual({ siobhan: "shiv-AWN" });
+    vo = setPronunciation(vo, "SIOBHAN", " ");
+    expect(vo).not.toHaveProperty("pronunciations");
   });
 
   it("keeps a trailing space while the script is being typed", () => {

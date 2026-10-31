@@ -134,6 +134,7 @@ import {
   renderLine,
   selectTake,
   setJoin,
+  setPronunciation,
   setVoice,
   setVoicing,
   speechText,
@@ -3182,6 +3183,9 @@ export default function App() {
               onStop={voices.stop}
               onSetVoice={(key, patch) =>
                 setVoiceover((v) => setVoice(v, key, patch), `voice:${key}:${Object.keys(patch).join()}`)
+              }
+              onSetPronunciation={(word, spoken) =>
+                setVoiceover((v) => setPronunciation(v, word, spoken))
               }
               onReferenceFromFile={(key) => void referenceFromFile(key)}
               onReferenceFromVideo={setReferenceKey}

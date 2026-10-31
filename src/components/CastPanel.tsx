@@ -18,6 +18,8 @@ interface Props {
   onGenerate: (cues: Cue[]) => void;
   onStop: () => void;
   onSetVoice: (key: string, patch: Partial<CastVoice>) => void;
+  /** Sets how a word is said; an empty `spoken` forgets it. */
+  onSetPronunciation: (word: string, spoken: string) => void;
   onReferenceFromFile: (key: string) => void;
   onReferenceFromVideo: (key: string) => void;
 }
@@ -48,6 +50,7 @@ export function CastPanel({
   onGenerate,
   onStop,
   onSetVoice,
+  onSetPronunciation,
   onReferenceFromFile,
   onReferenceFromVideo,
 }: Props) {
@@ -166,8 +169,92 @@ export function CastPanel({
             onReferenceFromVideo={() => onReferenceFromVideo(row.key)}
           />
         ))}
+        <Pronunciations
+          pronunciations={voiceover.pronunciations ?? {}}
+          onSet={onSetPronunciation}
+        />
       </div>
     </section>
+  );
+}
+
+/**
+ * Words every voice gets wrong, and how to say them. Numbers and symbols are
+ * already spelled out; this is for names and acronyms.
+ */
+function Pronunciations({
+  pronunciations,
+  onSet,
+}: {
+  pronunciations: Record<string, string>;
+  onSet: (word: string, spoken: string) => void;
+}) {
+  const [word, setWord] = useState("");
+  const [spoken, setSpoken] = useState("");
+  const entries = Object.entries(pronunciations).sort(([a], [b]) => a.localeCompare(b));
+  const add = () => {
+    if (!word.trim() || !spoken.trim()) return;
+    onSet(word, spoken);
+    setWord("");
+    setSpoken("");
+  };
+
+  return (
+    <div className="cast-row pronunciations">
+      <div className="cast-row-head">
+        <span className="cast-name">Pronunciations</span>
+        <span className="cast-count">{entries.length || ""}</span>
+      </div>
+      <p className="hint">
+        Names and acronyms the voices get wrong, spelled as they sound. Numbers and symbols are
+        spelled out already.
+      </p>
+      {entries.map(([w, s]) => (
+        <div key={w} className="pronunciation">
+          <span className="pronunciation-word" title={w}>
+            {w}
+          </span>
+          <span className="pronunciation-arrow">→</span>
+          <span className="pronunciation-spoken" title={s}>
+            {s}
+          </span>
+          <button
+            type="button"
+            className="icon-button"
+            title={`Forget how to say “${w}”`}
+            onClick={() => onSet(w, "")}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <form
+        className="pronunciation"
+        onSubmit={(e) => {
+          e.preventDefault();
+          add();
+        }}
+      >
+        <input
+          className="pronunciation-word"
+          value={word}
+          placeholder="Siobhan"
+          aria-label="Word"
+          onChange={(e) => setWord(e.target.value)}
+        />
+        <span className="pronunciation-arrow">→</span>
+        <input
+          className="pronunciation-spoken"
+          value={spoken}
+          placeholder="shi-VAWN"
+          aria-label="Say it as"
+          onChange={(e) => setSpoken(e.target.value)}
+        />
+        <button type="submit" className="small" disabled={!word.trim() || !spoken.trim()}>
+          Add
+        </button>
+      </form>
+    </div>
   );
 }
 
