@@ -442,7 +442,11 @@ export interface MixdownProgress {
 
 export interface TtsStatus {
   installed: boolean;
+  /** Installed, but missing what newer versions add: it works, with less. */
+  needsUpdate: boolean;
   version: string;
+  /** What an update downloads. */
+  updateBytes: number;
   downloadBytes: number;
   requiredFreeBytes: number;
   /** 0 when unknown. */
@@ -454,6 +458,17 @@ export interface TtsInstallProgress {
   steps: number;
   label: string;
   detail: string;
+}
+
+/** A cloning reference built from a speaker's lines in the video. */
+export interface ReferenceResult {
+  seconds: number;
+  /** The lines it was asked to be cut from. */
+  lines: number;
+  /** How many made it in: lines that are mostly music are left out. */
+  kept: number;
+  /** Whether the voice was separated from the music and effects. */
+  isolated: boolean;
 }
 
 /** "loading" while a model goes onto the GPU, then "ready". */

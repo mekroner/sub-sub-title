@@ -4,8 +4,8 @@ Reads one JSON request per line on stdin and answers with one JSON object per
 line on stdout. Models are loaded on first use and kept on the GPU. Exits when
 stdin closes, which is how the app shuts it down — however the app exits.
 
-Libraries print freely, so the real stdout is kept for the protocol alone and
-`sys.stdout` is pointed at stderr: a stray print can never corrupt a reply.
+The protocol, levelling and speech finding are shared with every engine's
+sidecar, in common.py.
 
     {"id": 1, "op": "generate", "engine": "turbo", "text": "...",
      "reference": "C:/ref.wav" | null, "seed": 7, "exaggeration": 0.5,
@@ -23,23 +23,31 @@ neither if the check could not be made.
     {"id": 2, "op": "align", "audio": "C:/line.wav", "segments": ["One two", "three"]}
     -> {"id": 2, "ok": true, "marks": [[0.12, 0.81], [0.95, 1.40]]}
 
+    {"id": 3, "op": "reference", "segments": ["C:/a.wav", "C:/b.wav"], "out": "C:/ref.wav"}
+    -> {"id": 3, "ok": true, "seconds": 12.4, "kept": 2, "isolated": true}
+
+Builds a cloning reference from a speaker's lines, cut from the film: the
+voice is separated from music and effects, each line trimmed to its speech,
+the cleanest lines put first and the whole capped at what the models read.
+
 While a model loads: {"event": "loading", "detail": "turbo"}.
 """
 
 import json
 import os
-import random
 import re
 import sys
 import traceback
 
-PROTOCOL = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8", buffering=1)
-sys.stdout = sys.stderr
-
-
-def send(message):
-    PROTOCOL.write(json.dumps(message) + "\n")
-    PROTOCOL.flush()
+# First: it takes stdout for the protocol before any library can print.
+from common import (
+    REFERENCE_LUFS,
+    VOICE_LUFS,
+    level,
+    seed_everything,
+    send,
+    speech_window,
+)
 
 
 _models = {}
@@ -79,67 +87,6 @@ def load(engine):
     return model
 
 
-# Every reference is cloned from speech at this integrated loudness, so all the
-# voices in a project come out alike in level. It is the level Turbo already
-# normalises to internally; the Expressive model does not normalise at all.
-# References built from the video arrive here already level line by line.
-REFERENCE_LUFS = -27.0
-# Every take is written at this integrated loudness, so lines from different
-# voices and models sit at one level in the mix before anyone touches a fader.
-VOICE_LUFS = -20.0
-# Gain never takes a sample past this (-1 dBFS).
-PEAK_CEILING = 10 ** (-1.0 / 20)
-
-
-def level(audio, sr, target):
-    """`audio` at `target` integrated loudness, its peak never past
-    PEAK_CEILING. Anything the meter cannot measure — shorter than its one
-    400 ms block, or silent — comes back as the same object, untouched."""
-    import numpy as np
-    import pyloudnorm
-
-    if len(audio) < 0.4 * sr:
-        return audio
-    loudness = pyloudnorm.Meter(sr).integrated_loudness(audio)
-    if not np.isfinite(loudness) or loudness < -70:
-        return audio
-    gain = 10 ** ((target - loudness) / 20)
-    peak = float(np.abs(audio).max())
-    if peak * gain > PEAK_CEILING:
-        gain = PEAK_CEILING / peak
-    return audio * gain
-
-
-# Speech is any 20 ms frame within 40 dB of the take's loudest frame (and
-# above -60 dBFS); the window is padded so a soft onset or breath survives.
-SPEECH_FRAME = 0.02
-SPEECH_RANGE_DB = 40.0
-SPEECH_FLOOR_DB = -60.0
-SPEECH_PAD = 0.06
-
-
-def speech_window(audio, sr):
-    """[start, end] of the voice in seconds, padded and clamped to the take,
-    or None if nothing in it is loud enough to be speech."""
-    import numpy as np
-
-    frame = max(1, int(SPEECH_FRAME * sr))
-    count = len(audio) // frame
-    if count == 0:
-        return None
-    frames = audio[: count * frame].reshape(count, frame)
-    rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
-    db = 20 * np.log10(np.maximum(rms, 1e-10))
-    threshold = max(float(db.max()) - SPEECH_RANGE_DB, SPEECH_FLOOR_DB)
-    loud = np.nonzero(db >= threshold)[0]
-    if len(loud) == 0:
-        return None
-    seconds = len(audio) / sr
-    start = max(0.0, loud[0] * frame / sr - SPEECH_PAD)
-    end = min(seconds, (loud[-1] + 1) * frame / sr + SPEECH_PAD)
-    return [round(start, 4), round(end, 4)]
-
-
 def normalized_reference(path):
     """A copy of the reference at REFERENCE_LUFS, cached by file and
     modification time. Anything that cannot be measured — too short, silent,
@@ -169,17 +116,6 @@ def normalized_reference(path):
     except Exception:  # noqa: BLE001 — a reference that cannot be levelled still clones
         traceback.print_exc()
         return path
-
-
-def seed_everything(seed):
-    import numpy as np
-    import torch
-
-    random.seed(seed)
-    np.random.seed(seed % (2**32))
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 def generate(request):
@@ -348,10 +284,135 @@ def align(request):
     return {"marks": marks}
 
 
+# --- References ----------------------------------------------------------------
+
+# Chatterbox reads only the start of a reference: its tone from the first
+# 10 s, its manner from the first 6 s (Expressive) or 15 s (Turbo). More than
+# this is never heard, so the best lines must come first and fill it.
+REFERENCE_SPEECH_SECONDS = 15.0
+# Lines are joined with this much silence, so no word runs into the next.
+REFERENCE_GAP = 0.15
+# A line whose separated voice carries less than this share of its energy is
+# mostly music or effects: the voice the model would learn from it is thin and
+# full of separation artefacts. Measured: clean dialogue 0.99 and up, the same
+# line under music as loud as it 0.49, music alone 0.0.
+MIN_VOICE_SHARE = 0.35
+# Demucs' fine-tuned bag: one model per stem, the best of its voices.
+SEPARATION_MODEL = "htdemucs_ft"
+
+_separator = None
+
+
+def load_separator():
+    """Demucs, to take the voice out of a film's mix. None when it is not
+    installed (an engine from before it was added), and references are then
+    built from the mix as they always were."""
+    global _separator
+    if _separator is None:
+        try:
+            from demucs.pretrained import get_model
+        except ImportError:
+            return None
+        send({"event": "loading", "detail": "separator"})
+        import torch
+
+        model = get_model(SEPARATION_MODEL)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _separator = {"model": model.to(device), "device": device}
+        send({"event": "ready", "detail": f"separator on {device}"})
+    return _separator
+
+
+def isolate(audio, sr):
+    """The voice in `audio` (mono, any rate) and its share of the energy,
+    0..1; or None when it cannot be separated."""
+    separator = load_separator()
+    if separator is None:
+        return None
+    import librosa
+    import numpy as np
+    import torch
+    from demucs.apply import apply_model
+
+    model = separator["model"]
+    mix = librosa.resample(audio, orig_sr=sr, target_sr=model.samplerate) if sr != model.samplerate else audio
+    # Demucs works in stereo; a mono line is the same on both sides.
+    stereo = torch.from_numpy(np.stack([mix, mix])).float()
+    # Normalised as Demucs' own command line does, for the level it was trained at.
+    centre, scale = stereo.mean(), stereo.std() + 1e-8
+    with torch.inference_mode():
+        stems = apply_model(model, ((stereo - centre) / scale)[None], device=separator["device"], progress=False)[0]
+    voice = (stems[model.sources.index("vocals")] * scale).mean(dim=0).cpu().numpy()
+    voice = librosa.resample(voice, orig_sr=model.samplerate, target_sr=sr) if sr != model.samplerate else voice
+    voice = voice[: len(audio)]
+    rest = audio[: len(voice)] - voice
+    voiced, other = float(np.sum(voice**2)), float(np.sum(rest**2))
+    return voice, voiced / max(voiced + other, 1e-12)
+
+
+def reference(request):
+    """Joins the lines at `segments` into one reference at `out`: each line's
+    voice, trimmed to its speech, cleanest first, capped and levelled."""
+    import librosa
+    import numpy as np
+    import soundfile
+
+    sr = 24000
+    lines, isolated = [], False
+    for order, path in enumerate(request["segments"]):
+        audio, _ = librosa.load(path, sr=sr, mono=True)
+        share = None
+        try:
+            separated = isolate(audio, sr)
+        except Exception:  # noqa: BLE001 — an unseparated line is still a line
+            traceback.print_exc()
+            separated = None
+        if separated is not None:
+            audio, share = separated
+            isolated = True
+            if share < MIN_VOICE_SHARE:
+                continue
+        window = speech_window(audio, sr)
+        if window is None:
+            continue
+        audio = audio[int(window[0] * sr) : int(window[1] * sr)]
+        lines.append((share, order, level(audio, sr, REFERENCE_LUFS)))
+    if not lines:
+        raise ValueError("No clear speech was found in these lines. Try others, away from music.")
+
+    # Cleanest first. Shares a hair apart are the same to the ear, so among
+    # those, and lines no separation could judge, the longest go first: a
+    # whole sentence shows more of how someone talks than a word or two.
+    lines.sort(key=lambda line: (-round(line[0] or 0.0, 2), -len(line[2]), line[1]))
+    gap = np.zeros(int(REFERENCE_GAP * sr), dtype=np.float32)
+    pieces, seconds, kept = [], 0.0, 0
+    for _, _, audio in lines:
+        if pieces:
+            pieces.append(gap)
+            seconds += REFERENCE_GAP
+        room = REFERENCE_SPEECH_SECONDS - seconds
+        if room <= 0.3:
+            pieces.pop()
+            break
+        audio = audio[: int(room * sr)]
+        pieces.append(audio.astype(np.float32))
+        seconds += len(audio) / sr
+        kept += 1
+    joined = level(np.concatenate(pieces), sr, REFERENCE_LUFS)
+    out = request["out"]
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    soundfile.write(out, joined, sr, subtype="PCM_16")
+    return {"seconds": round(len(joined) / sr, 3), "kept": kept, "isolated": isolated}
+
+
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "--warmup":
         # Run by the installer: downloads the weights, proves CUDA works.
-        load(sys.argv[2])
+        if sys.argv[2] == "extras":
+            if load_separator() is None:
+                raise SystemExit("Demucs is not installed.")
+        else:
+            load(sys.argv[2])
         return
 
     for line in sys.stdin:
@@ -367,6 +428,8 @@ def main():
                 result = generate(request)
             elif op == "align":
                 result = align(request)
+            elif op == "reference":
+                result = reference(request)
             else:
                 raise ValueError(f"Unknown op: {op}")
             send({"id": request_id, "ok": True, **result})

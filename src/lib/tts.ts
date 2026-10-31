@@ -14,9 +14,13 @@ import { addTrack, canAddTrack, clipEnd, voiceTracks } from "./voiceover";
 export const NO_SPEAKER = "";
 /** A line running this far past its last cue is worth a warning. */
 export const OVERRUN_TOLERANCE = 0.05;
-/** How much of a speaker's own audio makes a good cloning reference. */
-export const REFERENCE_TARGET_SECONDS = 15;
-export const REFERENCE_MAX_SECONDS = 25;
+/**
+ * How much of a speaker's own audio to cut for a cloning reference. More than
+ * the 15 s the engine keeps: trimming each line to its speech, and leaving out
+ * lines that are mostly music, shrinks it.
+ */
+export const REFERENCE_TARGET_SECONDS = 20;
+export const REFERENCE_MAX_SECONDS = 30;
 
 /**
  * Automatic grouping is deliberately conservative: only a sentence that a
@@ -666,11 +670,14 @@ export function removeTake(voiceover: Voiceover, clipId: string, index: number):
  * The cues a reference is suggested from, before anyone has chosen: the
  * speaker's longest spoken lines, so a few good lines beat many fragments,
  * until there is enough. Thoughts are left out, since they are not the
- * character's audible voice.
+ * character's audible voice, and so are lines another speaker's cue overlaps,
+ * since their voice would be cloned too.
  */
 export function suggestedReferenceCues(cues: Cue[], key: string): Cue[] {
+  const others = cues.filter((c) => castKey(c) !== key);
   const candidates = cues
     .filter((c) => castKey(c) === key && c.mode !== "thought" && speechText(c) !== "")
+    .filter((c) => !others.some((o) => o.start < c.end && o.end > c.start))
     .sort((a, b) => b.end - b.start - (a.end - a.start));
   const picked: Cue[] = [];
   let total = 0;

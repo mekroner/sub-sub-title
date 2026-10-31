@@ -92,8 +92,10 @@ export function ReferenceDialog({
 
         <div className="modal-body">
           <p className="hint">
-            Tick the cues where {speakerName} is clearly speaking, alone, without music or other
-            voices over them. Listen with ▶. A few clean lines beat many noisy ones.
+            Tick the cues where {speakerName} is clearly speaking, alone, without other voices over
+            them. Listen with ▶. Music and effects are taken out, the cleanest lines are put
+            first and lines that are mostly music are left out, but a few clean lines still beat
+            many noisy ones.
           </p>
 
           <div className="reference-list">
@@ -158,7 +160,7 @@ export function ReferenceDialog({
             disabled={busy || picked.length === 0 || used <= 0}
             onClick={() => void build()}
           >
-            {busy ? "Building…" : "Build voice"}
+            {busy ? "Isolating the voice…" : "Build voice"}
           </button>
         </footer>
       </div>

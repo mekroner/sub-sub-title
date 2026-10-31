@@ -39,16 +39,27 @@ const TORCH_PACKAGES: [&str; 2] = ["torch==2.6.0", "torchaudio==2.6.0"];
 const CHATTERBOX_PACKAGES: [&str; 2] = ["chatterbox-tts==0.1.7", "setuptools<81"];
 /// Bumped whenever any pin above changes, so an older install is redone.
 const INSTALL_VERSION: &str = "chatterbox-0.1.7+torch-2.6.0-cu124+1";
+/// Added to an installed engine without reinstalling it: Demucs, to take a
+/// voice out of a film's mix before it is cloned.
+const EXTRA_PACKAGES: [&str; 1] = ["demucs==4.1.0"];
+/// Bumped whenever the extras change, so an install missing them is updated.
+const EXTRAS_VERSION: &str = "demucs-4.1.0";
 /// PyTorch with CUDA (2.5 GB), Chatterbox's dependencies and the Turbo
 /// weights (3.8 GB), measured.
 const DOWNLOAD_BYTES: u64 = 7_000_000_000;
+/// Demucs and its fine-tuned separation weights.
+const EXTRAS_BYTES: u64 = 350_000_000;
 const REQUIRED_FREE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// transformers nests files about 150 characters deep inside the venv, and
 /// Python on Windows fails to open anything past 260 characters unless long
 /// paths are enabled machine-wide. A root longer than this would break the
 /// install in a way that looks like a missing file.
 const MAX_ROOT_CHARS: usize = 100;
-const SERVER_SOURCE: &str = include_str!("../tts/server.py");
+/// The sidecar's scripts, written out beside the venv; the first is run.
+const SIDECAR_SOURCES: [(&str, &str); 2] = [
+    ("server.py", include_str!("../tts/server.py")),
+    ("common.py", include_str!("../tts/common.py")),
+];
 
 #[derive(Default)]
 pub struct TtsState {
@@ -78,13 +89,20 @@ impl Drop for Sidecar {
 struct Manifest {
     version: String,
     python: PathBuf,
+    /// `EXTRAS_VERSION` of the extras installed; empty before there were any.
+    #[serde(default)]
+    extras: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TtsStatus {
     pub installed: bool,
+    /// Installed, but without the current extras: it works, with less.
+    pub needs_update: bool,
     pub version: String,
+    /// What an update downloads.
+    pub update_bytes: u64,
     pub download_bytes: u64,
     pub required_free_bytes: u64,
     /// 0 when it could not be determined.
@@ -155,11 +173,20 @@ fn manifest_path(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(root(app)?.join("tts.json"))
 }
 
+fn read_manifest(app: &AppHandle) -> Option<Manifest> {
+    let bytes = std::fs::read(manifest_path(app).ok()?).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 /// The installed interpreter, if the install is complete and current.
 fn installed_python(app: &AppHandle) -> Option<PathBuf> {
-    let bytes = std::fs::read(manifest_path(app).ok()?).ok()?;
-    let manifest: Manifest = serde_json::from_slice(&bytes).ok()?;
+    let manifest = read_manifest(app)?;
     (manifest.version == INSTALL_VERSION && manifest.python.is_file()).then_some(manifest.python)
+}
+
+/// Whether the installed engine has the current extras.
+fn extras_current(app: &AppHandle) -> bool {
+    read_manifest(app).is_some_and(|m| m.extras == EXTRAS_VERSION)
 }
 
 /// Environment shared by the installer and the sidecar: every cache and
@@ -188,9 +215,12 @@ fn apply_env(cmd: &mut Command, root: &Path) {
 
 #[tauri::command]
 pub fn tts_status(app: AppHandle) -> AppResult<TtsStatus> {
+    let installed = installed_python(&app).is_some();
     Ok(TtsStatus {
-        installed: installed_python(&app).is_some(),
+        installed,
+        needs_update: installed && !extras_current(&app),
         version: INSTALL_VERSION.to_string(),
+        update_bytes: EXTRAS_BYTES,
         download_bytes: DOWNLOAD_BYTES,
         required_free_bytes: REQUIRED_FREE_BYTES,
         disk_free_bytes: free_space(&root(&app)?),
@@ -211,8 +241,11 @@ pub fn cancel_tts_install(state: tauri::State<'_, TtsState>) {
 
 #[tauri::command]
 pub async fn install_tts(app: AppHandle, state: tauri::State<'_, TtsState>) -> AppResult<()> {
-    if installed_python(&app).is_some() {
-        return Ok(());
+    if let Some(python) = installed_python(&app) {
+        if extras_current(&app) {
+            return Ok(());
+        }
+        return update(app, &state, python).await;
     }
     let root = root(&app)?;
     if root.as_os_str().len() > MAX_ROOT_CHARS {
@@ -249,7 +282,7 @@ pub async fn install_tts(app: AppHandle, state: tauri::State<'_, TtsState>) -> A
     .map_err(|e| AppError::msg(format!("The voice engine install failed: {e}")))?
 }
 
-const STEPS: u32 = 6;
+const STEPS: u32 = 7;
 
 fn progress(app: &AppHandle, step: u32, label: &str, detail: &str) {
     let _ = app.emit(
@@ -358,20 +391,81 @@ fn install_steps(
     cmd.arg(&server).args(["--warmup", "turbo"]);
     run_step(app, cmd, 5, label, cancelled, child_slot)?;
 
-    let label = "Tidying up";
-    progress(app, 6, label, "");
-    // The cache holds a second copy of every wheel, PyTorch included.
-    let _ = run_step(app, uv_cmd(&["cache", "clean"]), 6, label, cancelled, child_slot);
+    install_extras(app, root, &python, &uv_cmd, 6, cancelled, child_slot)?;
 
+    let label = "Tidying up";
+    progress(app, 7, label, "");
+    // The cache holds a second copy of every wheel, PyTorch included.
+    let _ = run_step(app, uv_cmd(&["cache", "clean"]), 7, label, cancelled, child_slot);
+
+    write_manifest(root, python)?;
+    progress(app, STEPS, "Done", "");
+    Ok(())
+}
+
+fn write_manifest(root: &Path, python: PathBuf) -> AppResult<()> {
     std::fs::write(
         root.join("tts.json"),
         serde_json::to_vec_pretty(&Manifest {
             version: INSTALL_VERSION.to_string(),
             python,
+            extras: EXTRAS_VERSION.to_string(),
         })?,
     )?;
-    progress(app, STEPS, "Done", "");
     Ok(())
+}
+
+/// Installs the extras into the venv and fetches their weights.
+fn install_extras(
+    app: &AppHandle,
+    root: &Path,
+    python: &Path,
+    uv_cmd: &dyn Fn(&[&str]) -> Command,
+    step: u32,
+    cancelled: &AtomicBool,
+    child_slot: &Mutex<Option<Child>>,
+) -> AppResult<()> {
+    let label = "Installing voice isolation (Demucs)";
+    progress(app, step, label, "");
+    let mut cmd = uv_cmd(&["pip", "install", "--python"]);
+    cmd.arg(python).args(EXTRA_PACKAGES);
+    run_step(app, cmd, step, label, cancelled, child_slot)?;
+    let server = write_server(root)?;
+    let mut cmd = quiet_command(&python.to_string_lossy());
+    apply_env(&mut cmd, root);
+    cmd.arg(&server).args(["--warmup", "extras"]);
+    run_step(app, cmd, step, label, cancelled, child_slot)
+}
+
+/// Brings an installed engine up to date by adding what it lacks, without
+/// touching PyTorch or the models it already has.
+async fn update(app: AppHandle, state: &TtsState, python: PathBuf) -> AppResult<()> {
+    state.install_cancelled.store(false, Ordering::SeqCst);
+    let cancelled = state.install_cancelled.clone();
+    let child_slot = state.install_child.clone();
+    // The running sidecar has the old packages imported.
+    if let Ok(mut guard) = state.sidecar.lock() {
+        *guard = None;
+    }
+    let root = root(&app)?;
+    let uv = fetch_uv(&app, &root, &cancelled).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let uv_cmd = |args: &[&str]| {
+            let mut cmd = quiet_command(&uv.to_string_lossy());
+            apply_env(&mut cmd, &root);
+            cmd.args(args);
+            cmd
+        };
+        install_extras(&app, &root, &python, &uv_cmd, 6, &cancelled, &child_slot)?;
+        let label = "Tidying up";
+        progress(&app, 7, label, "");
+        let _ = run_step(&app, uv_cmd(&["cache", "clean"]), 7, label, &cancelled, &child_slot);
+        write_manifest(&root, python)?;
+        progress(&app, STEPS, "Done", "");
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::msg(format!("Updating the voice engine failed: {e}")))?
 }
 
 /// Runs one install step to completion, streaming its output as progress
@@ -457,15 +551,18 @@ fn run_step(
     }
 }
 
-/// The sidecar script ships inside the app and is written out next to the
-/// venv, so an app update updates the script without a reinstall.
+/// The sidecar's scripts ship inside the app and are written out next to the
+/// venv, so an app update updates them without a reinstall. Returns the one
+/// to run.
 fn write_server(root: &Path) -> AppResult<PathBuf> {
-    let path = root.join("server.py");
-    let current = std::fs::read_to_string(&path).unwrap_or_default();
-    if current != SERVER_SOURCE {
-        std::fs::write(&path, SERVER_SOURCE)?;
+    for (name, source) in SIDECAR_SOURCES {
+        let path = root.join(name);
+        let current = std::fs::read_to_string(&path).unwrap_or_default();
+        if current != source {
+            std::fs::write(&path, source)?;
+        }
     }
-    Ok(path)
+    Ok(root.join(SIDECAR_SOURCES[0].0))
 }
 
 // --- Generating ---------------------------------------------------------------
@@ -514,6 +611,9 @@ struct Reply {
     speech: Option<[f64; 2]>,
     score: Option<f64>,
     rate: Option<f64>,
+    seconds: Option<f64>,
+    kept: Option<usize>,
+    isolated: Option<bool>,
 }
 
 #[derive(Clone, Serialize)]
@@ -522,13 +622,14 @@ pub struct TtsEvent {
     pub detail: String,
 }
 
-fn generate(
+/// Runs `work` against the sidecar, starting one if none is running. If it
+/// dies along the way, the error says why and the next call starts afresh.
+fn with_sidecar<T>(
     root: &Path,
     python: &Path,
     slot: &Mutex<Option<Sidecar>>,
-    request: &TtsRequest,
-    on_event: &dyn Fn(TtsEvent),
-) -> AppResult<TtsResult> {
+    work: impl FnOnce(&mut Sidecar) -> AppResult<T>,
+) -> AppResult<T> {
     let mut guard = slot
         .lock()
         .map_err(|_| AppError::msg("The voice engine lock was poisoned."))?;
@@ -540,7 +641,38 @@ fn generate(
     }
     let sidecar = guard.as_mut().expect("just ensured");
 
-    let outcome = exchange(
+    let outcome = work(sidecar);
+    if outcome.is_err() && !matches!(sidecar.child.try_wait(), Ok(None)) {
+        // It died: report why, and start a fresh one next time.
+        let tail = sidecar
+            .stderr_tail
+            .lock()
+            .map(|t| t.join("\n"))
+            .unwrap_or_default();
+        *guard = None;
+        return Err(AppError::msg(format!(
+            "The voice engine stopped unexpectedly.\n{tail}"
+        )));
+    }
+    outcome
+}
+
+fn generate(
+    root: &Path,
+    python: &Path,
+    slot: &Mutex<Option<Sidecar>>,
+    request: &TtsRequest,
+    on_event: &dyn Fn(TtsEvent),
+) -> AppResult<TtsResult> {
+    with_sidecar(root, python, slot, |sidecar| speak(sidecar, request, on_event))
+}
+
+fn speak(
+    sidecar: &mut Sidecar,
+    request: &TtsRequest,
+    on_event: &dyn Fn(TtsEvent),
+) -> AppResult<TtsResult> {
+    exchange(
         sidecar,
         serde_json::json!({
             "op": "generate",
@@ -580,21 +712,7 @@ fn generate(
             score: reply.score,
             rate: reply.rate,
         }
-    });
-
-    if outcome.is_err() && !matches!(sidecar.child.try_wait(), Ok(None)) {
-        // It died: report why, and start a fresh one next time.
-        let tail = sidecar
-            .stderr_tail
-            .lock()
-            .map(|t| t.join("\n"))
-            .unwrap_or_default();
-        *guard = None;
-        return Err(AppError::msg(format!(
-            "The voice engine stopped unexpectedly.\n{tail}"
-        )));
-    }
-    outcome
+    })
 }
 
 /// Sends one request and waits for its reply, passing events on as they come.
@@ -678,27 +796,76 @@ fn spawn_sidecar(root: &Path, python: &Path) -> AppResult<Sidecar> {
 
 // --- Reference clips ------------------------------------------------------------
 
-/// Cuts the given stretches out of the video's audio and joins them into one
-/// mono WAV: a speaker's own lines, as a reference for cloning their voice.
-/// Returns the clip's length in seconds.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceResult {
+    /// The reference's length in seconds.
+    pub seconds: f64,
+    /// The lines it was asked to be cut from.
+    pub lines: usize,
+    /// How many of them made it in: lines that are mostly music, or past what
+    /// the model reads, are left out.
+    pub kept: usize,
+    /// Whether the voice was separated from the rest of the film's sound.
+    pub isolated: bool,
+}
+
+/// Builds a reference for cloning a speaker's voice from stretches of the
+/// video: their own lines. With the engine installed, each line's voice is
+/// separated from the music and effects under it, trimmed to its speech and
+/// the cleanest put first; without it, the lines are joined as they are.
 #[tauri::command]
 pub async fn tts_extract_reference(
+    app: AppHandle,
+    state: tauri::State<'_, TtsState>,
     video_path: String,
     segments: Vec<[f64; 2]>,
     output_path: String,
-) -> AppResult<f64> {
+) -> AppResult<ReferenceResult> {
+    let python = installed_python(&app);
+    let root = root(&app)?;
+    let slot = state.sidecar.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        extract_reference(&video_path, segments, &output_path)
+        let segments = valid_segments(segments)?;
+        let lines = segments.len();
+        let Some(python) = python else {
+            let seconds = extract_reference(&video_path, segments, &output_path)?;
+            return Ok(ReferenceResult { seconds, lines, kept: lines, isolated: false });
+        };
+        let parts = std::env::temp_dir().join(format!(
+            "sub-sub-title-ref-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+        let outcome = cut_lines(&video_path, &segments, &parts).and_then(|files| {
+            let on_event = |event: TtsEvent| {
+                let _ = app.emit("tts-event", event);
+            };
+            with_sidecar(&root, &python, &slot, |sidecar| {
+                exchange(
+                    sidecar,
+                    serde_json::json!({ "op": "reference", "segments": files, "out": output_path }),
+                    &on_event,
+                )
+            })
+        });
+        let _ = std::fs::remove_dir_all(&parts);
+        let reply = outcome?;
+        Ok(ReferenceResult {
+            seconds: reply.seconds.unwrap_or(0.0),
+            lines,
+            kept: reply.kept.unwrap_or(lines),
+            isolated: reply.isolated.unwrap_or(false),
+        })
     })
     .await
-    .map_err(|e| AppError::msg(format!("Cutting the reference failed: {e}")))?
+    .map_err(|e| AppError::msg(format!("Building the reference failed: {e}")))?
 }
 
-fn extract_reference(
-    video_path: &str,
-    segments: Vec<[f64; 2]>,
-    output_path: &str,
-) -> AppResult<f64> {
+fn valid_segments(segments: Vec<[f64; 2]>) -> AppResult<Vec<[f64; 2]>> {
     let segments: Vec<[f64; 2]> = segments
         .into_iter()
         .filter(|[a, b]| a.is_finite() && b.is_finite() && b > a)
@@ -706,32 +873,32 @@ fn extract_reference(
     if segments.is_empty() {
         return Err(AppError::msg("There are no lines to take a reference from."));
     }
-    if let Some(dir) = Path::new(&output_path).parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    // Each line is brought to the same loudness before they are joined: lines
-    // cut from a film sit at whatever level the scene had, and a model cloning
-    // a shout next to a mumble learns neither.
+    Ok(segments)
+}
+
+/// The filter graph taking each stretch of the video's audio out as its own
+/// stream, `[s0]`, `[s1]`…, every one brought to the same loudness: lines cut
+/// from a film sit at whatever level the scene had, and a model cloning a
+/// shout next to a mumble learns neither.
+fn line_graph(video_path: &str, segments: &[[f64; 2]]) -> String {
     let mut graph = String::new();
     for (i, [start, end]) in segments.iter().enumerate() {
         let gain = measure_loudness(video_path, *start, *end)
             .map(|m| m.gain_to(REFERENCE_LUFS, REFERENCE_PEAK_DBTP))
             .unwrap_or(0.0);
+        if i > 0 {
+            graph.push(';');
+        }
         graph.push_str(&format!(
             "[0:a]atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,\
-             volume={gain:.2}dB[s{i}];"
+             volume={gain:.2}dB[s{i}]"
         ));
     }
-    for i in 0..segments.len() {
-        graph.push_str(&format!("[s{i}]"));
-    }
-    graph.push_str(&format!("concat=n={}:v=0:a=1[out]", segments.len()));
+    graph
+}
 
-    let out = quiet_command(&ffmpeg_bin())
-        .args(["-hide_banner", "-nostdin", "-v", "error", "-y", "-i"])
-        .arg(video_path)
-        .args(["-filter_complex", &graph, "-map", "[out]", "-ac", "1", "-c:a", "pcm_s16le"])
-        .arg(output_path)
+fn run_ffmpeg(cmd: &mut Command) -> AppResult<()> {
+    let out = cmd
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -742,6 +909,51 @@ fn extract_reference(
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
+    Ok(())
+}
+
+/// Each stretch of the video's audio as its own mono WAV in `dir`, levelled.
+fn cut_lines(video_path: &str, segments: &[[f64; 2]], dir: &Path) -> AppResult<Vec<String>> {
+    std::fs::create_dir_all(dir)?;
+    let mut cmd = quiet_command(&ffmpeg_bin());
+    cmd.args(["-hide_banner", "-nostdin", "-v", "error", "-y", "-i"])
+        .arg(video_path)
+        .args(["-filter_complex", &line_graph(video_path, segments)]);
+    let mut files = Vec::new();
+    for i in 0..segments.len() {
+        let file = dir.join(format!("line-{i}.wav"));
+        cmd.args(["-map", &format!("[s{i}]"), "-ac", "1", "-c:a", "pcm_s16le"]).arg(&file);
+        files.push(file.to_string_lossy().into_owned());
+    }
+    run_ffmpeg(&mut cmd)?;
+    Ok(files)
+}
+
+/// The stretches of the video's audio joined into one mono WAV, each line
+/// levelled: the reference as it is built without the engine to clean it.
+/// Returns its length in seconds.
+fn extract_reference(
+    video_path: &str,
+    segments: Vec<[f64; 2]>,
+    output_path: &str,
+) -> AppResult<f64> {
+    let segments = valid_segments(segments)?;
+    if let Some(dir) = Path::new(&output_path).parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut graph = line_graph(video_path, &segments);
+    graph.push(';');
+    for i in 0..segments.len() {
+        graph.push_str(&format!("[s{i}]"));
+    }
+    graph.push_str(&format!("concat=n={}:v=0:a=1[out]", segments.len()));
+    run_ffmpeg(
+        quiet_command(&ffmpeg_bin())
+            .args(["-hide_banner", "-nostdin", "-v", "error", "-y", "-i"])
+            .arg(video_path)
+            .args(["-filter_complex", &graph, "-map", "[out]", "-ac", "1", "-c:a", "pcm_s16le"])
+            .arg(output_path),
+    )?;
     Ok(segments.iter().map(|[a, b]| b - a).sum())
 }
 
@@ -897,6 +1109,13 @@ mod tests {
         assert!((measured - 3.5).abs() < 0.05, "measured {measured}");
 
         assert!(extract_reference(&video.to_string_lossy(), vec![], &out.to_string_lossy()).is_err());
+
+        // For the engine to clean, each line comes out as a file of its own.
+        let parts = cut_lines(&video.to_string_lossy(), &[[1.0, 3.5], [6.0, 7.0]], &dir.join("parts"))
+            .expect("cuts");
+        assert_eq!(parts.len(), 2);
+        let lengths: Vec<f64> = parts.iter().map(|p| probe_seconds(p).unwrap()).collect();
+        assert!((lengths[0] - 2.5).abs() < 0.05 && (lengths[1] - 1.0).abs() < 0.05, "{lengths:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

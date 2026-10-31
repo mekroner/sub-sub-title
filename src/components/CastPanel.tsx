@@ -139,6 +139,18 @@ export function CastPanel({
         )
       )}
 
+      {installed && status?.needsUpdate && !job && (
+        <div className="cast-install">
+          <p className="hint">
+            An update to the voice engine takes the music and effects out of the lines a voice is
+            cloned from.
+          </p>
+          <button type="button" className="small" onClick={onInstall}>
+            Update voice engine…
+          </button>
+        </div>
+      )}
+
       <div className="cast-list">
         {rows.length === 0 && <p className="hint cast-empty">No cues to speak yet.</p>}
         {rows.map((row) => (

@@ -13,7 +13,15 @@ function gigabytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
-/** Installs the local voice engine: Python, PyTorch with CUDA, Chatterbox. */
+function megabytes(bytes: number): string {
+  return `${Math.round(bytes / 1e6)} MB`;
+}
+
+/**
+ * Installs the local voice engine: Python, PyTorch with CUDA, Chatterbox. An
+ * engine installed before something was added to it is updated instead,
+ * keeping everything it already has.
+ */
 export function TtsInstallDialog({ status, onInstalled, onClose }: Props) {
   const [progress, setProgress] = useState<TtsInstallProgress | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,6 +56,7 @@ export function TtsInstallDialog({ status, onInstalled, onClose }: Props) {
     status.diskFreeBytes > 0 &&
     status.diskFreeBytes < status.requiredFreeBytes;
   const fraction = progress ? (progress.step - 1) / progress.steps : 0;
+  const updating = status?.installed === true && status.needsUpdate;
 
   return (
     <div className="modal-backdrop" onMouseDown={busy ? undefined : onClose}>
@@ -60,7 +69,7 @@ export function TtsInstallDialog({ status, onInstalled, onClose }: Props) {
         }}
       >
         <header className="modal-header">
-          <h2>Install the voice engine</h2>
+          <h2>{updating ? "Update the voice engine" : "Install the voice engine"}</h2>
           {!busy && (
             <button type="button" className="icon-button" onClick={onClose}>
               ✕
@@ -69,18 +78,29 @@ export function TtsInstallDialog({ status, onInstalled, onClose }: Props) {
         </header>
 
         <div className="modal-body">
-          <p>
-            Voices are generated on this computer by <strong>Chatterbox</strong> (Resemble AI, MIT
-            licence), on your NVIDIA GPU. Nothing is sent anywhere, and nothing is filtered.
-          </p>
-          <p className="hint">
-            The install downloads about {gigabytes(status?.downloadBytes ?? 7e9)}: a private
-            Python, PyTorch with CUDA and the model. It needs about{" "}
-            {gigabytes(status?.requiredFreeBytes ?? 16 * 1024 ** 3)} free while installing
-            {status && status.diskFreeBytes > 0 ? ` (${gigabytes(status.diskFreeBytes)} free now)` : ""}
-            . It does not touch any Python you already have. Chatterbox marks what it generates
-            with an inaudible watermark.
-          </p>
+          {updating ? (
+            <p>
+              The update adds <strong>Demucs</strong> (Meta, MIT licence), which takes the music
+              and effects out of the lines a voice is cloned from, so only the voice is cloned. It
+              downloads about {megabytes(status.updateBytes)} and keeps everything already
+              installed.
+            </p>
+          ) : (
+            <>
+              <p>
+                Voices are generated on this computer by <strong>Chatterbox</strong> (Resemble AI, MIT
+                licence), on your NVIDIA GPU. Nothing is sent anywhere, and nothing is filtered.
+              </p>
+              <p className="hint">
+                The install downloads about {gigabytes(status?.downloadBytes ?? 7e9)}: a private
+                Python, PyTorch with CUDA and the model. It needs about{" "}
+                {gigabytes(status?.requiredFreeBytes ?? 16 * 1024 ** 3)} free while installing
+                {status && status.diskFreeBytes > 0 ? ` (${gigabytes(status.diskFreeBytes)} free now)` : ""}
+                . It does not touch any Python you already have. Chatterbox marks what it generates
+                with an inaudible watermark.
+              </p>
+            </>
+          )}
 
           {busy && (
             <div className="progress">
@@ -107,7 +127,7 @@ export function TtsInstallDialog({ status, onInstalled, onClose }: Props) {
               className="danger"
               onClick={() => cancelTtsInstall().catch(() => undefined)}
             >
-              Cancel install
+              {updating ? "Cancel update" : "Cancel install"}
             </button>
           ) : (
             <>
@@ -115,7 +135,7 @@ export function TtsInstallDialog({ status, onInstalled, onClose }: Props) {
                 Close
               </button>
               <button type="button" className="primary" disabled={lowOnSpace} onClick={start}>
-                {error ? "Try again" : "Install"}
+                {error ? "Try again" : updating ? "Update" : "Install"}
               </button>
             </>
           )}

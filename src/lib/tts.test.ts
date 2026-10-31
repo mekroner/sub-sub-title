@@ -429,9 +429,20 @@ describe("references", () => {
       cue("e", 50, 60, "someone else", "s2"),
     ];
     cues[3].mode = "thought";
-    // 7 + 8 = 15 s is enough; the thought and the other speaker are left out.
-    expect(suggestedReferenceCues(cues, "s1").map((c) => c.id)).toEqual(["b", "c"]);
+    // 8 + 7 + 2 s; the thought and the other speaker are left out.
+    expect(suggestedReferenceCues(cues, "s1").map((c) => c.id)).toEqual(["a", "b", "c"]);
     expect(suggestedReferenceCues([cue("x", 0, 3, "hi", null)], NO_SPEAKER).map((c) => c.id)).toEqual(["x"]);
+  });
+
+  it("stops suggesting once there is enough", () => {
+    const cues = [cue("a", 0, 12, "one"), cue("b", 20, 30, "two"), cue("c", 40, 48, "three")];
+    // 12 + 10 = 22 s reaches the target; the shortest is not needed.
+    expect(suggestedReferenceCues(cues, "s1").map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("leaves out lines another speaker talks over", () => {
+    const cues = [cue("a", 0, 8, "mine"), cue("b", 7, 9, "interrupting", "s2"), cue("c", 10, 14, "also mine")];
+    expect(suggestedReferenceCues(cues, "s1").map((c) => c.id)).toEqual(["c"]);
   });
 
   it("cuts the chosen cues in time order, capped in total length", () => {
@@ -439,7 +450,7 @@ describe("references", () => {
       [0, 3],
       [10, 12],
     ]);
-    expect(referenceSegments([cue("a", 0, 40, "a very long monologue")])).toEqual([[0, 25]]);
+    expect(referenceSegments([cue("a", 0, 40, "a very long monologue")])).toEqual([[0, 30]]);
   });
 
   it("writes takes beside the video", () => {

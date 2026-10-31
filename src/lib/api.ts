@@ -24,6 +24,7 @@ import type {
   ToolStatus,
   TtsRequest,
   TtsResult,
+  ReferenceResult,
   TtsStatus,
   UnusedFile,
 } from "../types";
@@ -165,7 +166,7 @@ export const ttsExtractReference = (
   videoPath: string,
   segments: Array<[number, number]>,
   outputPath: string,
-) => invoke<number>("tts_extract_reference", { videoPath, segments, outputPath });
+) => invoke<ReferenceResult>("tts_extract_reference", { videoPath, segments, outputPath });
 
 /** Filesystem checks only — safe to call whenever the dialog opens. */
 export const transcribeStatus = (model: string) =>

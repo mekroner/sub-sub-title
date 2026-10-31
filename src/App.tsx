@@ -1117,11 +1117,18 @@ export default function App() {
       if (!paths || !project.videoPath) return;
       const segments = referenceSegments(chosen);
       const out = referencePath(paths.dir, paths.stem, key);
-      const seconds = await api.ttsExtractReference(project.videoPath, segments, out);
+      const built = await api.ttsExtractReference(project.videoPath, segments, out);
       setVoiceover((v) =>
         setVoice(v, key, { reference: out, referenceCueIds: chosen.map((c) => c.id) }),
       );
-      notify(`Cloning the voice from ${segments.length} lines (${seconds.toFixed(1)} s).`);
+      const from =
+        built.kept < built.lines
+          ? `${built.kept} of ${built.lines} lines`
+          : `${built.lines} line${built.lines === 1 ? "" : "s"}`;
+      notify(
+        `Cloning the voice from ${from} (${built.seconds.toFixed(1)} s of ` +
+          `${built.isolated ? "clean speech" : "the film's sound"}).`,
+      );
     },
     [paths, project.videoPath, setVoiceover, notify],
   );
