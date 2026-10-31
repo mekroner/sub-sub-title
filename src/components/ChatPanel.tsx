@@ -7,10 +7,12 @@ import type {
   ChatAttachment,
   ChatMessage,
   Cue,
+  CueVoicing,
   Project,
   Section,
   Speaker,
   TimedBeat,
+  Voiceover,
   WriterAnswer,
   WriterQuestion,
 } from "../types";
@@ -41,6 +43,15 @@ import {
   type StoryEnv,
   type StoryState,
 } from "../lib/storyAgent";
+import {
+  buildDirectKickoff,
+  buildDirectSystemPrompt,
+  describeDirectRun,
+  directTools,
+  parseDirectCommand,
+  runDirect,
+  type DirectEnv,
+} from "../lib/directAgent";
 import {
   CHAT_EFFORTS,
   MAX_CHAT_LINES,
@@ -100,10 +111,15 @@ interface Props {
   onOpenSettings: () => void;
   /** Story beats with a time; `/story` writes them, `/continue` heads for them. */
   timedBeats: TimedBeat[];
+  /** The voices and how each cue is voiced; `/direct` writes the voicing. */
+  voiceover: Voiceover;
   /** Text to put in the chat box, e.g. `/story ` from the Story panel. */
   prefill: { text: string; nonce: number } | null;
   /** A run changed the project; every call with one `runId` is one undo step. */
-  onAgentPatch: (patch: Partial<Pick<Project, "cues" | "sections" | "beats" | "timedBeats">>, runId: string) => void;
+  onAgentPatch: (
+    patch: Partial<Pick<Project, "cues" | "sections" | "beats" | "timedBeats">> & { voicing?: Record<string, CueVoicing> },
+    runId: string,
+  ) => void;
   /** A run finished, with the cues it added that still exist. */
   onAgentDone: (created: string[]) => void;
 }
@@ -138,6 +154,7 @@ export function ChatPanel({
   onEffortChange,
   onOpenSettings,
   timedBeats,
+  voiceover,
   prefill,
   onAgentPatch,
   onAgentDone,
@@ -172,7 +189,7 @@ export function ChatPanel({
   // What a run works on: its own edits at once, and the writer's (or an undo)
   // as soon as they reach the props. Each field is refreshed on its own, so a
   // run's edit to one is not overwritten by a stale render of another.
-  const props = { cues, sections, beats, timedBeats };
+  const props = { cues, sections, beats, timedBeats, voiceover };
   const latest = useRef({ ...props });
   const seen = useRef({ ...props });
   for (const key of Object.keys(props) as Array<keyof typeof props>) {
@@ -464,13 +481,56 @@ export function ChatPanel({
     });
   };
 
-  /** Asks `question`, or runs it when it is a `/story` or a `/continue`. */
+  /**
+   * `/direct`: lets the model direct the voiceover scene by scene — a note on
+   * how every line is said, and a voice script where it helps — its edits to
+   * the voicing landing live.
+   */
+  const runDirectInChat = (earlier: ChatMessage[], question: ChatMessage, command: { direction: string }) => {
+    const env: DirectEnv = {
+      duration,
+      vision,
+      speakers,
+      sections: latest.current.sections,
+      timedBeats: latest.current.timedBeats,
+    };
+    const aliases = createAliases();
+    const runId = makeId();
+    const opening: AgentMessage[] = [
+      { role: "system", content: buildDirectSystemPrompt({ brief, beats: latest.current.beats }, env) },
+      ...historyTurns(earlier),
+      {
+        role: "user",
+        content: buildDirectKickoff(latest.current.cues, latest.current.voiceover, env, command.direction),
+      },
+    ];
+
+    void runInChat(earlier, question, {
+      run: { kind: "direct", from: 0, to: duration, steps: [] },
+      describe: describeDirectRun,
+      tools: directTools(vision),
+      go: (deps) =>
+        runDirect(opening, env, aliases, {
+          ...deps,
+          getVoiceover: () => latest.current.voiceover,
+          getCues: () => latest.current.cues,
+          applyVoicing: (voicing) => {
+            latest.current.voiceover = { ...latest.current.voiceover, voicing };
+            onAgentPatch({ voicing }, runId);
+          },
+        }),
+    });
+  };
+
+  /** Asks `question`, or runs it when it is a `/story`, a `/direct` or a `/continue`. */
   const dispatch = (earlier: ChatMessage[], question: ChatMessage) => {
     // An edit sent while a run waits on an answer replaces that run.
     answerQuestion(null);
     const story = parseStoryCommand(question.text);
+    const direct = parseDirectCommand(question.text);
     const command = parseContinueCommand(question.text);
     if (story) runStoryInChat(earlier, question, story);
+    else if (direct) runDirectInChat(earlier, question, direct);
     else if (command) runContinue(earlier, question, command);
     else void ask(earlier, question);
   };
@@ -483,7 +543,7 @@ export function ChatPanel({
 
     setDraft("");
     setNotice(null);
-    if (parseContinueCommand(draft) || parseStoryCommand(draft)) {
+    if (parseContinueCommand(draft) || parseStoryCommand(draft) || parseDirectCommand(draft)) {
       // The run reads the script itself; an attachment waits for a question.
       dispatch(messages, { id: makeId(), role: "user", text: draft.trim() });
       return;
@@ -558,7 +618,8 @@ export function ChatPanel({
             <strong>📎 Last {linesBefore}</strong> hands it the lines up to the selected
             cue, or the playhead. <strong>/continue 30</strong> lets it write the next 30
             seconds from the playhead itself, with your direction after the number.
-            <strong>/story</strong> works on the outline: section notes and timed beats.
+            <strong>/story</strong> works on the outline: section notes and timed beats.{" "}
+            <strong>/direct</strong> gives every voiceover line a note on how it is said.
           </p>
         )}
 
@@ -681,7 +742,7 @@ export function ChatPanel({
           <textarea
             ref={inputRef}
             rows={2}
-            placeholder="Ask about a scene… or /continue 30 to write, /story to plan the outline"
+            placeholder="Ask about a scene… or /continue 30 to write, /story to plan the outline, /direct to direct the voices"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -928,7 +989,11 @@ function AgentLog({
           ? status === "streaming"
             ? "Working on the outline"
             : "Outline"
-          : `${status === "streaming" ? "Continuing" : "Continued"} ${stretch}`}
+          : run.kind === "direct"
+            ? status === "streaming"
+              ? "Directing lines"
+              : "Directed lines"
+            : `${status === "streaming" ? "Continuing" : "Continued"} ${stretch}`}
       </div>
       {run.steps.length > 0 && (
         <ul className="agent-steps">

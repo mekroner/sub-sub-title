@@ -180,6 +180,7 @@ import type {
   AppState,
   Cue,
   CueIssue,
+  CueVoicing,
   MediaInfo,
   Project,
   ProjectPaths,
@@ -919,15 +920,31 @@ export default function App() {
     [update],
   );
 
-  /** A `/continue` or `/story` run's edits: however long it takes, one undo step. */
+  /**
+   * A `/continue`, `/story` or `/direct` run's edits: however long it takes,
+   * one undo step. A direction run sends only the voicing, so clips a
+   * generation run adds meanwhile are kept.
+   */
   const applyAgentPatch = useCallback(
-    (patch: Partial<Pick<Project, "cues" | "sections" | "beats" | "timedBeats">>, runId: string) => {
+    (
+      patch: Partial<Pick<Project, "cues" | "sections" | "beats" | "timedBeats">> & {
+        voicing?: Record<string, CueVoicing>;
+      },
+      runId: string,
+    ) => {
       update(
         (current) => {
-          const changed = (Object.keys(patch) as Array<keyof typeof patch>).some(
-            (key) => patch[key] !== undefined && patch[key] !== current[key],
+          const { voicing, ...rest } = patch;
+          const changed = (Object.keys(rest) as Array<keyof typeof rest>).some(
+            (key) => rest[key] !== undefined && rest[key] !== current[key],
           );
-          return changed ? { ...current, ...patch } : current;
+          const voiced = voicing !== undefined && voicing !== current.voiceover.voicing;
+          if (!changed && !voiced) return current;
+          return {
+            ...current,
+            ...rest,
+            ...(voiced ? { voiceover: { ...current.voiceover, voicing } } : {}),
+          };
         },
         { mergeKey: `agent:${runId}`, mergeWindowMs: Infinity },
       );
@@ -3189,6 +3206,14 @@ export default function App() {
               }
               onReferenceFromFile={(key) => void referenceFromFile(key)}
               onReferenceFromVideo={setReferenceKey}
+              onDirect={
+                apiKeySet
+                  ? () => {
+                      setChatPrefill((p) => ({ text: "/direct ", nonce: (p?.nonce ?? 0) + 1 }));
+                      setVoTab("chat");
+                    }
+                  : undefined
+              }
             />
             </div>
             <div className="side-tab-body" hidden={voTab !== "line"}>
@@ -3342,6 +3367,7 @@ export default function App() {
             onEffortChange={(chatEffort) => patchSettings({ chatEffort })}
             onOpenSettings={() => setShowSettings(true)}
             timedBeats={timedBeats}
+            voiceover={project.voiceover}
             prefill={chatPrefill}
             onAgentPatch={applyAgentPatch}
             onAgentDone={(created) => {

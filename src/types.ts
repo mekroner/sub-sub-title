@@ -633,10 +633,12 @@ export interface ChatMessage {
 
 /** One thing a `/continue` run did, as the chat log lists it. */
 export interface AgentStep {
-  kind: "read" | "add" | "edit" | "move" | "delete" | "look" | "ask" | "section" | "outline" | "error";
+  kind: "read" | "add" | "edit" | "move" | "delete" | "look" | "ask" | "section" | "outline" | "direct" | "error";
   label: string;
   /** More to read on demand: what a look saw, how a question was answered. */
   detail?: string;
+  /** How many things the step did, where it did several: lines a `/direct` call directed. */
+  count?: number;
 }
 
 /** A question about direction a `/continue` run puts to the writer. */
@@ -653,7 +655,7 @@ export type WriterAnswer =
 
 export interface AgentRun {
   /** Absent for a `/continue` run, which is what runs were before `/story`. */
-  kind?: "story";
+  kind?: "story" | "direct";
   /** Seconds: the window the run was allowed to change. */
   from: number;
   to: number;

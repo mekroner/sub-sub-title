@@ -22,6 +22,8 @@ interface Props {
   onSetPronunciation: (word: string, spoken: string) => void;
   onReferenceFromFile: (key: string) => void;
   onReferenceFromVideo: (key: string) => void;
+  /** Starts a direction run: puts `/direct` into the chat. Absent without an API key. */
+  onDirect?: () => void;
 }
 
 interface Row {
@@ -53,6 +55,7 @@ export function CastPanel({
   onSetPronunciation,
   onReferenceFromFile,
   onReferenceFromVideo,
+  onDirect,
 }: Props) {
   const rows = useMemo<Row[]>(() => {
     // Counted in lines, not cues: a sentence spoken across two cues is one
@@ -89,21 +92,34 @@ export function CastPanel({
     <section className="panel cast-panel">
       <header className="panel-header">
         <h2>Cast</h2>
-        {installed && (
-          <button
-            type="button"
-            className="small primary"
-            disabled={!canGenerate || pending.length === 0}
-            onClick={() => onGenerate(pending)}
-            title={
-              job
-                ? "Add every line that is missing or out of date to this run"
-                : "Speak every line that is missing or out of date"
-            }
-          >
-            Generate {pending.length || ""}
-          </button>
-        )}
+        <span className="cast-actions">
+          {onDirect && (
+            <button
+              type="button"
+              className="small"
+              disabled={lines.groups.length === 0}
+              onClick={onDirect}
+              title="Let the direction agent write a note for every line — puts /direct into the chat"
+            >
+              ✦ Direct lines
+            </button>
+          )}
+          {installed && (
+            <button
+              type="button"
+              className="small primary"
+              disabled={!canGenerate || pending.length === 0}
+              onClick={() => onGenerate(pending)}
+              title={
+                job
+                  ? "Add every line that is missing or out of date to this run"
+                  : "Speak every line that is missing or out of date"
+              }
+            >
+              Generate {pending.length || ""}
+            </button>
+          )}
+        </span>
       </header>
 
       {!installed ? (

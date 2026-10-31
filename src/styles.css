@@ -2604,6 +2604,11 @@ button.fill-alt.on {
   flex: 1;
   min-height: 0;
 }
+.cast-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .cast-install,
 .cast-job {
   display: flex;
