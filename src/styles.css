@@ -2709,11 +2709,7 @@ button.fill-alt.on {
   padding-left: 58px;
 }
 
-/* The inspector sits under the cast and takes what it needs. */
-.layout.voiceover .clip-inspector {
-  flex: none;
-  max-height: 45%;
-}
+
 .clip-line {
   display: flex;
   flex-direction: column;
@@ -2822,11 +2818,6 @@ button.fill-alt.on {
 
 /* --- Voice line editor -------------------------------------------------- */
 
-.layout.voiceover .line-editor {
-  flex: none;
-  max-height: 55%;
-  overflow-y: auto;
-}
 .line-editor-body {
   display: flex;
   flex-direction: column;
@@ -2999,4 +2990,50 @@ button.fill-alt.on {
   background: rgba(74, 158, 255, 0.12);
   pointer-events: none;
   z-index: 3;
+}
+
+/* The Voiceover workspace's side column: one panel at a time, under tabs. */
+.side-tabs {
+  flex: none;
+  padding: 6px 8px;
+  background: var(--bg-raised);
+}
+.side-tabs button {
+  position: relative;
+}
+.side-tab-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+.side-tab-warning {
+  color: #e0a84a;
+}
+.side-tab-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Panels set their own display, which would otherwise outrank `hidden`. */
+.side-tab-body[hidden],
+.chat-panel[hidden] {
+  display: none;
+}
+.side-tab-body > .panel {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+.layout.voiceover .chat-panel {
+  flex: 1;
+  max-height: none;
+}
+.side-tab-empty {
+  padding: 10px;
 }

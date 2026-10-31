@@ -90,7 +90,10 @@ interface Props {
   apiKeySet: boolean;
   /** Changes when another project opens, which starts a fresh conversation. */
   projectKey: string;
-  height: number;
+  /** Fixed height under the panels above it; absent fills its column. */
+  height?: number;
+  /** Kept mounted but out of sight, so the conversation survives. */
+  hidden?: boolean;
   onLinesChange: (lines: number) => void;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
@@ -129,6 +132,7 @@ export function ChatPanel({
   apiKeySet,
   projectKey,
   height,
+  hidden,
   onLinesChange,
   onModelChange,
   onEffortChange,
@@ -521,7 +525,11 @@ export function ChatPanel({
   const canSend = ready && !streaming && (draft.trim() !== "" || attachment !== null);
 
   return (
-    <section className="panel chat-panel" style={{ height }}>
+    <section
+      className="panel chat-panel"
+      style={height === undefined ? undefined : { height }}
+      hidden={hidden}
+    >
       <header className="panel-header">
         <h2>Chat</h2>
         <button

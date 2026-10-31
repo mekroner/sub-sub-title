@@ -244,6 +244,15 @@ type Workspace = "subtitles" | "voiceover";
 
 const AUDIO_EXTENSIONS = ["wav", "mp3", "flac", "ogg", "opus", "m4a", "aac"];
 
+/** The Voiceover workspace's side column: one panel at a time. */
+type VoTab = "cast" | "line" | "clip" | "chat";
+const VO_TABS: Array<{ id: VoTab; label: string; title: string }> = [
+  { id: "cast", label: "Cast", title: "Who speaks how, and generating their lines" },
+  { id: "line", label: "Voice line", title: "What the selected cue's line says, and how" },
+  { id: "clip", label: "Clip", title: "The selected clip: its gain, its takes" },
+  { id: "chat", label: "Chat", title: "Ask about or edit the script" },
+];
+
 function readStored(key: string, fallback: number): number {
   try {
     const raw = localStorage.getItem(STORAGE_PREFIX + key);
@@ -413,6 +422,22 @@ export default function App() {
     [],
   );
   const voiceoverMode = workspace === "voiceover";
+
+  const [voTab, setVoTab] = useState<VoTab>(
+    () => VO_TABS[readStored("voTab", 0)]?.id ?? "cast",
+  );
+  useEffect(
+    () => writeStored("voTab", VO_TABS.findIndex((t) => t.id === voTab)),
+    [voTab],
+  );
+  // The side column follows a click on the timeline to what was clicked: a
+  // clip to its details, a cue to its voice line. Not away from the chat,
+  // though, where a click is more likely to be pointing something out.
+  useEffect(() => {
+    const kind = voSel.primary?.kind;
+    if (!kind) return;
+    setVoTab((tab) => (tab === "chat" ? tab : kind === "clip" ? "clip" : "line"));
+  }, [voSel.primary]);
 
   useEffect(() => {
     if (voiceoverMode && !mixer) setMixer(new VoiceoverMixer());
@@ -1146,12 +1171,18 @@ export default function App() {
   }, [voSel.primary, cues, selectedCueOfClip]);
 
   const editCueLine = useCallback(
-    (cueId: string) => selectVo({ items: [{ kind: "cue", id: cueId }], mode: "replace" }),
+    (cueId: string) => {
+      selectVo({ items: [{ kind: "cue", id: cueId }], mode: "replace" });
+      setVoTab("line");
+    },
     [selectVo],
   );
 
   const selectClip = useCallback(
-    (id: string) => selectVo({ items: [{ kind: "clip", id }], mode: "replace" }),
+    (id: string) => {
+      selectVo({ items: [{ kind: "clip", id }], mode: "replace" });
+      setVoTab("clip");
+    },
     [selectVo],
   );
 
@@ -3112,6 +3143,26 @@ export default function App() {
         <aside className="side-column">
           {voiceoverMode ? (
             <>
+            <div className="segmented wide side-tabs" role="tablist" aria-label="Side panel">
+              {VO_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={voTab === tab.id}
+                  className={voTab === tab.id ? "small on" : "small"}
+                  onClick={() => setVoTab(tab.id)}
+                  title={tab.title}
+                >
+                  {tab.label}
+                  {tab.id === "cast" && voices.job && <span className="side-tab-dot" title="Speaking lines" />}
+                  {tab.id === "clip" && selectedClip && clipWarnings.has(selectedClip.id) && (
+                    <span className="side-tab-warning"> ⚠</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <div className="side-tab-body" hidden={voTab !== "cast"}>
             <CastPanel
               voiceover={project.voiceover}
               lines={lines}
@@ -3128,7 +3179,9 @@ export default function App() {
               onReferenceFromFile={(key) => void referenceFromFile(key)}
               onReferenceFromVideo={setReferenceKey}
             />
-            {editedCue && (
+            </div>
+            <div className="side-tab-body" hidden={voTab !== "line"}>
+            {editedCue ? (
               <LineEditor
                 // A fresh editor per cue, so a suggestion in flight for one
                 // cue can never land in another.
@@ -3152,7 +3205,19 @@ export default function App() {
                 onGenerate={() => void voices.generate([editedCue])}
                 onClose={() => setVoSel(EMPTY_SELECTION)}
               />
+            ) : (
+              <section className="panel line-editor">
+                <header className="panel-header">
+                  <h2>Voice line</h2>
+                </header>
+                <p className="hint side-tab-empty">
+                  Select a cue, or a clip spoken from one, to write what is spoken: the words, tags
+                  like [sigh], and a note on how.
+                </p>
+              </section>
             )}
+            </div>
+            <div className="side-tab-body" hidden={voTab !== "clip"}>
             <ClipInspector
               clip={selectedClip}
               track={
@@ -3185,6 +3250,7 @@ export default function App() {
               onNewTake={() => selectedCueOfClip && void voices.generate([selectedCueOfClip])}
               onRemove={() => selectedClip && removeClipById(selectedClip.id)}
             />
+            </div>
             </>
           ) : (
           <>
@@ -3226,9 +3292,13 @@ export default function App() {
           </>
           )}
 
-          <PanelResizer height={chatHeight} onHeight={setChatHeight} />
+          {/* Voiceover gives the chat a tab of its own, at full height. It stays
+              mounted either way, so switching workspaces or tabs keeps the
+              conversation. */}
+          {!voiceoverMode && <PanelResizer height={chatHeight} onHeight={setChatHeight} />}
 
           <ChatPanel
+            hidden={voiceoverMode && voTab !== "chat"}
             cues={cues}
             speakers={speakers}
             sections={sections}
@@ -3255,7 +3325,7 @@ export default function App() {
             // The video, not the project path: saving a new project for the
             // first time gives it a path, and must not wipe the conversation.
             projectKey={project.videoPath}
-            height={chatHeight}
+            height={voiceoverMode ? undefined : chatHeight}
             onLinesChange={(lines) => patchSettings({ chatLinesBefore: lines })}
             onModelChange={(chatModel) => patchSettings({ chatModel })}
             onEffortChange={(chatEffort) => patchSettings({ chatEffort })}
