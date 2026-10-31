@@ -701,16 +701,44 @@ export function newSeed(): number {
   return Math.floor(Math.random() * 2 ** 31);
 }
 
+/** The folder a video's takes and references are written to, beside it. */
+export function voiceoverDir(dir: string, stem: string): string {
+  const sep = dir.includes("\\") ? "\\" : "/";
+  return `${dir}${sep}${stem}.voiceover`;
+}
+
 /** Where a generated take is written: beside the video, one folder per video. */
 export function takePath(dir: string, stem: string, cueId: string, seed: number): string {
   const sep = dir.includes("\\") ? "\\" : "/";
-  return `${dir}${sep}${stem}.voiceover${sep}${cueId.slice(0, 8)}-${seed}.wav`;
+  return `${voiceoverDir(dir, stem)}${sep}${cueId.slice(0, 8)}-${seed}.wav`;
 }
 
 export function referencePath(dir: string, stem: string, key: string): string {
   const sep = dir.includes("\\") ? "\\" : "/";
   const name = key === NO_SPEAKER ? "unassigned" : key.slice(0, 8);
-  return `${dir}${sep}${stem}.voiceover${sep}reference-${name}-${Date.now().toString(36)}.wav`;
+  return `${voiceoverDir(dir, stem)}${sep}reference-${name}-${Date.now().toString(36)}.wav`;
+}
+
+/**
+ * Every audio file the given versions of a voiceover use: what clips play,
+ * every take kept on them and the takes those were stretched from, and every
+ * voice's reference.
+ */
+export function voiceFilesInUse(voiceovers: Voiceover[]): string[] {
+  const files = new Set<string>();
+  for (const voiceover of voiceovers) {
+    for (const clip of voiceover.clips) {
+      files.add(clip.file);
+      for (const take of clip.takes ?? []) {
+        files.add(take.file);
+        if (take.original) files.add(take.original);
+      }
+    }
+    for (const voice of Object.values(voiceover.cast)) {
+      if (voice.reference) files.add(voice.reference);
+    }
+  }
+  return [...files];
 }
 
 function clipName(text: string): string {

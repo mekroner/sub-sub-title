@@ -125,6 +125,15 @@ export function useProjectHistory(initial: Project = emptyProject) {
 
   const dirty = state.present !== savedSnapshot.current;
 
+  /**
+   * Every version of the project still within reach: undo, redo, the present,
+   * and the one on disk. Whatever any of them uses is still in use.
+   */
+  const versions = useCallback(
+    () => [...state.past, state.present, ...state.future, savedSnapshot.current],
+    [state],
+  );
+
   return useMemo(
     () => ({
       project: state.present,
@@ -136,7 +145,8 @@ export function useProjectHistory(initial: Project = emptyProject) {
       dirty,
       canUndo: state.past.length > 0,
       canRedo: state.future.length > 0,
+      versions,
     }),
-    [state, update, undo, redo, load, markSaved, dirty],
+    [state, update, undo, redo, load, markSaved, dirty, versions],
   );
 }

@@ -27,6 +27,8 @@ harper-core = "2.8.0"
 # Speech to text: streaming the engine download.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 sha2 = "0.10"
+# Voice takes nothing uses any more go to the Recycle Bin, not oblivion.
+trash = "5"
 
 [target.'cfg(windows)'.dependencies]
 # Only for GetDiskFreeSpaceExW. Hand-writing that `extern` declaration is a

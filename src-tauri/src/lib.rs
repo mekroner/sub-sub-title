@@ -50,6 +50,8 @@ pub fn run() {
             files::file_exists,
             files::startup_file,
             files::derive_paths,
+            files::voiceover_unused_files,
+            files::voiceover_trash_files,
             media::probe_media,
             media::compute_peaks,
             media::check_tools,

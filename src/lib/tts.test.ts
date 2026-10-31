@@ -34,6 +34,8 @@ import {
   suggestedReferenceCues,
   takePath,
   trackForVoice,
+  voiceFilesInUse,
+  voiceoverDir,
   voiceFor,
   voiceKey,
 } from "./tts";
@@ -445,6 +447,19 @@ describe("references", () => {
       "D:\\clips\\film.voiceover\\abcdef12-42.wav",
     );
     expect(takePath("/home/a", "film", "abc", 1)).toBe("/home/a/film.voiceover/abc-1.wav");
+    expect(voiceoverDir("D:\\clips", "film")).toBe("D:\\clips\\film.voiceover");
+  });
+
+  it("knows every file any version of the voiceover still uses", () => {
+    const line = [cue("c1", 4, 6, "Hello")];
+    const spoken = take("a.wav", 2);
+    let earlier = placeTake(defaultVoiceover(), line, spoken);
+    earlier = addTake(earlier, earlier.clips[0].id, stretchedTake(spoken, 1.1, "a-x1.1.wav", 1.8));
+    earlier = setVoice(earlier, "s1", { reference: "ref.wav" });
+    // Later the clip was removed and the voice reset; undo can still reach both.
+    const later = setVoice({ ...earlier, clips: [] }, "s1", { reference: undefined });
+    expect(voiceFilesInUse([later])).toEqual([]);
+    expect(voiceFilesInUse([later, earlier]).sort()).toEqual(["a-x1.1.wav", "a.wav", "ref.wav"]);
   });
 });
 

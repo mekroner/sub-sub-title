@@ -319,6 +319,12 @@ export interface ProjectPaths {
   burned: string;
 }
 
+/** A file in a project's voiceover folder that nothing uses any more. */
+export interface UnusedFile {
+  path: string;
+  bytes: number;
+}
+
 export interface ToolStatus {
   ffmpeg: boolean;
   ffprobe: boolean;

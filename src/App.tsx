@@ -92,7 +92,7 @@ import {
 } from "./lib/sections";
 import { layoutContinuation } from "./lib/fill";
 import { addBeat, editBeat, removeBeat } from "./lib/timedBeats";
-import { DEFAULT_WHISPER_MODEL } from "./lib/whisper";
+import { DEFAULT_WHISPER_MODEL, formatBytes } from "./lib/whisper";
 import { cueDuckCurve } from "./lib/automation";
 import {
   addClips,
@@ -140,7 +140,9 @@ import {
   stretchPath,
   stretchedTake,
   suggestedReferenceCues,
+  voiceFilesInUse,
   voiceFor,
+  voiceoverDir,
 } from "./lib/tts";
 import { DEFAULT_TARGET_CPS, clamp, durationForText, formatShort } from "./lib/time";
 import {
@@ -261,7 +263,7 @@ function writeStored(key: string, value: number): void {
 }
 
 export default function App() {
-  const { project, update, undo, redo, load, markSaved, dirty, canUndo, canRedo } =
+  const { project, update, undo, redo, load, markSaved, dirty, canUndo, canRedo, versions } =
     useProjectHistory();
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -1291,6 +1293,43 @@ export default function App() {
     },
     [project.voiceover.clips, cues, dragVoiceover, notify],
   );
+
+  /**
+   * Offers the voice files nothing uses any more for the Recycle Bin: not the
+   * project, not a step it can undo or redo to, not the file it was saved as.
+   */
+  const cleanUpVoiceFiles = useCallback(async () => {
+    if (!paths) return;
+    const dir = voiceoverDir(paths.dir, paths.stem);
+    try {
+      const keep = voiceFilesInUse(versions().map((p) => p.voiceover));
+      const unused = await api.voiceoverUnusedFiles(dir, keep);
+      if (unused.length === 0) {
+        notify("Every voice file is still in use.");
+        return;
+      }
+      const bytes = unused.reduce((n, f) => n + f.bytes, 0);
+      const files = `${unused.length} voice file${unused.length === 1 ? "" : "s"}`;
+      const ok = await ask(
+        `Move ${files} (${formatBytes(bytes)}) to the Recycle Bin? Nothing in this project uses them — ` +
+          "not a clip, a take, a reference, a step you can undo to, or the saved file.",
+        {
+          title: "Clean up voice files",
+          kind: "warning",
+          okLabel: "Move to Recycle Bin",
+          cancelLabel: "Cancel",
+        },
+      );
+      if (!ok) return;
+      const freed = await api.voiceoverTrashFiles(
+        dir,
+        unused.map((f) => f.path),
+      );
+      notify(`Moved ${files} (${formatBytes(freed)}) to the Recycle Bin.`);
+    } catch (e) {
+      notify(errorMessage(e), "error");
+    }
+  }, [paths, versions, notify]);
 
   /** Every generated clip that overruns and can be sped up to fit. */
   const fittableClipIds = useMemo(
@@ -2765,6 +2804,12 @@ export default function App() {
           label: "Export voiceover audio…",
           disabled: !canExportAudio,
           onSelect: () => setShowExportAudio(true),
+        },
+        {
+          kind: "item",
+          label: "Clean up unused voice files…",
+          disabled: !paths,
+          onSelect: () => void cleanUpVoiceFiles(),
         },
         { kind: "separator" },
         { kind: "item", label: "Settings…", onSelect: () => setShowSettings(true) },

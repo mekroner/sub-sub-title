@@ -25,6 +25,7 @@ import type {
   TtsRequest,
   TtsResult,
   TtsStatus,
+  UnusedFile,
 } from "../types";
 
 export const readTextFile = (path: string) =>
@@ -210,3 +211,11 @@ export function errorMessage(e: unknown): string {
 /** Writes `input` played `ratio` times as fast, same pitch; resolves to its length. */
 export const ttsStretch = (input: string, output: string, ratio: number) =>
   invoke<number>("tts_stretch", { input, output, ratio });
+
+/** The `.wav` files in a voiceover folder that none of `keep` names. */
+export const voiceoverUnusedFiles = (dir: string, keep: string[]) =>
+  invoke<UnusedFile[]>("voiceover_unused_files", { dir, keep });
+
+/** Moves voice files to the Recycle Bin; resolves to the bytes freed. */
+export const voiceoverTrashFiles = (dir: string, files: string[]) =>
+  invoke<number>("voiceover_trash_files", { dir, files });
