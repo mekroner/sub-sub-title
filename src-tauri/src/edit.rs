@@ -169,39 +169,51 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
             other => return Err(AppError::msg(format!("Unknown layer kind: {other}"))),
         }
 
-        // Picture: normalised to the canvas rate, sized, faded in alpha, and
-        // moved to its place on the timeline.
-        let end = layer.start + layer.duration;
-        let mut chain = format!(
-            "[{index}:v]setpts=PTS-STARTPTS,fps={fps},scale={}:{},format=rgba",
-            rect.w.max(1.0).round(),
-            rect.h.max(1.0).round()
-        );
+        // Opacity and fades, in alpha, on the picture as it comes.
+        let mut alpha = String::new();
         if layer.opacity < 1.0 {
-            let _ = write!(chain, ",colorchannelmixer=aa={}", num(layer.opacity.max(0.0)));
+            let _ = write!(alpha, ",colorchannelmixer=aa={}", num(layer.opacity.max(0.0)));
         }
         if layer.fade_in > 0.0 {
-            let _ = write!(chain, ",fade=t=in:st=0:d={}:alpha=1", num(layer.fade_in));
+            let _ = write!(alpha, ",fade=t=in:st=0:d={}:alpha=1", num(layer.fade_in));
         }
         if layer.fade_out > 0.0 {
             let _ = write!(
-                chain,
+                alpha,
                 ",fade=t=out:st={}:d={}:alpha=1",
                 num((layer.duration - layer.fade_out).max(0.0)),
                 num(layer.fade_out)
             );
         }
-        let _ = writeln!(chain, ",setpts=PTS+{}/TB[v{index}];", num(layer.start));
-        graph.push_str(&chain);
-        let _ = writeln!(
-            graph,
-            "[b{base}][v{index}]overlay=x={}:y={}:eof_action=pass:format=gbrp:enable='between(t,{},{})'[b{}];",
-            rect.x.round(),
-            rect.y.round(),
-            num(layer.start),
-            num(end),
-            base + 1
-        );
+
+        // Picture: normalised to the canvas rate, sized, faded, placed, and
+        // moved to its moment on the timeline.
+        let end = layer.start + layer.duration;
+        let enable = format!("enable='between(t,{},{})'", num(layer.start), num(end));
+        if layer.rects.len() > 1 {
+            let chain = moving_chain(index, layer, &fps, plan.width, plan.height, &alpha);
+            graph.push_str(&chain);
+            let _ = writeln!(
+                graph,
+                "[b{base}][v{index}]overlay=x=0:y=0:eof_action=pass:format=gbrp:{enable}[b{}];",
+                base + 1
+            );
+        } else {
+            let _ = writeln!(
+                graph,
+                "[{index}:v]setpts=PTS-STARTPTS,fps={fps},scale={}:{},format=rgba{alpha},setpts=PTS+{}/TB[v{index}];",
+                rect.w.max(1.0).round(),
+                rect.h.max(1.0).round(),
+                num(layer.start)
+            );
+            let _ = writeln!(
+                graph,
+                "[b{base}][v{index}]overlay=x={}:y={}:eof_action=pass:format=gbrp:{enable}[b{}];",
+                rect.x.round(),
+                rect.y.round(),
+                base + 1
+            );
+        }
         base += 1;
 
         // Sound, for main-track video that has it.
@@ -249,6 +261,94 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
         );
     }
     Ok((inputs, graph))
+}
+
+/// Transparent border around a moving picture, in its own pixels, so the
+/// resampler blends its edge with nothing rather than smearing it.
+const MOTION_MARGIN: u32 = 2;
+
+/// A value that follows `points` (time, value) linearly over `var`, holding
+/// the first value before them and the last after: an ffmpeg expression.
+pub fn piecewise(points: &[(f64, f64)], var: &str) -> String {
+    let Some(&(_, last)) = points.last() else {
+        return "0".into();
+    };
+    let mut expr = num(last);
+    for pair in points.windows(2).rev() {
+        let ((t0, v0), (t1, v1)) = (pair[0], pair[1]);
+        if t1 - t0 <= 1e-9 {
+            continue;
+        }
+        let slope = (v1 - v0) / (t1 - t0);
+        let segment = if slope.abs() < 1e-12 {
+            num(v0)
+        } else {
+            format!("{}+{}*({var}-{})", num(v0), num(slope), num(t0))
+        };
+        expr = format!("if(lt({var},{}),{segment},{expr})", num(t1));
+    }
+    let (t0, v0) = points[0];
+    if points.len() > 1 {
+        expr = format!("if(lt({var},{}),{},{expr})", num(t0), num(v0));
+    }
+    expr
+}
+
+/// The chain for a layer that moves: scaled once to the largest size it
+/// reaches, premultiplied, padded with transparency to cover the canvas, then
+/// placed frame by frame with `perspective`, which resamples with sub-pixel
+/// precision. Scaling to whole-pixel sizes per frame would make a slow
+/// push-in step and wobble.
+///
+/// Resampled premultiplied, because interpolating straight alpha darkens and
+/// lags the edges: a moving edge would hold still for frames, then jump. Then
+/// back to straight alpha for an ordinary overlay: `overlay`'s own
+/// premultiplied mode takes 16 off every channel of an RGB frame, so white
+/// would come out grey.
+fn moving_chain(
+    index: usize,
+    layer: &PlanLayer,
+    fps: &str,
+    width: u32,
+    height: u32,
+    alpha: &str,
+) -> String {
+    let max_w = layer.rects.iter().fold(1.0_f64, |m, r| m.max(r.w));
+    let max_h = layer.rects.iter().fold(1.0_f64, |m, r| m.max(r.h));
+    let (sw, sh) = (max_w.ceil().max(1.0), max_h.ceil().max(1.0));
+    let m = MOTION_MARGIN as f64;
+    let pw = (sw + 2.0 * m).max(width as f64 + 2.0 * m);
+    let ph = (sh + 2.0 * m).max(height as f64 + 2.0 * m);
+
+    // The layer's own time: its frames count from 0 after setpts and fps. The
+    // rate is bracketed, since an NTSC one is itself a division.
+    let t = format!("(in/({fps}))");
+    let series = |f: fn(&PlanRect) -> f64| -> Vec<(f64, f64)> {
+        layer.rects.iter().map(|r| (r.time, f(r))).collect()
+    };
+    let x = piecewise(&series(|r| r.x), &t);
+    let y = piecewise(&series(|r| r.y), &t);
+    // One scale factor for both axes: the picture keeps its shape.
+    let k = format!("(({})/{})", piecewise(&series(|r| r.w), &t), num(sw));
+    let left = format!("({x})-{k}*{}", num(m));
+    let right = format!("({x})+{k}*{}", num(pw - m));
+    let top = format!("({y})-{k}*{}", num(m));
+    let bottom = format!("({y})+{k}*{}", num(ph - m));
+
+    format!(
+        "[{index}:v]setpts=PTS-STARTPTS,fps={fps},scale={}:{},format=rgba{alpha},format=gbrap,premultiply=inplace=1,\
+pad=w={}:h={}:x={}:y={}:color=black@0,\
+perspective=sense=destination:eval=frame:interpolation=linear:\
+x0='{left}':y0='{top}':x1='{right}':y1='{top}':x2='{left}':y2='{bottom}':x3='{right}':y3='{bottom}',\
+unpremultiply=inplace=1,setpts=PTS+{}/TB[v{index}];\n",
+        num(sw),
+        num(sh),
+        num(pw),
+        num(ph),
+        num(m),
+        num(m),
+        num(layer.start)
+    )
 }
 
 fn work_dir(app: &AppHandle) -> AppResult<PathBuf> {
@@ -520,6 +620,36 @@ mod tests {
         assert!(plan.layers[1].audio.is_none());
         let (_, graph) = build_graph(&plan).unwrap();
         assert!(graph.contains("volume=-3dB"));
+    }
+
+    #[test]
+    fn follows_keys_linearly_and_holds_outside_them() {
+        assert_eq!(piecewise(&[(0.0, 5.0)], "T"), "5");
+        assert_eq!(piecewise(&[(0.0, 0.0), (2.0, 10.0)], "T"), "if(lt(T,0),0,if(lt(T,2),0+5*(T-0),10))");
+        assert_eq!(
+            piecewise(&[(1.0, 4.0), (2.0, 4.0), (4.0, 0.0)], "T"),
+            "if(lt(T,1),4,if(lt(T,2),4,if(lt(T,4),4+-2*(T-2),0)))"
+        );
+    }
+
+    #[test]
+    fn places_a_moving_layer_frame_by_frame() {
+        let mut layer = video(1.0, 4.0, 0.0, false);
+        layer.kind = "image".into();
+        layer.rects = vec![
+            PlanRect { time: 0.0, x: 0.0, y: 0.0, w: 640.0, h: 360.0 },
+            PlanRect { time: 4.0, x: -32.0, y: -18.0, w: 704.0, h: 396.0 },
+        ];
+        layer.fade_in = 0.5;
+        let (_, graph) = build_graph(&plan(vec![layer], 5.0)).unwrap();
+        // Scaled once to its largest, faded, premultiplied, padded past the canvas.
+        assert!(graph.contains(
+            "[0:v]setpts=PTS-STARTPTS,fps=25,scale=704:396,format=rgba,fade=t=in:st=0:d=0.5:alpha=1,format=gbrap,premultiply=inplace=1,pad=w=708:h=400:x=2:y=2:color=black@0,perspective=sense=destination:eval=frame:interpolation=linear:"
+        ));
+        // Corners follow the keys over the layer's own time.
+        assert!(graph.contains("x0='(if(lt((in/(25)),0),0,if(lt((in/(25)),4),0+-8*((in/(25))-0),-32)))-((if(lt((in/(25)),0),640,if(lt((in/(25)),4),640+16*((in/(25))-0),704)))/704)*2'"));
+        assert!(graph.contains(",unpremultiply=inplace=1,setpts=PTS+1/TB[v0];"));
+        assert!(graph.contains("[b0][v0]overlay=x=0:y=0:eof_action=pass:format=gbrp:enable='between(t,1,5)'[b1];"));
     }
 
     #[test]

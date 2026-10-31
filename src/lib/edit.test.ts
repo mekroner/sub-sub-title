@@ -3,8 +3,16 @@ import { describe, expect, it } from "vitest";
 import type { Edit, EditItem, MediaInfo, VideoItem } from "../types";
 import {
   MAIN_TRACK_ID,
+  addKey,
   addOverlayTrack,
   addSource,
+  clearMotion,
+  keyIndexAt,
+  moveKey,
+  placeAt,
+  removeKey,
+  setTransformAt,
+  shiftKeys,
   alphaAt,
   audioGainAt,
   canvasFor,
@@ -24,7 +32,6 @@ import {
   resolveRect,
   setCanvas,
   setFade,
-  setStaticTransform,
   setText,
   sourceFromInfo,
   splitItem,
@@ -354,18 +361,10 @@ describe("static transforms and text", () => {
   it("moves and sizes a single-key item, clamping the scale", () => {
     const { edit: e0 } = twoSources();
     const id = e0.items[0].id;
-    const edit = setStaticTransform(e0, id, { x: 0.25, scale: 0 });
+    // Wherever the playhead is, a still item changes as a whole.
+    const edit = setTransformAt(e0, id, 6, { x: 0.25, scale: 0 });
     expect(edit.items[0].transform).toEqual([{ time: 0, x: 0.25, y: 0.5, scale: 0.01 }]);
-    expect(setStaticTransform(edit, id, { x: 0.25 })).toBe(edit);
-  });
-
-  it("leaves an animated item to be edited key by key", () => {
-    const { edit: e0 } = twoSources();
-    const animated: Edit = {
-      ...e0,
-      items: [{ ...e0.items[0], transform: [{ time: 0, x: 0.5, y: 0.5, scale: 1 }, { time: 2, x: 0.5, y: 0.5, scale: 2 }] }],
-    };
-    expect(setStaticTransform(animated, e0.items[0].id, { x: 0 })).toBe(animated);
+    expect(setTransformAt(edit, id, 6, { x: 0.25 })).toBe(edit);
   });
 
   it("changes words and looks, and takes effects away with null", () => {
@@ -380,5 +379,100 @@ describe("static transforms and text", () => {
     expect(text.kind === "text" && "outline" in text.style).toBe(false);
     // Not a text item: nothing happens.
     expect(setText(edit, edit.items[0].id, "x")).toBe(edit);
+  });
+});
+
+describe("keys", () => {
+  /** A 10 s clip, its one key moved off centre. */
+  function oneClip() {
+    const { edit: e0 } = twoSources();
+    const id = e0.items[0].id;
+    return { edit: setTransformAt(e0, id, 0, { x: 0.4, scale: 1 }), id };
+  }
+  const keysOf = (edit: Edit, id: string) => edit.items.find((i) => i.id === id)!.transform;
+
+  it("adds a key that holds the place, turning a still item into a moving one", () => {
+    const { edit: e0, id } = oneClip();
+    const edit = addKey(e0, id, 4);
+    expect(keysOf(edit, id)).toEqual([
+      { time: 0, x: 0.4, y: 0.5, scale: 1 },
+      { time: 4, x: 0.4, y: 0.5, scale: 1 },
+    ]);
+    expect(addKey(edit, id, 4.005)).toBe(edit);
+    expect(addKey(edit, id, 11)).toBe(edit);
+  });
+
+  it("starts a move at the item's end when asked for on a still item's own key", () => {
+    const { edit: e0, id } = oneClip();
+    const edit = addKey(e0, id, 0);
+    expect(keysOf(edit, id).map((k) => k.time)).toEqual([0, 10]);
+    expect(keysOf(edit, id)[1]).toMatchObject({ x: 0.4, scale: 1 });
+    // Once it moves, a key that is already there is left alone.
+    expect(addKey(edit, id, 0)).toBe(edit);
+  });
+
+  it("changes a still item whole, and keys a moving one where it is changed", () => {
+    const { edit: e0, id } = oneClip();
+    expect(keysOf(setTransformAt(e0, id, 7, { scale: 2 }), id)).toEqual([{ time: 0, x: 0.4, y: 0.5, scale: 2 }]);
+    let edit = addKey(e0, id, 4);
+    // On a key: that key changes.
+    edit = setTransformAt(edit, id, 4, { scale: 1.5 });
+    expect(keysOf(edit, id)[1]).toMatchObject({ time: 4, scale: 1.5 });
+    // Between or after keys: a new key there, starting from where it was.
+    edit = setTransformAt(edit, id, 8, { x: 0.6 });
+    expect(keysOf(edit, id)).toHaveLength(3);
+    expect(keysOf(edit, id)[2]).toEqual({ time: 8, x: 0.6, y: 0.5, scale: 1.5 });
+    expect(keyIndexAt(keysOf(edit, id), 8)).toBe(2);
+  });
+
+  it("moves a key only between its neighbours, and never removes the last", () => {
+    const { edit: e0, id } = oneClip();
+    let edit = addKey(addKey(e0, id, 4), id, 8);
+    edit = moveKey(edit, id, 1, 9);
+    expect(keysOf(edit, id).map((k) => k.time)).toEqual([0, 7.999, 8]);
+    edit = moveKey(edit, id, 2, 50);
+    expect(keysOf(edit, id)[2].time).toBe(10);
+    edit = removeKey(removeKey(edit, id, 2), id, 1);
+    expect(keysOf(edit, id)).toHaveLength(1);
+    expect(removeKey(edit, id, 0)).toBe(edit);
+  });
+
+  it("stops the motion where it is at the playhead", () => {
+    const { edit: e0, id } = oneClip();
+    const edit = setTransformAt(addKey(e0, id, 10), id, 10, { scale: 2 });
+    expect(keysOf(clearMotion(edit, id, 5), id)).toEqual([{ time: 0, x: 0.4, y: 0.5, scale: 1.5 }]);
+  });
+
+  it("keeps motion on the same moments of the picture when the head is trimmed", () => {
+    const keys = [
+      { time: 0, x: 0, y: 0.5, scale: 1 },
+      { time: 4, x: 1, y: 0.5, scale: 1 },
+      { time: 8, x: 1, y: 0.5, scale: 2 },
+    ];
+    // Trimmed by 2 s: the first key is gone, and where it had got to is kept.
+    expect(shiftKeys(keys, 2)).toEqual([
+      { time: 0, x: 0.5, y: 0.5, scale: 1 },
+      { time: 2, x: 1, y: 0.5, scale: 1 },
+      { time: 6, x: 1, y: 0.5, scale: 2 },
+    ]);
+    // Extended by 1 s: everything is a second later.
+    expect(shiftKeys(keys, -1).map((k) => k.time)).toEqual([1, 5, 9]);
+    const { edit: e0, id } = oneClip();
+    const moving = setTransformAt(addKey(e0, id, 6), id, 6, { x: 0.7 });
+    const trimmed = trimItemStart(moving, id, 3);
+    expect(keysOf(trimmed, id)[0].x).toBeCloseTo(0.55);
+    expect(keysOf(trimmed, id)[1]).toMatchObject({ time: 3, x: 0.7 });
+  });
+
+  it("draws a still item on whole pixels and a moving one exactly", () => {
+    const { edit: e0, id } = oneClip();
+    const canvas = e0.canvas;
+    const natural = { width: 1920, height: 1080 };
+    const still = e0.items[0];
+    const moving = keysOf(setTransformAt(addKey(e0, id, 10), id, 10, { scale: 1.1 }), id);
+    expect(placeAt(still, natural, 5, canvas).w).toBe(1920);
+    const rect = placeAt({ ...still, transform: moving }, natural, 5, canvas);
+    expect(rect.w).toBeCloseTo(2016);
+    expect(rect.x).toBeCloseTo(0.4 * 1920 - 1008);
   });
 });

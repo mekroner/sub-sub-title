@@ -11,6 +11,8 @@ import {
   DEFAULT_TEXT_STYLE,
   MAX_SCALE,
   MIN_SCALE,
+  keyIndexAt,
+  transformAt,
   type ItemPatch,
 } from "../../lib/edit";
 import { ColorPicker } from "../ColorPicker";
@@ -37,8 +39,20 @@ interface Props {
   onAppendSource: (sourceId: string) => void;
   onRemoveSource: (sourceId: string) => void;
   onPatchItem: (id: string, patch: ItemPatch, field: string) => void;
-  /** Changes a static item's place or size; `field` keys the undo step. */
+  /**
+   * Changes an item's place or size at the playhead; on a moving item that
+   * keys it there. `field` keys the undo step.
+   */
   onTransform: (id: string, patch: Partial<Omit<TransformKey, "time">>, field: string) => void;
+  /** The playhead, in timeline seconds. */
+  time: number;
+  /** How near the playhead must be to a key to be on it, in seconds. */
+  keyTolerance: number;
+  onSeek: (t: number) => void;
+  onAddKey: (id: string) => void;
+  onRemoveKey: (id: string, index: number) => void;
+  /** Keeps the place at the playhead as the only key. */
+  onClearMotion: (id: string) => void;
   onText: (id: string, text: string) => void;
   onTextStyle: (id: string, patch: TextStylePatch, field: string) => void;
   onCanvas: (canvas: EditCanvas) => void;
@@ -203,7 +217,20 @@ function round(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
 
-function Inspector({ edit, selected, onPatchItem, onTransform, onText, onTextStyle }: Props) {
+function Inspector({
+  edit,
+  selected,
+  onPatchItem,
+  onTransform,
+  onText,
+  onTextStyle,
+  time,
+  keyTolerance,
+  onSeek,
+  onAddKey,
+  onRemoveKey,
+  onClearMotion,
+}: Props) {
   if (!selected) {
     return (
       <div className="panel clip-inspector">
@@ -214,8 +241,16 @@ function Inspector({ edit, selected, onPatchItem, onTransform, onText, onTextSty
   const source = sourceOf(edit, selected);
   const patch = (field: string) => (value: number) =>
     onPatchItem(selected.id, { [field]: value } as ItemPatch, field);
-  const animated = selected.transform.length > 1;
-  const key = selected.transform[0];
+  const keys = selected.transform;
+  const animated = keys.length > 1;
+  // What the fields show and change: the item at the playhead, held at its
+  // ends when the playhead is outside it.
+  const local = time - selected.start;
+  const inside = local >= -1e-9 && local <= selected.duration + 1e-9;
+  const key = transformAt(keys, Math.min(selected.duration, Math.max(0, local)));
+  const onKey = keyIndexAt(keys, local, keyTolerance);
+  const previous = [...keys].reverse().find((k) => k.time < local - keyTolerance);
+  const next = keys.find((k) => k.time > local + keyTolerance);
   return (
     <div className="panel clip-inspector">
       <div className="clip-inspector-body">
@@ -247,54 +282,110 @@ function Inspector({ edit, selected, onPatchItem, onTransform, onText, onTextSty
         )}
 
         <h3 className="edit-section">Place</h3>
-        {animated ? (
-          <p className="hint">This item moves over time; its keys are edited one by one.</p>
-        ) : (
-          <>
-            <NumberField
-              label="X"
-              value={key.x * 100}
-              min={-100}
-              max={200}
-              step={1}
-              unit="%"
-              onChange={(v) => onTransform(selected.id, { x: v / 100 }, "x")}
-            />
-            <NumberField
-              label="Y"
-              value={key.y * 100}
-              min={-100}
-              max={200}
-              step={1}
-              unit="%"
-              onChange={(v) => onTransform(selected.id, { y: v / 100 }, "y")}
-            />
-            <NumberField
-              label="Scale"
-              value={key.scale * 100}
-              min={MIN_SCALE * 100}
-              max={MAX_SCALE * 100}
-              step={5}
-              unit="%"
-              onChange={(v) => onTransform(selected.id, { scale: v / 100 }, "scale")}
-            />
-            <div className="clip-actions">
-              <button
-                type="button"
-                className="small"
-                disabled={key.x === 0.5 && key.y === 0.5 && key.scale === 1}
-                onClick={() => onTransform(selected.id, { x: 0.5, y: 0.5, scale: 1 }, "reset")}
-              >
-                Centre at 100%
-              </button>
-            </div>
-            <p className="hint">
-              {selected.kind === "text"
-                ? "100% is the text at its font size. Drag it on the picture to move it."
-                : "100% fits the picture inside the canvas. Drag it on the picture to move it."}
-            </p>
-          </>
+        {animated && (
+          <p className="hint">
+            {!inside
+              ? "The playhead is outside this item: showing where it starts or ends."
+              : onKey >= 0
+                ? `On key ${onKey + 1} of ${keys.length}.`
+                : `Between keys: a change here adds a key.`}
+          </p>
         )}
+        <NumberField
+          label="X"
+          value={key.x * 100}
+          min={-100}
+          max={200}
+          step={1}
+          unit="%"
+          onChange={(v) => onTransform(selected.id, { x: v / 100 }, "x")}
+        />
+        <NumberField
+          label="Y"
+          value={key.y * 100}
+          min={-100}
+          max={200}
+          step={1}
+          unit="%"
+          onChange={(v) => onTransform(selected.id, { y: v / 100 }, "y")}
+        />
+        <NumberField
+          label="Scale"
+          value={key.scale * 100}
+          min={MIN_SCALE * 100}
+          max={MAX_SCALE * 100}
+          step={5}
+          unit="%"
+          onChange={(v) => onTransform(selected.id, { scale: v / 100 }, "scale")}
+        />
+        <div className="clip-actions edit-key-actions">
+          <button
+            type="button"
+            className="small"
+            disabled={!previous}
+            title="Go to the previous key"
+            onClick={() => previous && onSeek(selected.start + previous.time)}
+          >
+            ◀
+          </button>
+          <button
+            type="button"
+            className="small"
+            // A still item's own key is at its start: adding one there adds
+            // one at its end, so the button stays live.
+            disabled={!inside || (animated && onKey >= 0)}
+            title={
+              !animated && onKey >= 0
+                ? "Add keys at the start and the end, so the item can move between them"
+                : "Add a key here, so the item can move from or to this place"
+            }
+            onClick={() => onAddKey(selected.id)}
+          >
+            ◆ Add key
+          </button>
+          <button
+            type="button"
+            className="small"
+            disabled={!next}
+            title="Go to the next key"
+            onClick={() => next && onSeek(selected.start + next.time)}
+          >
+            ▶
+          </button>
+          {animated && (
+            <button
+              type="button"
+              className="small"
+              disabled={onKey < 0}
+              onClick={() => onRemoveKey(selected.id, onKey)}
+            >
+              Delete key
+            </button>
+          )}
+        </div>
+        <div className="clip-actions">
+          {animated ? (
+            <button type="button" className="small" onClick={() => onClearMotion(selected.id)}>
+              Remove motion
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="small"
+              disabled={key.x === 0.5 && key.y === 0.5 && key.scale === 1}
+              onClick={() => onTransform(selected.id, { x: 0.5, y: 0.5, scale: 1 }, "reset")}
+            >
+              Centre at 100%
+            </button>
+          )}
+        </div>
+        <p className="hint">
+          {selected.kind === "text"
+            ? "100% is the text at its font size. "
+            : "100% fits the picture inside the canvas. "}
+          Drag it on the picture to move it. To make it move, add a key, go to another moment,
+          and change it there.
+        </p>
 
         <h3 className="edit-section">Fades and level</h3>
         <NumberField label="Fade in" value={selected.fadeIn} min={0} max={selected.duration} step={0.1} unit="s" onChange={patch("fadeIn")} />

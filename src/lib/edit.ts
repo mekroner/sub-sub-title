@@ -315,6 +315,7 @@ export function trimItemStart(edit: Edit, id: string, start: number): Edit {
       ...i,
       start: next,
       duration: i.duration - shift,
+      transform: shiftKeys(i.transform, shift),
       ...(i.kind === "video" ? { offset: i.offset + shift } : {}),
     } as EditItem),
   );
@@ -479,29 +480,140 @@ export function moveTrack(edit: Edit, id: string, direction: number): Edit {
 export const MIN_SCALE = 0.01;
 export const MAX_SCALE = 20;
 
+// --- Keys -----------------------------------------------------------------------
+
+/** How near a time must be to a key to be on it, when the caller does not say. */
+export const KEY_TOLERANCE = 0.01;
+
+function clampScale(scale: number): number {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+}
+
+/** The key within `tolerance` of `t` (item-local seconds), or -1. */
+export function keyIndexAt(keys: TransformKey[], t: number, tolerance = KEY_TOLERANCE): number {
+  let best = -1;
+  let bestDistance = tolerance;
+  keys.forEach((key, i) => {
+    const distance = Math.abs(key.time - t);
+    if (distance <= bestDistance) {
+      best = i;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+
+/** True when the item moves: it has more than one key. */
+export function isAnimated(item: EditItem): boolean {
+  return item.transform.length > 1;
+}
+
+function withKeys(item: EditItem, keys: TransformKey[]): EditItem {
+  return { ...item, transform: [...keys].sort((a, b) => a.time - b.time) };
+}
+
 /**
- * Changes a static item's place or size. An item with more than one key is
- * animated, and is edited key by key instead; this leaves it alone.
+ * Adds a key at `t` holding the item's place there, so nothing moves until it
+ * is changed. A static item's one key stays where it is, and the item becomes
+ * animated. Asked for on a still item's own key — at its start, usually — the
+ * new key goes at the item's end instead: the obvious way to start a move.
  */
-export function setStaticTransform(
+export function addKey(edit: Edit, id: string, t: number, tolerance = KEY_TOLERANCE): Edit {
+  return mapItem(edit, id, (item) => {
+    if (t < -1e-9 || t > item.duration + 1e-9) return item;
+    if (keyIndexAt(item.transform, t, tolerance) >= 0) {
+      const only = item.transform.length === 1 ? item.transform[0] : null;
+      if (!only || item.duration - only.time <= tolerance) return item;
+      return withKeys(item, [only, { ...only, time: item.duration }]);
+    }
+    const at = Math.min(item.duration, Math.max(0, t));
+    return withKeys(item, [...item.transform, { ...transformAt(item.transform, at), time: at }]);
+  });
+}
+
+/** Removes one key; the last key always stays. */
+export function removeKey(edit: Edit, id: string, index: number): Edit {
+  return mapItem(edit, id, (item) => {
+    if (item.transform.length <= 1 || index < 0 || index >= item.transform.length) return item;
+    return { ...item, transform: item.transform.filter((_, i) => i !== index) };
+  });
+}
+
+/** The smallest gap kept between keys, so a drag never swaps their order. */
+const KEY_GAP = 0.001;
+
+/** Moves a key in time, between its neighbours and inside the item. */
+export function moveKey(edit: Edit, id: string, index: number, t: number): Edit {
+  return mapItem(edit, id, (item) => {
+    const keys = item.transform;
+    if (index < 0 || index >= keys.length) return item;
+    const lo = index > 0 ? keys[index - 1].time + KEY_GAP : 0;
+    const hi = index < keys.length - 1 ? keys[index + 1].time - KEY_GAP : item.duration;
+    if (lo > hi) return item;
+    const time = Math.min(hi, Math.max(lo, t));
+    if (time === keys[index].time) return item;
+    return { ...item, transform: keys.map((k, i) => (i === index ? { ...k, time } : k)) };
+  });
+}
+
+/**
+ * Changes the item's place or size at `t`. A static item is changed as a
+ * whole. An animated one has the key at `t` changed, or gains one there: a
+ * change at a moment the item moves through is a new key.
+ */
+export function setTransformAt(
   edit: Edit,
   id: string,
+  t: number,
   patch: Partial<Omit<TransformKey, "time">>,
+  tolerance = KEY_TOLERANCE,
 ): Edit {
   return mapItem(edit, id, (item) => {
-    if (item.transform.length !== 1) return item;
-    const key = item.transform[0];
-    const next: TransformKey = {
+    const keys = item.transform;
+    const apply = (key: TransformKey): TransformKey => ({
       time: key.time,
       x: Number.isFinite(patch.x) ? patch.x! : key.x,
       y: Number.isFinite(patch.y) ? patch.y! : key.y,
-      scale: Number.isFinite(patch.scale)
-        ? Math.min(MAX_SCALE, Math.max(MIN_SCALE, patch.scale!))
-        : key.scale,
-    };
-    if (next.x === key.x && next.y === key.y && next.scale === key.scale) return item;
-    return { ...item, transform: [next] };
+      scale: Number.isFinite(patch.scale) ? clampScale(patch.scale!) : key.scale,
+    });
+    const same = (a: TransformKey, b: TransformKey) => a.x === b.x && a.y === b.y && a.scale === b.scale;
+    if (keys.length === 1) {
+      const next = apply(keys[0]);
+      return same(next, keys[0]) ? item : { ...item, transform: [next] };
+    }
+    const index = keyIndexAt(keys, t, tolerance);
+    if (index >= 0) {
+      const next = apply(keys[index]);
+      return same(next, keys[index]) ? item : { ...item, transform: keys.map((k, i) => (i === index ? next : k)) };
+    }
+    if (t < 0 || t > item.duration) return item;
+    const here = { ...transformAt(keys, t), time: t };
+    const next = apply(here);
+    return same(next, here) ? item : withKeys(item, [...keys, next]);
   });
+}
+
+/** Stops the item moving: it keeps where it is at `t`, as its only key. */
+export function clearMotion(edit: Edit, id: string, t: number): Edit {
+  return mapItem(edit, id, (item) => {
+    if (item.transform.length <= 1) return item;
+    const at = Math.min(item.duration, Math.max(0, t));
+    return { ...item, transform: [{ ...transformAt(item.transform, at), time: 0 }] };
+  });
+}
+
+/**
+ * Keys after the item's head moved by `shift` seconds, kept on the same
+ * moments of the picture. A head trimmed past keys samples where the motion
+ * had got to, so what is left moves as it did.
+ */
+export function shiftKeys(keys: TransformKey[], shift: number): TransformKey[] {
+  if (keys.length <= 1 || shift === 0) return keys;
+  const moved = keys.map((k) => ({ ...k, time: k.time - shift }));
+  const kept = moved.filter((k) => k.time >= 0);
+  if (kept.length === moved.length) return moved;
+  const head = { ...transformAt(keys, shift), time: 0 };
+  return kept.length > 0 && kept[0].time < KEY_GAP ? kept : [head, ...kept];
 }
 
 /** Changes a text item's words. */
@@ -658,6 +770,22 @@ export function resolveRect(natural: Size, key: TransformKey, canvas: EditCanvas
     w,
     h,
   };
+}
+
+/**
+ * The same, unrounded: for items that move, whose place must change smoothly
+ * from frame to frame rather than in whole pixels.
+ */
+export function resolveRectExact(natural: Size, key: TransformKey, canvas: EditCanvas): Rect {
+  const w = Math.max(1, natural.width * key.scale);
+  const h = Math.max(1, natural.height * key.scale);
+  return { x: key.x * canvas.width - w / 2, y: key.y * canvas.height - h / 2, w, h };
+}
+
+/** Where an item is drawn at `t` seconds into it: whole pixels when still, exact when moving. */
+export function placeAt(item: EditItem, natural: Size, t: number, canvas: EditCanvas): Rect {
+  const key = transformAt(item.transform, t);
+  return isAnimated(item) ? resolveRectExact(natural, key, canvas) : resolveRect(natural, key, canvas);
 }
 
 /** 0..1 ramp from the fades, at `t` seconds into the item; 0 outside it. */

@@ -23,7 +23,11 @@ import {
   removeTrack,
   setCanvas,
   setFade,
-  setStaticTransform,
+  addKey,
+  clearMotion,
+  moveKey,
+  removeKey,
+  setTransformAt,
   setText,
   sourceFromInfo,
   startEditFromVideo,
@@ -319,6 +323,18 @@ export function EditWorkspace({
     state.setSelectedId(itemId);
   };
 
+  // Keys and transforms act at the playhead, in the item's own time. Within
+  // half a frame of a key is on it.
+  const keyTolerance = 0.5 / edit.canvas.fps;
+  const localTime = (e: Edit, id: string) => {
+    const item = e.items.find((i) => i.id === id);
+    return item ? state.time - item.start : 0;
+  };
+  const keyAt = (e: Edit, id: string) => {
+    const item = e.items.find((i) => i.id === id);
+    return item ? item.transform.findIndex((k) => Math.abs(k.time - (state.time - item.start)) <= keyTolerance) : -1;
+  };
+
   const patchSelected = (id: string, patch: ItemPatch, field: string) => {
     const key = `item:${id}:${field}`;
     if (field === "fadeIn" || field === "fadeOut") {
@@ -389,7 +405,10 @@ export function EditWorkspace({
           textImages={rasters.byItem}
           selectedId={state.selectedId}
           onMoveSelected={(id, x, y, drag) =>
-            setDefined((e) => setStaticTransform(e, id, { x, y }), `drag:${drag}`)
+            setDefined(
+              (e) => setTransformAt(e, id, localTime(e, id), { x, y }, keyTolerance),
+              `drag:${drag}`,
+            )
           }
         />
       </div>
@@ -408,8 +427,18 @@ export function EditWorkspace({
           onRemoveSource={(id) => setDefined((e) => removeSource(e, id))}
           onPatchItem={patchSelected}
           onTransform={(id, patch, field) =>
-            setDefined((e) => setStaticTransform(e, id, patch), `item:${id}:${field}`)
+            setDefined(
+              (e) => setTransformAt(e, id, localTime(e, id), patch, keyTolerance),
+              // One undo step per field and key, not per keystroke.
+              `item:${id}:key:${keyAt(edit, id)}:${field}`,
+            )
           }
+          time={state.time}
+          keyTolerance={keyTolerance}
+          onSeek={state.seek}
+          onAddKey={(id) => setDefined((e) => addKey(e, id, localTime(e, id), keyTolerance))}
+          onRemoveKey={(id, index) => setDefined((e) => removeKey(e, id, index))}
+          onClearMotion={(id) => setDefined((e) => clearMotion(e, id, localTime(e, id)))}
           onText={(id, text) => setDefined((e) => setText(e, id, text), `item:${id}:text`)}
           onTextStyle={(id, patch, field) =>
             setDefined((e) => patchTextStyle(e, id, patch), `item:${id}:style:${field}`)
@@ -440,6 +469,7 @@ export function EditWorkspace({
           onRemoveTrack={(id) => setDefined((e) => removeTrack(e, id))}
           onRenameTrack={(id, name) => setDefined((e) => patchTrack(e, id, { name }), `track:${id}:name`)}
           onMoveTrack={(id, direction) => setDefined((e) => moveTrack(e, id, direction))}
+          onMoveKey={(id, index, t, drag) => setDefined((e) => moveKey(e, id, index, t), `drag:${drag}`)}
         />
       </section>
 

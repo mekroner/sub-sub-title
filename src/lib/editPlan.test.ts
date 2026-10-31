@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { MediaInfo } from "../types";
 import {
   MAIN_TRACK_ID,
+  addKey,
+  moveKey,
+  setTransformAt,
   addOverlayTrack,
   addSource,
   patchItem,
@@ -80,6 +83,24 @@ describe("buildRenderPlan", () => {
       rects: [{ time: 0, x: 540, y: 320, w: 200, h: 80 }],
     });
     expect(plan.layers[plan.layers.length - 1].audio).toBeUndefined();
+  });
+});
+
+describe("motion in the plan", () => {
+  it("sends one exact rect per key for a moving item, and hashes key moves", () => {
+    let edit = fixture();
+    const id = edit.items[0].id;
+    edit = addKey(edit, id, 3);
+    edit = setTransformAt(edit, id, 3, { scale: 1.03 });
+    const layer = buildRenderPlan(edit).layers[0];
+    expect(layer.rects).toHaveLength(2);
+    expect(layer.rects[1].time).toBe(3);
+    expect(layer.rects[1].w).toBeCloseTo(1318.4);
+    expect(layer.rects[1].x).toBeCloseTo(-19.2);
+    // Whole pixels would have hidden the fraction.
+    expect(Number.isInteger(layer.rects[1].h)).toBe(false);
+    const moved = moveKey(edit, id, 1, 2);
+    expect(planHash(buildRenderPlan(moved))).not.toBe(planHash(buildRenderPlan(edit)));
   });
 });
 

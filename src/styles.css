@@ -3308,3 +3308,29 @@ button.fill-alt.on {
 .edit-timeline {
   grid-template-columns: 210px minmax(0, 1fr);
 }
+
+/* Moving layers are placed in fractions of a pixel every frame. */
+.edit-layer {
+  will-change: left, top, width, height, opacity;
+}
+
+/* Keys on a moving item: diamonds along its bottom edge. */
+.edit-key {
+  position: absolute;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  background: #ffd27a;
+  border: 1px solid #6b4a12;
+  transform: rotate(45deg);
+  cursor: ew-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.edit-key:hover {
+  background: #fff1cf;
+}
+.edit-key-actions {
+  flex-wrap: wrap;
+}

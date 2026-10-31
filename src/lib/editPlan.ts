@@ -7,8 +7,10 @@
 import type { Edit, EditItem, PlanLayer, RenderPlan } from "../types";
 import {
   editEnd,
+  isAnimated,
   naturalSize,
   resolveRect,
+  resolveRectExact,
   sourceOf,
   trackItems,
   type Size,
@@ -34,9 +36,12 @@ function layerFor(
   if (!natural) return null;
   if (item.kind !== "text" && !source) return null;
 
+  // A still item sits on whole pixels; a moving one keeps the fractions, and
+  // the bake interpolates between them per frame.
+  const resolve = isAnimated(item) ? resolveRectExact : resolveRect;
   const rects = item.transform.map((key) => ({
     time: key.time,
-    ...resolveRect(natural, key, edit.canvas),
+    ...resolve(natural, key, edit.canvas),
   }));
   const path = item.kind === "text" ? raster!.name : source!.path;
   const layer: PlanLayer = {

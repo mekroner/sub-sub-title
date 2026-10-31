@@ -39,6 +39,8 @@ interface Props {
   onRenameTrack?: (id: string, name: string) => void;
   /** +1 draws the track above the next one up; -1 below. */
   onMoveTrack?: (id: string, direction: number) => void;
+  /** Moves an item's key to `t` seconds into the item. */
+  onMoveKey?: (id: string, index: number, t: number, drag: string) => void;
 }
 
 /** The lane under a screen point, and the timeline time there: for drops from the media bin. */
@@ -86,6 +88,7 @@ export function EditTimeline({
   onRemoveTrack,
   onRenameTrack,
   onMoveTrack,
+  onMoveKey,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLCanvasElement>(null);
@@ -264,6 +267,33 @@ export function EditTimeline({
     drag.current = null;
   };
 
+  // --- Key diamonds: drag to retime, click to go there -------------------------
+  const keyDrag = useRef<{ item: EditItem; index: number; pointerX: number; moved: boolean; key: string } | null>(null);
+
+  const startKey = (e: ReactPointerEvent<HTMLDivElement>, item: EditItem, index: number) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    keyDrag.current = { item, index, pointerX: e.clientX, moved: false, key: `key:${item.id}:${index}:${e.timeStamp}` };
+    onSelect(item.id);
+  };
+  const moveKeyDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = keyDrag.current;
+    if (!d || !onMoveKey) return;
+    const dx = e.clientX - d.pointerX;
+    if (!d.moved && Math.abs(dx) < CLICK_SLOP_PX) return;
+    d.moved = true;
+    const raw = d.item.transform[d.index].time + dx / zoom;
+    // Snaps to the playhead, so a key lands exactly where the picture was set.
+    const t = snapTime(raw, [time - d.item.start], SNAP_PX / zoom);
+    onMoveKey(d.item.id, d.index, t, d.key);
+  };
+  const endKeyDrag = () => {
+    const d = keyDrag.current;
+    keyDrag.current = null;
+    if (d && !d.moved) onSeek(d.item.start + d.item.transform[d.index].time);
+  };
+
   const startLane = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     onSelect(null);
@@ -437,6 +467,26 @@ export function EditTimeline({
                             />
                           </>
                         )}
+                        {item.transform.length > 1 &&
+                          item.transform.map((key, index) =>
+                            key.time > item.duration + 1e-9 ? null : (
+                              <div
+                                key={index}
+                                className="edit-key"
+                                // Kept inside the item, which clips: a key at
+                                // either end would otherwise be half hidden
+                                // under the trim handle.
+                                style={{ left: Math.min(width - 6, Math.max(6, key.time * zoom)) }}
+                                title={`Key ${index + 1} at ${formatShort(item.start + key.time)}: ${Math.round(
+                                  key.scale * 100,
+                                )}%`}
+                                onPointerDown={(e) => startKey(e, item, index)}
+                                onPointerMove={moveKeyDrag}
+                                onPointerUp={endKeyDrag}
+                                onPointerCancel={() => (keyDrag.current = null)}
+                              />
+                            ),
+                          )}
                       </div>
                     );
                   })}

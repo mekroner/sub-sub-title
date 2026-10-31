@@ -8,7 +8,7 @@ import {
   itemsAt,
   naturalSize,
   nextMainItem,
-  resolveRect,
+  placeAt,
   sourceOf,
   trackOf,
   transformAt,
@@ -86,7 +86,8 @@ export function EditPreview({
       const textSize: Size | undefined = text ? { width: text.width, height: text.height } : undefined;
       const natural = naturalSize(item, canvas, sourceOf(edit, item), textSize);
       if (!natural) return;
-      const rect = resolveRect(natural, transformAt(item.transform, local), canvas);
+      // Whole pixels when still, exact when moving: as the bake draws it.
+      const rect = placeAt(item, natural, local, canvas);
       out.push({ item, rect, alpha: alphaAt(item, local), z });
     });
     return out;
@@ -148,8 +149,11 @@ export function EditPreview({
       } else {
         if (!el.paused) el.pause();
         // A frame's worth is close enough to be showing the right picture.
+        // While paused, nothing re-runs this until the playhead moves, so a
+        // seek is never skipped for one still in flight: a new seek replaces
+        // it, or the picture could be left where playback stopped.
         const tolerance = visible ? 0.5 / edit.canvas.fps : 0.05;
-        if (drift > tolerance && !el.seeking) el.currentTime = target;
+        if (drift > tolerance) el.currentTime = target;
       }
     });
     stalled.current = () =>
@@ -171,13 +175,14 @@ export function EditPreview({
   // pixels through the stage's scale, then fractions of the canvas.
   const drag = useRef<{ id: string; x0: number; y0: number; px: number; py: number; key: string } | null>(null);
   const selectedLayer = selectedId ? layerById.get(selectedId) : undefined;
-  const movable = Boolean(selectedLayer && selectedLayer.item.transform.length === 1 && onMoveSelected);
+  // A moving item is dragged where it is at the playhead, which keys it there.
+  const movable = Boolean(selectedLayer && onMoveSelected);
 
   const startDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !selectedLayer || !movable) return;
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
-    const key = selectedLayer.item.transform[0];
+    const key = transformAt(selectedLayer.item.transform, time - selectedLayer.item.start);
     drag.current = {
       id: selectedLayer.item.id,
       x0: key.x,

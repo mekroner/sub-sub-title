@@ -492,6 +492,13 @@ behaves as before.
   and Y are the centre as a percentage of the canvas, and 100% scale fits a
   picture inside the canvas (for text, its drawn size). Drag the selected item
   on the picture to move it.
+- **Motion** comes from keys. Select an item, put the playhead where a move
+  should start and press **◆ Add key** (on a still item this keys its start
+  and end), then go to another moment and change X, Y or Scale — or drag the
+  picture — and that moment is keyed too. Between keys the item moves in a
+  straight line at a steady rate. Keys show as diamonds on the item: drag one
+  to retime it, click it to go there; ◀ ▶ step between them, and *Remove
+  motion* keeps the place at the playhead.
 - **Text** has a font (any installed family), size, weight, colour, alignment,
   and optional outline, shadow and box. It is drawn to a PNG in the app, and
   the bake overlays that same image, so the preview shows exactly what is
@@ -572,7 +579,11 @@ sub-sub-title.exe "D:\footage\scene.mp4"
   base, each clip seeked at the demuxer (`-ss`/`-t` per input, so a clip late in
   a long file does not decode what comes before it), faded in alpha and laid
   over with `overlay` in planar RGB (a 4:2:0 base would snap odd positions to
-  even pixels). The graph holds no paths and goes in a file
+  even pixels). A moving layer is scaled once to its largest size and placed
+  frame by frame with `perspective`, which resamples with sub-pixel
+  precision, so a slow push-in glides instead of stepping a whole pixel at a
+  time; it is resampled with premultiplied alpha, so its edges move as evenly
+  as its middle. The graph holds no paths and goes in a file
   (`-filter_complex_script`), since Windows caps a command line at 32k
   characters.
 - **The video is served over Tauri's asset protocol**, and each opened file is
