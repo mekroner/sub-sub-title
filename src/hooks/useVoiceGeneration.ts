@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { CastVoice, ClipTake, Cue, ProjectPaths, TtsEvent, TtsStatus, Voiceover } from "../types";
+import type {
+  CastVoice,
+  ClipTake,
+  Cue,
+  ProjectPaths,
+  TtsEvent,
+  TtsResult,
+  TtsStatus,
+  Voiceover,
+} from "../types";
 import * as api from "../lib/api";
 import { errorMessage } from "../lib/api";
 import { makeId } from "../lib/ids";
@@ -8,7 +17,9 @@ import {
   lineIndex,
   newSeed,
   nextLine,
-  placeTake,
+  MAX_TAKES_PER_LINE,
+  placeTakes,
+  rankTakes,
   proportionalMarks,
   renderGroup,
   renderLine,
@@ -24,6 +35,30 @@ export interface GenerationJob {
   current: string;
   /** True while a model is being loaded onto the GPU (or first downloaded). */
   loading: boolean;
+  /** Which of the line's takes is being spoken, when it has more than one. */
+  take?: [number, number] | null;
+}
+
+/** A take as the engine reported it, its cues' words placed when it did not say. */
+function toTake(result: TtsResult, seed: number, parts: string[]): ClipTake {
+  const [from, to] = result.speech ?? [0, result.duration];
+  const marks =
+    parts.length > 1
+      ? result.marks?.length === parts.length
+        ? result.marks
+        : // Alignment failed or found nothing: an estimate beats none.
+          proportionalMarks(parts, to - from, from)
+      : undefined;
+  return {
+    file: result.path,
+    seed,
+    duration: result.duration,
+    ...(marks ? { marks } : {}),
+    ...(result.speech ? { speech: result.speech } : {}),
+    ...(result.score !== undefined && result.rate !== undefined
+      ? { check: { score: result.score, rate: result.rate } }
+      : {}),
+  };
 }
 
 interface Options {
@@ -139,41 +174,40 @@ export function useVoiceGeneration({ voiceover, cues, paths, commit, notify }: O
           );
           const { voice } = line;
           last = voice;
-          const seed = newSeed();
+          const count = Math.min(MAX_TAKES_PER_LINE, Math.max(1, voice.takesPerLine ?? 1));
           // Each cue's own words, for finding where they fall in the take.
           const parts = group.map((cue) => renderLine(voiceoverRef.current, cue).text);
-          const result = await api.ttsGenerate({
-            engine: voice.engine,
-            text: line.text,
-            reference: voice.reference ?? null,
-            seed,
-            exaggeration: line.exaggeration,
-            cfgWeight: voice.cfgWeight,
-            temperature: voice.temperature,
-            outputPath: takePath(paths.dir, paths.stem, group[0].id, seed),
-            alignSegments: group.length > 1 ? parts.map(stripTags) : null,
-            check: false,
-          });
-          const [from, to] = result.speech ?? [0, result.duration];
-          const marks =
-            group.length > 1
-              ? result.marks?.length === group.length
-                ? result.marks
-                : // Alignment failed or found nothing: an estimate beats none.
-                  proportionalMarks(parts, to - from, from)
-              : undefined;
-          const take: ClipTake = {
-            file: result.path,
-            seed,
-            duration: result.duration,
-            ...(marks ? { marks } : {}),
-            ...(result.speech ? { speech: result.speech } : {}),
-            ...(result.score !== undefined && result.rate !== undefined
-              ? { check: { score: result.score, rate: result.rate } }
-              : {}),
-          };
-          // Records the line as sent, even if its script was edited meanwhile.
-          commit((v) => placeTake(v, group, take, line), batch);
+          const takes: ClipTake[] = [];
+          try {
+            for (let n = 0; n < count; n++) {
+              if (n > 0 && stopRequested.current) break;
+              if (count > 1) setJob((current) => current && { ...current, take: [n + 1, count] });
+              const seed = newSeed();
+              const result = await api.ttsGenerate({
+                engine: voice.engine,
+                text: line.text,
+                reference: voice.reference ?? null,
+                seed,
+                exaggeration: line.exaggeration,
+                cfgWeight: voice.cfgWeight,
+                temperature: voice.temperature,
+                outputPath: takePath(paths.dir, paths.stem, group[0].id, seed),
+                alignSegments: group.length > 1 ? parts.map(stripTags) : null,
+                // Choosing among takes needs to know which say their line.
+                check: count > 1,
+              });
+              takes.push(toTake(result, seed, parts));
+            }
+          } finally {
+            // Takes already spoken are kept, even when a later one fails.
+            // Records the line as sent, even if its script was edited meanwhile.
+            if (takes.length > 0) {
+              const window = group[group.length - 1].end - group[0].start;
+              const best = rankTakes(takes, window);
+              commit((v) => placeTakes(v, group, takes, best, line), batch);
+            }
+            setJob((current) => current && { ...current, take: null });
+          }
           speaking.current = null;
           done += 1;
           setJob((current) => current && { ...current, done });

@@ -77,6 +77,7 @@ const project: Project = {
         reference: "D:/vo/ada.wav",
         trackId: "vo1",
         referenceCueIds: ["a"],
+        takesPerLine: 3,
       },
       "": { engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
     },

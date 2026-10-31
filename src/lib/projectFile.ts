@@ -24,7 +24,7 @@ import type {
   Voiceover,
 } from "../types";
 import { sortCues } from "./cues";
-import { DEFAULT_VOICE } from "./tts";
+import { DEFAULT_VOICE, MAX_TAKES_PER_LINE } from "./tts";
 import { makeId } from "./ids";
 import {
   DEFAULT_DUCK,
@@ -273,6 +273,12 @@ function coerceVoicing(raw: unknown): Record<string, CueVoicing> {
 
 const ENGINES: TtsEngine[] = ["turbo", "standard"];
 
+/** Absent for one take, the default; otherwise a whole number within the cap. */
+function takesPerLine(raw: unknown): { takesPerLine?: number } {
+  const n = Math.round(finite(raw as number, 1));
+  return n > 1 ? { takesPerLine: Math.min(MAX_TAKES_PER_LINE, n) } : {};
+}
+
 function coerceCast(raw: unknown): Record<string, CastVoice> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
   const cast: Record<string, CastVoice> = {};
@@ -287,6 +293,7 @@ function coerceCast(raw: unknown): Record<string, CastVoice> {
       ...(typeof v.reference === "string" && v.reference ? { reference: v.reference } : {}),
       ...(typeof v.trackId === "string" && v.trackId ? { trackId: v.trackId } : {}),
       ...(strings(v.referenceCueIds).length ? { referenceCueIds: strings(v.referenceCueIds) } : {}),
+      ...takesPerLine(v.takesPerLine),
     };
   }
   return cast;

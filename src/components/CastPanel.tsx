@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CastVoice, Cue, Speaker, TtsStatus, Voiceover } from "../types";
 import type { GenerationJob } from "../hooks/useVoiceGeneration";
-import { NO_SPEAKER, castKey, voiceFor, type LineIndex } from "../lib/tts";
+import { MAX_TAKES_PER_LINE, NO_SPEAKER, castKey, voiceFor, type LineIndex } from "../lib/tts";
 import { basename, voiceTracks } from "../lib/voiceover";
 
 interface Props {
@@ -125,7 +125,8 @@ export function CastPanel({
               <span className="hint">
                 {job.loading
                   ? "Loading the voice model…"
-                  : `Line ${Math.min(job.done + 1, job.total)} of ${job.total}`}
+                  : `Line ${Math.min(job.done + 1, job.total)} of ${job.total}` +
+                    (job.take ? ` · take ${job.take[0]} of ${job.take[1]}` : "")}
               </span>
               <button type="button" className="small" onClick={onStop}>
                 Stop
@@ -257,6 +258,23 @@ function CastRow({
           <span className="cast-value">{voice.exaggeration.toFixed(2)}</span>
         </label>
       )}
+      <div className="cast-field">
+        <span>Takes</span>
+        <select
+          value={voice.takesPerLine ?? 1}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            onSetVoice({ takesPerLine: n > 1 ? n : undefined });
+          }}
+          title="Speak each line this many times and keep the take that best says it and fits its cue"
+        >
+          {Array.from({ length: MAX_TAKES_PER_LINE }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>
+              {n === 1 ? "1 per line" : `Best of ${n}`}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="cast-field">
         <span>Track</span>
         <select

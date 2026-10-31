@@ -14,6 +14,8 @@ import {
   nextLine,
   overrun,
   placeTake,
+  placeTakes,
+  rankTakes,
   playTake,
   proportionalMarks,
   referenceSegments,
@@ -185,6 +187,31 @@ describe("generated lines", () => {
     expect(isSuspect(checked(SUSPECT_SCORE - 0.01, 14))).toBe(true);
     expect(isSuspect(checked(0.8, SUSPECT_RATE[1] + 1))).toBe(true);
     expect(isSuspect(checked(0.8, SUSPECT_RATE[0] - 1))).toBe(true);
+  });
+
+  it("keeps the take that says its line and best fits its cues", () => {
+    const t = (file: string, speech: number, score?: number) => ({
+      ...take(file, speech + 0.4),
+      speech: [0.2, 0.2 + speech] as [number, number],
+      ...(score === undefined ? {} : { check: { score, rate: 12 } }),
+    });
+    // Running long is worse than running as short.
+    expect(rankTakes([t("long", 2.4), t("short", 1.6)], 2)).toBe(1);
+    expect(rankTakes([t("long", 2.1), t("short", 1.6)], 2)).toBe(0);
+    // A take that may not say its line loses, however well it fits.
+    expect(rankTakes([t("garbled", 2, 0.2), t("clean", 1.5, 0.9)], 2)).toBe(1);
+    // As good a fit: the surer take.
+    expect(rankTakes([t("a", 2, 0.85), t("b", 2.02, 0.97)], 2)).toBe(1);
+    expect(rankTakes([t("only", 3)], 2)).toBe(0);
+
+    const line = [cue("c1", 4, 6, "Hello")];
+    const vo = placeTakes(defaultVoiceover(), line, [t("x", 2.6), t("y", 1.9)], 1);
+    expect(vo.clips).toHaveLength(1);
+    expect(vo.clips[0].file).toBe("y");
+    expect(vo.clips[0].takes?.map((k) => k.file)).toEqual(["x", "y"]);
+    const again = placeTakes(vo, line, [t("z", 2)], 0);
+    expect(again.clips[0].takes?.map((k) => k.file)).toEqual(["x", "y", "z"]);
+    expect(again.clips[0].file).toBe("z");
   });
 
   it("replaces the separate clips of cues that are now spoken as one line", () => {

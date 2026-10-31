@@ -294,6 +294,12 @@ def align_words(path, words):
     return spans, seconds, seconds / emission.size(1)
 
 
+# A line shorter than this is not checked: a word or two gives the aligner too
+# little to be sure of (a clean "Run!" scored 0.33), and the padding around
+# it swamps the rate.
+CHECK_MIN_LETTERS = 8
+
+
 def check(path, text, speech):
     """How well the take says `text`. Forced alignment always places every
     word somewhere, but a word the voice dropped or garbled is placed with
@@ -301,16 +307,20 @@ def check(path, text, speech):
     letters per second of speech: a take that rushes, or stalls in silence,
     falls outside what a person speaks."""
     words = words_of(text)
-    if not words:
-        return {}
-    spans, _, _ = align_words(path, words)
-    scores = [span.score for word in spans for span in word]
     letters = sum(len(word.replace("'", "")) for word in words)
-    length = max(speech[1] - speech[0], 1e-3)
-    return {
-        "score": round(sum(scores) / len(scores), 4) if scores else 0.0,
-        "rate": round(letters / length, 2),
-    }
+    if letters < CHECK_MIN_LETTERS:
+        return {}
+    rate =round(letters / max(speech[1] - speech[0], 1e-3), 2)
+    try:
+        spans, _, _ = align_words(path, words)
+    except RuntimeError as error:
+        # CTC cannot fit more letters than the audio has frames: the take is
+        # far too short for its line, which is the surest sign of all.
+        if "too long" in str(error):
+            return {"score": 0.0, "rate": rate}
+        raise
+    scores = [span.score for word in spans for span in word]
+    return {"score": round(sum(scores) / len(scores), 4) if scores else 0.0, "rate": rate}
 
 
 def align(request):

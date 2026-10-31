@@ -179,6 +179,11 @@ export interface CastVoice {
   trackId?: string;
   /** The cues the reference was cut from, when it was built from the video. */
   referenceCueIds?: string[];
+  /**
+   * Takes spoken per line, the best of them used: 1 (absent) to
+   * `MAX_TAKES_PER_LINE`. More than one has every take checked.
+   */
+  takesPerLine?: number;
 }
 
 /** How the original track ducks under the cues. Applied live, never baked. */

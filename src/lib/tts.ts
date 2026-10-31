@@ -54,6 +54,7 @@ export function setVoice(
   if (next.reference === undefined) delete next.reference;
   if (next.trackId === undefined) delete next.trackId;
   if (next.referenceCueIds === undefined) delete next.referenceCueIds;
+  if (next.takesPerLine === undefined) delete next.takesPerLine;
   return { ...voiceover, cast: { ...voiceover.cast, [key]: next } };
 }
 
@@ -301,13 +302,19 @@ export function nextLine(
  * A checked take whose words were found with less confidence than this has
  * likely dropped or garbled some. Forced alignment places every word
  * somewhere; a word that is not there is placed on whatever is nearby.
+ * Measured on both Chatterbox models: good takes score 0.82 and up, takes
+ * checked against words they do not say 0.45 and below. Lines of a word or
+ * two are not checked at all (see the sidecar's `CHECK_MIN_LETTERS`).
  */
-export const SUSPECT_SCORE = 0.45;
+export const SUSPECT_SCORE = 0.6;
 /**
  * Letters per second of speech outside this range is not how people talk: a
  * rushed take has skipped words, a slow one has stalled or added sounds.
+ * Good takes measure about 9 to 17.
  */
-export const SUSPECT_RATE: [number, number] = [6, 24];
+export const SUSPECT_RATE: [number, number] = [4, 24];
+/** The most takes a line can be spoken in at once. */
+export const MAX_TAKES_PER_LINE = 3;
 
 /** Whether a checked take probably does not say its line. Unchecked takes are not. */
 export function isSuspect(take: ClipTake): boolean {
@@ -375,6 +382,19 @@ export function placeTake(
   take: ClipTake,
   line: RenderedLine = renderGroup(voiceover, group),
 ): Voiceover {
+  return placeTakes(voiceover, group, [take], 0, line);
+}
+
+/** `placeTake` for several takes of one line at once, playing `takes[best]`. */
+export function placeTakes(
+  voiceover: Voiceover,
+  group: Cue[],
+  takes: ClipTake[],
+  best: number,
+  line: RenderedLine = renderGroup(voiceover, group),
+): Voiceover {
+  const chosen = takes[best];
+  if (!chosen) return voiceover;
   const ids = group.map((c) => c.id);
   const source = { cueIds: ids, text: line.text, voiceKey: renderedKey(line) };
   const existing = clipForCue(voiceover, ids[0]);
@@ -383,13 +403,11 @@ export function placeTake(
   const clips = voiceover.clips.filter((c) => !superseded(c));
 
   if (existing) {
-    const takes = [...(existing.takes ?? []), take];
+    const all = [...(existing.takes ?? []), ...takes];
     return {
       ...voiceover,
       clips: clips.map((c) =>
-        c.id === existing.id
-          ? { ...c, ...playTake(take), source, takes }
-          : c,
+        c.id === existing.id ? { ...c, ...playTake(chosen), source, takes: all } : c,
       ),
     };
   }
@@ -398,15 +416,52 @@ export function placeTake(
   const clip: VoiceClip = {
     id: makeId(),
     trackId: placed.trackId,
-    ...playTake(take),
+    ...playTake(chosen),
     // Named after the subtitles, not the script: tags make poor labels.
     name: clipName(group.map(speechText).join(" ") || stripTags(source.text)),
     start: group[0].start,
     gainDb: 0,
     source,
-    takes: [take],
+    takes,
   };
   return { ...placed.voiceover, clips: [...placed.voiceover.clips, clip] };
+}
+
+/** How long a take's speech runs. */
+export function speechLength(take: ClipTake): number {
+  const [from, to] = take.speech ?? [0, take.duration];
+  return to - from;
+}
+
+/**
+ * The best of several takes of a line, by index: one that says its line over
+ * one that may not, then the one whose speech best fills `window` seconds —
+ * the time from the line's first cue to its last cue's end, where running
+ * long is worse than running short — then the more surely aligned.
+ */
+export function rankTakes(takes: ClipTake[], window: number): number {
+  const misfit = (t: ClipTake) => {
+    const over = speechLength(t) - window;
+    // A take that runs over pushes into the next line; one that is short
+    // only leaves a pause.
+    return over > 0 ? over * 2 : -over;
+  };
+  let best = 0;
+  for (let i = 1; i < takes.length; i++) {
+    const a = takes[i];
+    const b = takes[best];
+    const suspectA = isSuspect(a);
+    const suspectB = isSuspect(b);
+    if (suspectA !== suspectB) {
+      if (!suspectA) best = i;
+      continue;
+    }
+    const fit = misfit(a) - misfit(b);
+    if (fit < -0.05 || (Math.abs(fit) <= 0.05 && (a.check?.score ?? 0) > (b.check?.score ?? 0))) {
+      best = i;
+    }
+  }
+  return best;
 }
 
 /** Switches a clip to another of its takes, playing its speech. */
