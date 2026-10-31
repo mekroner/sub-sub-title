@@ -65,6 +65,9 @@ fn stage_subtitles(app: &AppHandle, ass_path: &str) -> AppResult<PathBuf> {
     Ok(dir)
 }
 
+// A Tauri command's arguments are what the frontend names in its call;
+// bundling them into a struct would only move the list there.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn render_burn_in(
     app: AppHandle,
