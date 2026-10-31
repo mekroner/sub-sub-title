@@ -180,6 +180,19 @@ export interface Voiceover {
   unduckedCueIds: string[];
   /** Voices by speaker id; `""` is the voice for cues with no speaker. */
   cast: Record<string, CastVoice>;
+  /** How individual cues are voiced, by cue id. Most cues have no entry. */
+  voicing: Record<string, CueVoicing>;
+}
+
+/**
+ * A cue's voice script, kept apart from its subtitle so that tags and
+ * rewordings never reach the subtitles.
+ */
+export interface CueVoicing {
+  /** What is spoken, tags included. Absent speaks the cue's own text. */
+  spoken?: string;
+  /** A free-text note, e.g. "whispered, out of breath". */
+  direction?: string;
 }
 
 export interface Project {

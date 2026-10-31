@@ -19,6 +19,7 @@ import { RenderDialog } from "./components/RenderDialog";
 import { ExportAudioDialog } from "./components/ExportAudioDialog";
 import { TtsInstallDialog } from "./components/TtsInstallDialog";
 import { CastPanel } from "./components/CastPanel";
+import { LineEditor } from "./components/LineEditor";
 import {
   DEFAULT_SIDE_WIDTH,
   MAX_SIDE_WIDTH,
@@ -113,6 +114,10 @@ import {
   removeTake,
   selectTake,
   setVoice,
+  hasSomethingToSay,
+  lineState,
+  renderLine,
+  setVoicing,
   speechText,
 } from "./lib/tts";
 import { DEFAULT_TARGET_CPS, clamp, durationForText, formatShort } from "./lib/time";
@@ -1018,6 +1023,53 @@ export default function App() {
     [selectedClip, cues],
   );
 
+  // --- Voice lines --------------------------------------------------------
+  /**
+   * The cue whose voice line is open in the editor: one chosen explicitly
+   * (double-click, or the cue menu), else the cue of the selected clip.
+   */
+  const [lineCueId, setLineCueId] = useState<string | null>(null);
+  const editedCue = useMemo(
+    () => (lineCueId ? cues.find((c) => c.id === lineCueId) ?? null : selectedCueOfClip),
+    [lineCueId, cues, selectedCueOfClip],
+  );
+
+  const editCueLine = useCallback(
+    (cueId: string) => {
+      setLineCueId(cueId);
+      setSelectedClipId(clipForCue(project.voiceover, cueId)?.id ?? null);
+    },
+    [project.voiceover],
+  );
+
+  /** Selecting a clip shows its own cue's line rather than one opened before. */
+  const selectClip = useCallback((id: string | null) => {
+    setSelectedClipId(id);
+    setLineCueId(null);
+  }, []);
+
+  const suggestLine = useCallback(
+    async (cue: Cue) => {
+      const index = cues.findIndex((c) => c.id === cue.id);
+      const speakerOf = (c: Cue) => speakers.find((s) => s.id === c.speakerId);
+      const context = (list: Cue[]) =>
+        list.map((c) => ({ speaker: speakerOf(c)?.name ?? "Unknown", text: speechText(c) }));
+      const voicing = project.voiceover.voicing[cue.id] ?? {};
+      return api.aiDirectLine({
+        model: settings.model,
+        speaker: speakerOf(cue)?.name ?? "",
+        voiceNotes: speakerOf(cue)?.voiceNotes ?? "",
+        text: speechText(cue),
+        spoken: voicing.spoken ?? "",
+        direction: voicing.direction ?? "",
+        engine: renderLine(project.voiceover, cue).voice.engine,
+        before: context(cues.slice(Math.max(0, index - 4), index)),
+        after: context(cues.slice(index + 1, index + 3)),
+      });
+    },
+    [cues, speakers, project.voiceover, settings.model],
+  );
+
   /**
    * A cue dragged on the Voiceover timeline. The same neighbour rules as the
    * waveform, but always the one cue — the Voiceover tab has no cue selection
@@ -1053,7 +1105,7 @@ export default function App() {
       if (!cue) return;
       const clip = clipForCue(project.voiceover, cue.id);
       const installed = voices.status?.installed ?? false;
-      const silent = speechText(cue) === "";
+      const silent = !hasSomethingToSay(project.voiceover, cue);
       const why = silent
         ? "The cue has no text"
         : !paths
@@ -1081,9 +1133,15 @@ export default function App() {
               },
           {
             kind: "item",
+            label: "Edit voice line…",
+            detail: "Spoken text, tags and direction",
+            onSelect: () => editCueLine(cue.id),
+          },
+          {
+            kind: "item",
             label: "Select its clip",
             disabled: !clip,
-            onSelect: () => clip && setSelectedClipId(clip.id),
+            onSelect: () => clip && selectClip(clip.id),
           },
           { kind: "separator" },
           {
@@ -1109,7 +1167,7 @@ export default function App() {
         ],
       });
     },
-    [cues, project.voiceover, voices, paths, setVoiceover, fitCues],
+    [cues, project.voiceover, voices, paths, setVoiceover, fitCues, editCueLine, selectClip],
   );
 
   /** Text for the chat box, set from elsewhere — the Story panel's ✦ Story. */
@@ -2744,6 +2802,33 @@ export default function App() {
               onReferenceFromFile={(key) => void referenceFromFile(key)}
               onReferenceFromVideo={(key) => void referenceFromVideo(key)}
             />
+            {editedCue && (
+              <LineEditor
+                // A fresh editor per cue, so a suggestion in flight for one
+                // cue can never land in another.
+                key={editedCue.id}
+                cue={editedCue}
+                speakerName={
+                  speakers.find((s) => s.id === editedCue.speakerId)?.name ?? "No speaker"
+                }
+                voicing={project.voiceover.voicing[editedCue.id] ?? {}}
+                rendered={renderLine(project.voiceover, editedCue)}
+                state={lineState(project.voiceover, editedCue)}
+                canSpeak={Boolean(voices.status?.installed && paths && !voices.job)}
+                onSuggest={apiKeySet ? () => suggestLine(editedCue) : undefined}
+                onChange={(patch) =>
+                  setVoiceover(
+                    (v) => setVoicing(v, editedCue.id, editedCue.text, patch),
+                    `voicing:${editedCue.id}:${Object.keys(patch).join()}`,
+                  )
+                }
+                onGenerate={() => void voices.generate([editedCue])}
+                onClose={() => {
+                  setLineCueId(null);
+                  setSelectedClipId(null);
+                }}
+              />
+            )}
             <ClipInspector
               clip={selectedClip}
               track={
@@ -2876,7 +2961,7 @@ export default function App() {
               decodeVersion={decodeVersion}
               onSeek={seek}
               onZoomChange={setZoom}
-              onSelectClip={setSelectedClipId}
+              onSelectClip={selectClip}
               onPatchTrack={patchTrackById}
               onAddTrack={() => setVoiceover(addTrack)}
               onRemoveTrack={(id) => setVoiceover((v) => removeTrack(v, id))}
@@ -2894,6 +2979,7 @@ export default function App() {
               onExport={canExportAudio ? () => setShowExportAudio(true) : undefined}
               clipWarnings={clipWarnings}
               onContextMenuCue={openVoiceCueMenu}
+              onEditCueLine={editCueLine}
               onRetimeCue={retimeCueInVoiceover}
               onToggleCueDuck={(cueId) => setVoiceover((v) => toggleCueDuck(v, cueId))}
               onDuckChange={(patch) =>

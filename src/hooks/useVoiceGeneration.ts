@@ -4,7 +4,7 @@ import type { ClipTake, Cue, ProjectPaths, TtsEvent, TtsStatus, Voiceover } from
 import * as api from "../lib/api";
 import { errorMessage } from "../lib/api";
 import { makeId } from "../lib/ids";
-import { castKey, newSeed, placeTake, speechText, takePath, voiceFor } from "../lib/tts";
+import { hasSomethingToSay, newSeed, placeTake, renderLine, speechText, takePath } from "../lib/tts";
 
 export interface GenerationJob {
   done: number;
@@ -57,7 +57,7 @@ export function useVoiceGeneration({ voiceover, paths, commit, notify }: Options
   const generate = useCallback(
     async (cues: Cue[]) => {
       if (!paths || job) return;
-      const lines = cues.filter((cue) => speechText(cue) !== "");
+      const lines = cues.filter((cue) => hasSomethingToSay(voiceoverRef.current, cue));
       if (lines.length === 0) return;
 
       stopRequested.current = false;
@@ -67,22 +67,23 @@ export function useVoiceGeneration({ voiceover, paths, commit, notify }: Options
       try {
         for (const cue of lines) {
           if (stopRequested.current) break;
-          const text = speechText(cue);
-          setJob((current) => current && { ...current, current: text });
-          const voice = voiceFor(voiceoverRef.current, castKey(cue));
+          const line = renderLine(voiceoverRef.current, cue);
+          setJob((current) => current && { ...current, current: line.text });
+          const { voice } = line;
           const seed = newSeed();
           const result = await api.ttsGenerate({
             engine: voice.engine,
-            text,
+            text: line.text,
             reference: voice.reference ?? null,
             seed,
-            exaggeration: voice.exaggeration,
+            exaggeration: line.exaggeration,
             cfgWeight: voice.cfgWeight,
             temperature: voice.temperature,
             outputPath: takePath(paths.dir, paths.stem, cue.id, seed),
           });
           const take: ClipTake = { file: result.path, seed, duration: result.duration };
-          commit((v) => placeTake(v, cue, take), batch);
+          // Records the line as sent, even if its script was edited meanwhile.
+          commit((v) => placeTake(v, cue, take, line), batch);
           done += 1;
           setJob((current) => current && { ...current, done });
         }

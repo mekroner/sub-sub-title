@@ -72,6 +72,10 @@ const project: Project = {
       },
       "": { engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
     },
+    voicing: {
+      a: { spoken: "[sigh] Hello.", direction: "tired" },
+      b: { direction: "whispered" },
+    },
   },
 };
 

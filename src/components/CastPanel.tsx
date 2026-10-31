@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CastVoice, Cue, Speaker, TtsStatus, Voiceover } from "../types";
 import type { GenerationJob } from "../hooks/useVoiceGeneration";
-import { NO_SPEAKER, castKey, lineState, speechText, voiceFor } from "../lib/tts";
+import { NO_SPEAKER, castKey, hasSomethingToSay, lineState, voiceFor } from "../lib/tts";
 import { basename, voiceTracks } from "../lib/voiceover";
 
 interface Props {
@@ -46,7 +46,7 @@ export function CastPanel({
   onReferenceFromVideo,
 }: Props) {
   const rows = useMemo<Row[]>(() => {
-    const spoken = cues.filter((c) => speechText(c) !== "");
+    const spoken = cues.filter((c) => hasSomethingToSay(voiceover, c));
     const byKey = new Map<string, Cue[]>();
     for (const cue of spoken) {
       const key = castKey(cue);

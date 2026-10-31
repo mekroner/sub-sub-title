@@ -17,6 +17,7 @@ import type {
   Peaks,
   ProjectPaths,
   ProofreadCorrection,
+  ScriptLine,
   Settings,
   SpellDialect,
   StoryBeatsRequest,
@@ -136,6 +137,19 @@ export const mixdownVoiceover = (request: MixdownRequest) =>
   invoke<MixdownResult>("mixdown_voiceover", { request });
 
 export const cancelMixdown = () => invoke<void>("cancel_mixdown");
+
+/** A cue's line rewritten for the voice engine, following a direction note. */
+export const aiDirectLine = (request: {
+  model: string;
+  speaker: string;
+  voiceNotes: string;
+  text: string;
+  spoken: string;
+  direction: string;
+  engine: string;
+  before: ScriptLine[];
+  after: ScriptLine[];
+}) => invoke<string>("ai_direct_line", { request });
 
 export const ttsStatus = () => invoke<TtsStatus>("tts_status");
 export const installTts = () => invoke<void>("install_tts");

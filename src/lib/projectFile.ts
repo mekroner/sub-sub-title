@@ -9,6 +9,7 @@ import type {
   ClipSource,
   ClipTake,
   Cue,
+  CueVoicing,
   DuckSettings,
   TtsEngine,
   GainPoint,
@@ -195,6 +196,22 @@ function coerceTakes(raw: unknown): { takes?: ClipTake[] } {
   return takes.length ? { takes } : {};
 }
 
+/** Keeps only entries that still say something; a blank field is dropped. */
+function coerceVoicing(raw: unknown): Record<string, CueVoicing> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const voicing: Record<string, CueVoicing> = {};
+  for (const [cueId, value] of Object.entries(raw)) {
+    if (typeof value !== "object" || value === null) continue;
+    const v = value as Partial<CueVoicing>;
+    const entry: CueVoicing = {
+      ...(typeof v.spoken === "string" && v.spoken.trim() ? { spoken: v.spoken } : {}),
+      ...(typeof v.direction === "string" && v.direction.trim() ? { direction: v.direction } : {}),
+    };
+    if (entry.spoken !== undefined || entry.direction !== undefined) voicing[cueId] = entry;
+  }
+  return voicing;
+}
+
 const ENGINES: TtsEngine[] = ["turbo", "standard"];
 
 function coerceCast(raw: unknown): Record<string, CastVoice> {
@@ -251,6 +268,7 @@ function coerceVoiceover(raw: unknown): Voiceover {
       duck: { ...DEFAULT_DUCK },
       unduckedCueIds: [],
       cast: coerceCast(v.cast),
+      voicing: coerceVoicing(v.voicing),
     },
     {
       enabled: rawDuck.enabled !== false,

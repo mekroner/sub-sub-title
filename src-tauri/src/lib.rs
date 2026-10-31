@@ -3,6 +3,7 @@ mod ai;
 mod beats;
 mod chat;
 mod dictionary;
+mod direct;
 mod engine;
 mod error;
 mod files;
@@ -66,6 +67,7 @@ pub fn run() {
             agent::ai_agent_step,
             vision::ai_describe_frame,
             beats::ai_story_beats,
+            direct::ai_direct_line,
             fill::ai_fill,
             ghost::ai_ghost,
             ghost::cancel_ghost,

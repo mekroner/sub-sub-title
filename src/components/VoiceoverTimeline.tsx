@@ -68,6 +68,8 @@ interface Props {
   clipWarnings: Map<string, "stale" | "overrun">;
   /** Right-click on a cue block: the cue and where to open the menu. */
   onContextMenuCue: (cueId: string, x: number, y: number) => void;
+  /** Double-click on a cue block: open its voice line for editing. */
+  onEditCueLine: (cueId: string) => void;
   /**
    * A cue dragged to new times; only its timing changes. `kind` says whether
    * the whole cue moved or one edge did; `drag` identifies the gesture.
@@ -157,6 +159,7 @@ export function VoiceoverTimeline({
   onExport,
   clipWarnings,
   onContextMenuCue,
+  onEditCueLine,
   onRetimeCue,
 }: Props) {
   const unducked = useMemo(() => new Set(voiceover.unduckedCueIds), [voiceover.unduckedCueIds]);
@@ -668,9 +671,12 @@ export function VoiceoverTimeline({
                       e.stopPropagation();
                       onContextMenuCue(cue.id, e.clientX, e.clientY);
                     }}
+                    // Its two clicks toggle the duck off and back on, so a
+                    // double-click leaves the duck as it was.
+                    onDoubleClick={() => onEditCueLine(cue.id)}
                     title={`${speaker ? `${speaker.name}: ` : ""}${cue.text}\n${
                       ducked ? "Ducked — click to let the original through" : "Not ducked — click to duck"
-                    }\nDrag to move, drag an edge to trim · right-click for its voice line`}
+                    }\nDouble-click to edit its voice line · drag to move, drag an edge to trim · right-click for more`}
                   >
                     {cue.text}
                   </div>

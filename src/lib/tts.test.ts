@@ -11,9 +11,11 @@ import {
   pendingCues,
   placeTake,
   referenceSegments,
+  renderLine,
   removeTake,
   selectTake,
   setVoice,
+  setVoicing,
   speechText,
   takePath,
   trackForVoice,
@@ -183,5 +185,64 @@ describe("references", () => {
       "D:\\clips\\film.voiceover\\abcdef12-42.wav",
     );
     expect(takePath("/home/a", "film", "abc", 1)).toBe("/home/a/film.voiceover/abc-1.wav");
+  });
+});
+
+describe("voice scripts and direction", () => {
+  const line = cue("c1", 4, 6, "I'm fine.");
+
+  it("speaks the cue's own text until a script is written", () => {
+    expect(renderLine(defaultVoiceover(), line).text).toBe("I'm fine.");
+    const vo = setVoicing(defaultVoiceover(), "c1", line.text, { spoken: "[sigh] I'm fine." });
+    expect(renderLine(vo, line).text).toBe("[sigh] I'm fine.");
+  });
+
+  it("drops a script identical to the cue, and an entry with nothing in it", () => {
+    let vo = setVoicing(defaultVoiceover(), "c1", line.text, { spoken: "I'm fine." });
+    expect(vo.voicing).toEqual({});
+    vo = setVoicing(vo, "c1", line.text, { direction: "tired" });
+    vo = setVoicing(vo, "c1", line.text, { direction: " " });
+    expect(vo.voicing).toEqual({});
+  });
+
+  it("keeps a trailing space while the script is being typed", () => {
+    const vo = setVoicing(defaultVoiceover(), "c1", line.text, { spoken: "I'm fine. " });
+    expect(vo.voicing.c1?.spoken).toBe("I'm fine. ");
+    // It still speaks, and counts as, the cue's own line.
+    expect(renderLine(vo, line).text).toBe("I'm fine.");
+  });
+
+  it("turns direction into tags for Turbo, without doubling one already written", () => {
+    let vo = setVoicing(defaultVoiceover(), "c1", line.text, {
+      spoken: "[whispering] I'm fine.",
+      direction: "whispered, laughing",
+    });
+    expect(renderLine(vo, line).text).toBe("[laugh] [whispering] I'm fine.");
+    vo = setVoicing(vo, "c1", line.text, { spoken: undefined });
+    expect(renderLine(vo, line).text).toBe("[whispering] [laugh] I'm fine.");
+  });
+
+  it("gives Expressive an intensity instead, and no tags to read aloud", () => {
+    let vo = setVoice(defaultVoiceover(), "s1", { engine: "standard", exaggeration: 0.7 });
+    vo = setVoicing(vo, "c1", line.text, { spoken: "[sigh] I'm fine.", direction: "screaming" });
+    expect(renderLine(vo, line)).toMatchObject({ text: "I'm fine.", exaggeration: 1.6 });
+    vo = setVoicing(vo, "c1", line.text, { direction: "slowly" });
+    expect(renderLine(vo, line).exaggeration).toBe(0.7);
+  });
+
+  it("marks a spoken line stale when its script or direction changes", () => {
+    const take = { file: "a.wav", seed: 1, duration: 1 };
+    const vo = placeTake(defaultVoiceover(), line, take);
+    expect(lineState(vo, line)).toBe("current");
+    expect(lineState(setVoicing(vo, "c1", line.text, { direction: "angry" }), line)).toBe("stale");
+    expect(lineState(setVoicing(vo, "c1", line.text, { direction: "slowly" }), line)).toBe("current");
+    expect(lineState(setVoicing(vo, "c1", line.text, { spoken: "Fine." }), line)).toBe("stale");
+  });
+
+  it("counts a silent cue with a script as something to say", () => {
+    const silent = cue("c2", 8, 9, "");
+    const vo = setVoicing(defaultVoiceover(), "c2", "", { spoken: "[sigh]" });
+    expect(pendingCues(vo, [silent]).map((c) => c.id)).toEqual(["c2"]);
+    expect(pendingCues(defaultVoiceover(), [silent])).toEqual([]);
   });
 });

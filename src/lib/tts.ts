@@ -4,7 +4,8 @@
  * `Voiceover`, like the rest of the mix.
  */
 
-import type { CastVoice, ClipTake, Cue, VoiceClip, Voiceover } from "../types";
+import type { CastVoice, ClipTake, Cue, CueVoicing, VoiceClip, Voiceover } from "../types";
+import { directionIntensity, directionTags, hasTag, stripTags } from "./direction";
 import { resizeCue, sortCues } from "./cues";
 import { makeId } from "./ids";
 import { addTrack, clipEnd, voiceTracks } from "./voiceover";
@@ -66,12 +67,75 @@ export function clipForCue(voiceover: Voiceover, cueId: string): VoiceClip | und
 
 export type LineState = "missing" | "stale" | "current";
 
+export function voicingFor(voiceover: Voiceover, cueId: string): CueVoicing {
+  return voiceover.voicing[cueId] ?? {};
+}
+
+/**
+ * Updates a cue's voice script. Blank fields are dropped, and so is spoken
+ * text identical to the cue's own (`cueText`), so an entry exists only while
+ * it says something the cue does not.
+ */
+export function setVoicing(
+  voiceover: Voiceover,
+  cueId: string,
+  cueText: string,
+  patch: Partial<CueVoicing>,
+): Voiceover {
+  const next: CueVoicing = { ...voicingFor(voiceover, cueId), ...patch };
+  // Exactly the cue, not merely equal once trimmed: otherwise the space typed
+  // after "Fine." would make the script match, vanish, and take the space.
+  if (!next.spoken?.trim() || next.spoken === cueText) delete next.spoken;
+  if (!next.direction?.trim()) delete next.direction;
+  const voicing = { ...voiceover.voicing };
+  if (next.spoken === undefined && next.direction === undefined) delete voicing[cueId];
+  else voicing[cueId] = next;
+  return { ...voiceover, voicing };
+}
+
+export interface RenderedLine {
+  /** Exactly what the engine is asked to say. */
+  text: string;
+  /** The Expressive model's intensity for this line. */
+  exaggeration: number;
+  voice: CastVoice;
+}
+
+/**
+ * What a cue's line comes out as for its voice's model: its spoken text (or
+ * its own), with the direction turned into tags for Turbo, or into an
+ * intensity for Expressive — which reads tags aloud, so it gets none.
+ */
+export function renderLine(voiceover: Voiceover, cue: Cue): RenderedLine {
+  const voice = voiceFor(voiceover, castKey(cue));
+  const voicing = voicingFor(voiceover, cue.id);
+  const base = speechText({ text: voicing.spoken ?? cue.text });
+  const direction = voicing.direction ?? "";
+  if (voice.engine === "standard") {
+    return {
+      text: stripTags(base),
+      exaggeration: directionIntensity(direction) ?? voice.exaggeration,
+      voice,
+    };
+  }
+  const tags = directionTags(direction).filter((tag) => !hasTag(base, tag));
+  return {
+    text: [...tags, base].filter(Boolean).join(" "),
+    exaggeration: voice.exaggeration,
+    voice,
+  };
+}
+
+/** `voiceKey` with the line's own intensity, which direction can change. */
+function renderedKey(line: RenderedLine): string {
+  return voiceKey({ ...line.voice, exaggeration: line.exaggeration });
+}
+
 export function lineState(voiceover: Voiceover, cue: Cue): LineState {
   const clip = clipForCue(voiceover, cue.id);
   if (!clip?.source) return "missing";
-  const fresh =
-    clip.source.text === speechText(cue) &&
-    clip.source.voiceKey === voiceKey(voiceFor(voiceover, castKey(cue)));
+  const line = renderLine(voiceover, cue);
+  const fresh = clip.source.text === line.text && clip.source.voiceKey === renderedKey(line);
   return fresh ? "current" : "stale";
 }
 
@@ -93,7 +157,15 @@ export function overrun(clip: VoiceClip, cues: Cue[]): number {
 
 /** Cues with something to say whose line is missing or out of date. */
 export function pendingCues(voiceover: Voiceover, cues: Cue[]): Cue[] {
-  return cues.filter((cue) => speechText(cue) !== "" && lineState(voiceover, cue) !== "current");
+  return cues.filter((cue) => hasSomethingToSay(voiceover, cue) && lineState(voiceover, cue) !== "current");
+}
+
+/**
+ * Whether a cue has a line to speak. A cue with an empty subtitle can still
+ * have spoken text — a lone [sigh], say.
+ */
+export function hasSomethingToSay(voiceover: Voiceover, cue: Cue): boolean {
+  return renderLine(voiceover, cue).text !== "";
 }
 
 /**
@@ -117,13 +189,19 @@ export function trackForVoice(
  * Places a freshly generated take. A cue that already has a clip gets the
  * take added to it — keeping where the clip was moved to, its track and its
  * gain — and plays it untrimmed; otherwise a new clip starts at the cue.
+ * `line` is what was actually spoken; it defaults to the line as it reads now.
  */
-export function placeTake(voiceover: Voiceover, cue: Cue, take: ClipTake): Voiceover {
+export function placeTake(
+  voiceover: Voiceover,
+  cue: Cue,
+  take: ClipTake,
+  line: RenderedLine = renderLine(voiceover, cue),
+): Voiceover {
   const key = castKey(cue);
   const source = {
     cueId: cue.id,
-    text: speechText(cue),
-    voiceKey: voiceKey(voiceFor(voiceover, key)),
+    text: line.text,
+    voiceKey: renderedKey(line),
   };
   const existing = clipForCue(voiceover, cue.id);
   if (existing) {
@@ -151,7 +229,8 @@ export function placeTake(voiceover: Voiceover, cue: Cue, take: ClipTake): Voice
     id: makeId(),
     trackId: placed.trackId,
     file: take.file,
-    name: source.text.length > 40 ? `${source.text.slice(0, 39)}…` : source.text,
+    // Named after the subtitle, not the script: tags make poor labels.
+    name: clipName(speechText(cue) || stripTags(source.text)),
     start: cue.start,
     offset: 0,
     duration: take.duration,
@@ -269,4 +348,8 @@ export function referencePath(dir: string, stem: string, key: string): string {
   const sep = dir.includes("\\") ? "\\" : "/";
   const name = key === NO_SPEAKER ? "unassigned" : key.slice(0, 8);
   return `${dir}${sep}${stem}.voiceover${sep}reference-${name}-${Date.now().toString(36)}.wav`;
+}
+
+function clipName(text: string): string {
+  return text.length > 40 ? `${text.slice(0, 39)}…` : text;
 }
