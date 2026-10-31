@@ -105,6 +105,7 @@ import {
 } from "./lib/voiceover";
 import {
   clipForCue,
+  fitCuesToLines,
   isClipStale,
   overrun,
   referencePath,
@@ -1017,6 +1018,34 @@ export default function App() {
     [selectedClip, cues],
   );
 
+  /**
+   * A cue dragged on the Voiceover timeline. The same neighbour rules as the
+   * waveform, but always the one cue — the Voiceover tab has no cue selection
+   * — and one undo step for the whole drag, however long it is held.
+   */
+  const retimeCueInVoiceover = useCallback(
+    (id: string, start: number, end: number, kind: "move" | "resize", drag: string) =>
+      update(
+        (current) => {
+          const next =
+            kind === "resize"
+              ? resizeCue(current.cues, id, start, end, duration, settings.minGap)
+              : moveCueTo(current.cues, id, start, duration, settings.minGap);
+          return next === current.cues ? current : { ...current, cues: next };
+        },
+        { mergeKey: `cuedrag:${drag}`, mergeWindowMs: Infinity },
+      ),
+    [update, duration, settings.minGap],
+  );
+
+  const fitCues = useCallback(
+    (ids?: Set<string>) =>
+      setCues((list) =>
+        fitCuesToLines(list, project.voiceover, duration, settings.minGap, ids),
+      ),
+    [setCues, project.voiceover, duration, settings.minGap],
+  );
+
   /** Right-click on a cue in the Voiceover tab: its voice line and its duck. */
   const openVoiceCueMenu = useCallback(
     (cueId: string, x: number, y: number) => {
@@ -1059,6 +1088,20 @@ export default function App() {
           { kind: "separator" },
           {
             kind: "item",
+            label: "Fit cue to its voice line",
+            detail: clip ? undefined : "It has no line yet",
+            disabled: !clip,
+            onSelect: () => fitCues(new Set([cue.id])),
+          },
+          {
+            kind: "item",
+            label: "Fit all cues to their lines",
+            disabled: project.voiceover.clips.every((c) => !c.source),
+            onSelect: () => fitCues(),
+          },
+          { kind: "separator" },
+          {
+            kind: "item",
             label: "Duck under this cue",
             checked: !project.voiceover.unduckedCueIds.includes(cue.id),
             onSelect: () => setVoiceover((v) => toggleCueDuck(v, cue.id)),
@@ -1066,7 +1109,7 @@ export default function App() {
         ],
       });
     },
-    [cues, project.voiceover, voices, paths, setVoiceover],
+    [cues, project.voiceover, voices, paths, setVoiceover, fitCues],
   );
 
   /** Text for the chat box, set from elsewhere — the Story panel's ✦ Story. */
@@ -2851,6 +2894,7 @@ export default function App() {
               onExport={canExportAudio ? () => setShowExportAudio(true) : undefined}
               clipWarnings={clipWarnings}
               onContextMenuCue={openVoiceCueMenu}
+              onRetimeCue={retimeCueInVoiceover}
               onToggleCueDuck={(cueId) => setVoiceover((v) => toggleCueDuck(v, cueId))}
               onDuckChange={(patch) =>
                 setVoiceover((v) => patchDuck(v, patch), `duck:${Object.keys(patch).join()}`)

@@ -45,10 +45,13 @@ const WINDOW_PADDING_SECONDS = 20;
 export const MIN_ZOOM = 5;
 export const MAX_ZOOM = 600;
 /** Multiplier per wheel notch; gentler than the keyboard's 1.4x. */
-const WHEEL_ZOOM_STEP = 1.15;
+export const WHEEL_ZOOM_STEP = 1.15;
 
-/** Wheel deltas arrive in pixels, lines or pages depending on the device. */
-function wheelPixels(event: WheelEvent): number {
+/**
+ * Wheel deltas arrive in pixels, lines or pages depending on the device.
+ * Shared with the Voiceover timeline, so both tabs scroll and zoom alike.
+ */
+export function wheelPixels(event: WheelEvent): number {
   // Trackpads report horizontal intent in deltaX; take whichever dominates.
   const raw = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
   if (event.deltaMode === 1) return raw * 16; // lines

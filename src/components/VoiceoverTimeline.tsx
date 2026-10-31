@@ -26,7 +26,7 @@ import {
   type TrackPatch,
 } from "../lib/voiceover";
 import { CLIP_PEAKS_PER_SECOND } from "../audio/mixer";
-import { MAX_ZOOM, MIN_ZOOM } from "./WaveformPane";
+import { MAX_ZOOM, MIN_ZOOM, WHEEL_ZOOM_STEP, wheelPixels } from "./WaveformPane";
 
 interface Props {
   voiceover: Voiceover;
@@ -68,6 +68,17 @@ interface Props {
   clipWarnings: Map<string, "stale" | "overrun">;
   /** Right-click on a cue block: the cue and where to open the menu. */
   onContextMenuCue: (cueId: string, x: number, y: number) => void;
+  /**
+   * A cue dragged to new times; only its timing changes. `kind` says whether
+   * the whole cue moved or one edge did; `drag` identifies the gesture.
+   */
+  onRetimeCue: (
+    id: string,
+    start: number,
+    end: number,
+    kind: "move" | "resize",
+    drag: string,
+  ) => void;
 }
 
 const RULER_HEIGHT = 22;
@@ -94,9 +105,12 @@ const TAIL_SECONDS = 10;
 /** Pointer distance from a clip edge that grabs the edge instead of the clip. */
 const EDGE_GRAB_PX = 6;
 const SNAP_PX = 8;
+/** A cue is short and its edges sit close together, so its grab zone is smaller. */
+const CUE_EDGE_PX = 5;
+/** Movement under this is still a click (which toggles the duck), not a drag. */
+const CLICK_SLOP_PX = 3;
 /** Cue blocks this far outside the view are not rendered at all. */
 const WINDOW_PADDING_PX = 400;
-const WHEEL_ZOOM_STEP = 1.15;
 /** Ruler steps, in seconds; the smallest that leaves room for a label wins. */
 const TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800];
 const MIN_TICK_PX = 70;
@@ -143,6 +157,7 @@ export function VoiceoverTimeline({
   onExport,
   clipWarnings,
   onContextMenuCue,
+  onRetimeCue,
 }: Props) {
   const unducked = useMemo(() => new Set(voiceover.unduckedCueIds), [voiceover.unduckedCueIds]);
   /** Tracks whose curve is being edited. UI state, not part of the project. */
@@ -254,17 +269,18 @@ export function VoiceoverTimeline({
     }
   }, [currentTime, zoom, follow, playing]);
 
-  // Wheel: zoom with Ctrl, otherwise pan. Not a React handler, because React
-  // registers wheel listeners as passive and the page would scroll as well.
+  // Wheel: Alt to zoom at the pointer, otherwise pan — the Subtitles
+  // waveform's gestures. Not a React handler, because React registers wheel
+  // listeners as passive and the page would scroll as well.
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      const delta = wheelPixels(e);
       if (delta === 0) return;
       e.preventDefault();
-      if (!e.ctrlKey) {
-        el.scrollLeft += e.deltaMode === 1 ? delta * 16 : delta;
+      if (!e.altKey) {
+        el.scrollLeft += delta;
         return;
       }
       const rect = el.getBoundingClientRect();
@@ -448,6 +464,76 @@ export function VoiceoverTimeline({
     drag.current = null;
   };
 
+  // --- Pointer: cue gestures ------------------------------------------------
+  // A cue's text cannot change here, but its timing can, so it can be lined
+  // up with the voice line generated for it. A press that never moves is
+  // still a click, which toggles the cue's duck.
+  const cueDrag = useRef<{
+    id: string;
+    mode: DragMode;
+    key: string;
+    pointerX: number;
+    origin: Cue;
+    moved: boolean;
+  } | null>(null);
+
+  const startCueDrag = (e: ReactPointerEvent<HTMLDivElement>, cue: Cue) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const grabbable = rect.width > CUE_EDGE_PX * 3;
+    const mode: DragMode =
+      grabbable && e.clientX - rect.left <= CUE_EDGE_PX
+        ? "start"
+        : grabbable && rect.right - e.clientX <= CUE_EDGE_PX
+          ? "end"
+          : "move";
+    e.currentTarget.setPointerCapture(e.pointerId);
+    cueDrag.current = {
+      id: cue.id,
+      mode,
+      key: `${cue.id}:${mode}:${Date.now()}`,
+      pointerX: e.clientX,
+      origin: cue,
+      moved: false,
+    };
+  };
+
+  const moveCueDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = cueDrag.current;
+    if (!d) return;
+    if (!d.moved && Math.abs(e.clientX - d.pointerX) < CLICK_SLOP_PX) return;
+    d.moved = true;
+    const delta = (e.clientX - d.pointerX) / zoom;
+    // Voice lines and the playhead are what a cue is lined up with here.
+    const candidates = [currentTime];
+    for (const clip of voiceover.clips) candidates.push(clip.start, clipEnd(clip));
+    const snap = (t: number) => (e.altKey ? t : snapTime(t, candidates, SNAP_PX / zoom));
+    const { start, end } = d.origin;
+    const length = end - start;
+
+    if (d.mode === "move") {
+      const raw = Math.max(0, start + delta);
+      const byHead = snap(raw);
+      const byTail = snap(raw + length) - length;
+      const headJump = byHead === raw ? Infinity : Math.abs(byHead - raw);
+      const tailJump = byTail === raw ? Infinity : Math.abs(byTail - raw);
+      const next =
+        headJump === Infinity && tailJump === Infinity ? raw : headJump <= tailJump ? byHead : byTail;
+      onRetimeCue(d.id, next, next + length, "move", d.key);
+    } else if (d.mode === "start") {
+      onRetimeCue(d.id, snap(start + delta), end, "resize", d.key);
+    } else {
+      onRetimeCue(d.id, start, snap(end + delta), "resize", d.key);
+    }
+  };
+
+  const endCueDrag = () => {
+    const d = cueDrag.current;
+    cueDrag.current = null;
+    if (d && !d.moved) onToggleCueDuck(d.id);
+  };
+
   // --- Render -------------------------------------------------------------
   const visibleFrom = (view.left - WINDOW_PADDING_PX) / zoom;
   const visibleTo = (view.left + view.width + WINDOW_PADDING_PX) / zoom;
@@ -569,12 +655,13 @@ export function VoiceoverTimeline({
                       color: ducked ? contrastText(color) : "var(--text-dim)",
                       borderColor: color,
                     }}
-                    // The text itself is read-only here; a click toggles the
-                    // duck and a right-click offers the voice line.
-                    onPointerDown={(e) => {
-                      if (e.button !== 0) return;
-                      e.stopPropagation();
-                      onToggleCueDuck(cue.id);
+                    // The text is read-only here. A click toggles the duck, a
+                    // drag retimes the cue, a right-click offers its line.
+                    onPointerDown={(e) => startCueDrag(e, cue)}
+                    onPointerMove={moveCueDrag}
+                    onPointerUp={endCueDrag}
+                    onPointerCancel={() => {
+                      cueDrag.current = null;
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
@@ -583,7 +670,7 @@ export function VoiceoverTimeline({
                     }}
                     title={`${speaker ? `${speaker.name}: ` : ""}${cue.text}\n${
                       ducked ? "Ducked — click to let the original through" : "Not ducked — click to duck"
-                    }\nRight-click to generate its voice line`}
+                    }\nDrag to move, drag an edge to trim · right-click for its voice line`}
                   >
                     {cue.text}
                   </div>

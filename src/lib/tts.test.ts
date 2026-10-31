@@ -4,6 +4,7 @@ import type { Cue } from "../types";
 import {
   DEFAULT_VOICE,
   NO_SPEAKER,
+  fitCuesToLines,
   isClipStale,
   lineState,
   overrun,
@@ -81,6 +82,25 @@ describe("generated lines", () => {
 
     const back = selectTake(vo, vo.clips[0].id, 0).clips[0];
     expect(back).toMatchObject({ file: "a.wav", duration: 1.5, offset: 0 });
+  });
+
+  it("fits cues to their lines, leaving their text and their neighbours alone", () => {
+    const cues = [cue("a", 1, 2, "One"), cue("b", 3, 4, "Two"), cue("c", 8, 9, "Three")];
+    let vo = placeTake(defaultVoiceover(), cues[0], take("a.wav", 1.5));
+    vo = moveClip(vo, vo.clips[0].id, 0.8);
+    // b's line is long enough to reach into c's room.
+    vo = placeTake(vo, cues[1], take("b.wav", 6));
+
+    const fitted = fitCuesToLines(cues, vo, 60, 0.1);
+    expect(fitted[0]).toMatchObject({ start: 0.8, end: 2.3, text: "One" });
+    // Stopped short of c, minus the gap.
+    expect(fitted[1].start).toBe(3);
+    expect(fitted[1].end).toBeCloseTo(7.9, 9);
+    // c has no line and does not move.
+    expect(fitted[2]).toEqual(cues[2]);
+
+    const onlyA = fitCuesToLines(cues, vo, 60, 0.1, new Set(["a"]));
+    expect(onlyA[1]).toEqual(cues[1]);
   });
 
   it("deletes a take, falling back to a neighbour, and the clip with its last take", () => {

@@ -5,6 +5,7 @@
  */
 
 import type { CastVoice, ClipTake, Cue, VoiceClip, Voiceover } from "../types";
+import { resizeCue, sortCues } from "./cues";
 import { makeId } from "./ids";
 import { addTrack, clipEnd, voiceTracks } from "./voiceover";
 
@@ -178,6 +179,30 @@ export function selectTake(voiceover: Voiceover, clipId: string, index: number):
       };
     }),
   };
+}
+
+/**
+ * Retimes cues to span their generated lines exactly, so the subtitle shows
+ * while the voice speaks. Only the timing changes; each cue stays inside the
+ * room its neighbours leave it (with `minGap`), so a line that overlaps the
+ * next cue fits as far as it can. `ids` limits which cues move; by default
+ * every cue that has a line does.
+ */
+export function fitCuesToLines(
+  cues: Cue[],
+  voiceover: Voiceover,
+  duration: number,
+  minGap: number,
+  ids?: Set<string>,
+): Cue[] {
+  let next = cues;
+  for (const cue of sortCues(cues)) {
+    if (ids && !ids.has(cue.id)) continue;
+    const clip = clipForCue(voiceover, cue.id);
+    if (!clip) continue;
+    next = resizeCue(next, cue.id, clip.start, clipEnd(clip), duration, minGap);
+  }
+  return next;
 }
 
 /**

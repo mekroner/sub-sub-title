@@ -2782,3 +2782,27 @@ button.fill-alt.on {
 .clip-take-delete:hover {
   color: var(--danger);
 }
+
+/* Cue blocks are draggable in the Voiceover tab: the body moves, the edges trim. */
+.vo-cue {
+  cursor: grab;
+  touch-action: none;
+}
+.vo-cue:active {
+  cursor: grabbing;
+}
+.vo-cue::before,
+.vo-cue::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: ew-resize;
+}
+.vo-cue::before {
+  left: 0;
+}
+.vo-cue::after {
+  right: 0;
+}
