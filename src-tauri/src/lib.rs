@@ -16,6 +16,7 @@ mod render;
 mod settings;
 mod spelling;
 mod transcribe;
+mod tts;
 mod vision;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,6 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(render::RenderState::default())
         .manage(mixdown::MixdownState::default())
+        .manage(tts::TtsState::default())
         .manage(spelling::SpellState::default())
         .manage(proofread::ProofreadState::default())
         .manage(transcribe::TranscribeState::default())
@@ -73,6 +75,12 @@ pub fn run() {
             render::cancel_render,
             mixdown::mixdown_voiceover,
             mixdown::cancel_mixdown,
+            tts::tts_status,
+            tts::install_tts,
+            tts::cancel_tts_install,
+            tts::tts_generate,
+            tts::tts_unload,
+            tts::tts_extract_reference,
             spelling::check_cues,
             proofread::ai_proofread,
             proofread::cancel_proofread,

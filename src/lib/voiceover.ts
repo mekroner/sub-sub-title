@@ -41,6 +41,7 @@ export function defaultVoiceover(): Voiceover {
     clips: [],
     duck: { ...DEFAULT_DUCK },
     unduckedCueIds: [],
+    cast: {},
   };
 }
 

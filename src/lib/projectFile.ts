@@ -5,8 +5,12 @@
  */
 
 import type {
+  CastVoice,
+  ClipSource,
+  ClipTake,
   Cue,
   DuckSettings,
+  TtsEngine,
   GainPoint,
   Project,
   ProjectFile,
@@ -18,6 +22,7 @@ import type {
   Voiceover,
 } from "../types";
 import { sortCues } from "./cues";
+import { DEFAULT_VOICE } from "./tts";
 import { makeId } from "./ids";
 import {
   DEFAULT_DUCK,
@@ -160,7 +165,54 @@ function coerceClip(raw: unknown): VoiceClip | null {
     duration,
     sourceDuration,
     gainDb: clampDb(finite(c.gainDb, 0)),
+    ...coerceSource(c.source),
+    ...coerceTakes(c.takes),
   };
+}
+
+function coerceSource(raw: unknown): { source?: ClipSource } {
+  if (typeof raw !== "object" || raw === null) return {};
+  const s = raw as Partial<ClipSource>;
+  if (typeof s.cueId !== "string" || typeof s.text !== "string") return {};
+  return {
+    source: {
+      cueId: s.cueId,
+      text: s.text,
+      voiceKey: typeof s.voiceKey === "string" ? s.voiceKey : "",
+    },
+  };
+}
+
+function coerceTakes(raw: unknown): { takes?: ClipTake[] } {
+  if (!Array.isArray(raw)) return {};
+  const takes = raw.flatMap((t): ClipTake[] => {
+    if (typeof t !== "object" || t === null) return [];
+    const take = t as Partial<ClipTake>;
+    if (typeof take.file !== "string" || !take.file) return [];
+    const duration = finite(take.duration, 0);
+    return duration > 0 ? [{ file: take.file, seed: finite(take.seed, 0), duration }] : [];
+  });
+  return takes.length ? { takes } : {};
+}
+
+const ENGINES: TtsEngine[] = ["turbo", "standard"];
+
+function coerceCast(raw: unknown): Record<string, CastVoice> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const cast: Record<string, CastVoice> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== "object" || value === null) continue;
+    const v = value as Partial<CastVoice>;
+    cast[key] = {
+      engine: ENGINES.includes(v.engine as TtsEngine) ? (v.engine as TtsEngine) : DEFAULT_VOICE.engine,
+      exaggeration: Math.min(2, Math.max(0.25, finite(v.exaggeration, DEFAULT_VOICE.exaggeration))),
+      cfgWeight: Math.min(1, Math.max(0, finite(v.cfgWeight, DEFAULT_VOICE.cfgWeight))),
+      temperature: Math.min(1.5, Math.max(0.05, finite(v.temperature, DEFAULT_VOICE.temperature))),
+      ...(typeof v.reference === "string" && v.reference ? { reference: v.reference } : {}),
+      ...(typeof v.trackId === "string" && v.trackId ? { trackId: v.trackId } : {}),
+    };
+  }
+  return cast;
 }
 
 /**
@@ -193,7 +245,13 @@ function coerceVoiceover(raw: unknown): Voiceover {
     typeof v.duck === "object" && v.duck !== null ? (v.duck as Partial<DuckSettings>) : {};
   // patchDuck clamps every field, so a hand-edited value cannot escape the range.
   const withDuck = patchDuck(
-    { tracks: [original, ...voices], clips, duck: { ...DEFAULT_DUCK }, unduckedCueIds: [] },
+    {
+      tracks: [original, ...voices],
+      clips,
+      duck: { ...DEFAULT_DUCK },
+      unduckedCueIds: [],
+      cast: coerceCast(v.cast),
+    },
     {
       enabled: rawDuck.enabled !== false,
       depthDb: finite(rawDuck.depthDb, DEFAULT_DUCK.depthDb),

@@ -17,6 +17,8 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { RenderDialog } from "./components/RenderDialog";
 import { ExportAudioDialog } from "./components/ExportAudioDialog";
+import { TtsInstallDialog } from "./components/TtsInstallDialog";
+import { CastPanel } from "./components/CastPanel";
 import {
   DEFAULT_SIDE_WIDTH,
   MAX_SIDE_WIDTH,
@@ -47,6 +49,7 @@ import { usePasteText } from "./hooks/usePasteText";
 import { useCueSelection } from "./hooks/useCueSelection";
 import { useSpellcheck } from "./hooks/useSpellcheck";
 import { useGhostCompletion } from "./hooks/useGhostCompletion";
+import { useVoiceGeneration } from "./hooks/useVoiceGeneration";
 
 import * as api from "./lib/api";
 import { errorMessage } from "./lib/api";
@@ -100,6 +103,17 @@ import {
   type ClipPatch,
   type TrackPatch,
 } from "./lib/voiceover";
+import {
+  clipForCue,
+  isClipStale,
+  overrun,
+  referencePath,
+  referenceSegments,
+  removeTake,
+  selectTake,
+  setVoice,
+  speechText,
+} from "./lib/tts";
 import { DEFAULT_TARGET_CPS, clamp, durationForText, formatShort } from "./lib/time";
 import {
   DEFAULT_MIN_GAP,
@@ -941,6 +955,120 @@ export default function App() {
     [mixer, notify, setVoiceover],
   );
 
+  // --- Voices -------------------------------------------------------------
+  const voices = useVoiceGeneration({
+    voiceover: project.voiceover,
+    paths,
+    // A whole run is one undo step, however long it takes.
+    commit: dragVoiceover,
+    notify,
+  });
+  const [showTtsInstall, setShowTtsInstall] = useState(false);
+
+  const referenceFromFile = useCallback(
+    async (key: string) => {
+      const picked = await openDialog({
+        multiple: false,
+        filters: [{ name: "Audio", extensions: AUDIO_EXTENSIONS }],
+      });
+      if (typeof picked === "string") setVoiceover((v) => setVoice(v, key, { reference: picked }));
+    },
+    [setVoiceover],
+  );
+
+  /** Clones a speaker's voice from their own lines in the video. */
+  const referenceFromVideo = useCallback(
+    async (key: string) => {
+      if (!paths || !project.videoPath) return;
+      const segments = referenceSegments(cues, key);
+      const total = segments.reduce((sum, [a, b]) => sum + b - a, 0);
+      if (total < 5) {
+        notify(
+          `This speaker has only ${total.toFixed(1)} s of spoken lines; a voice needs more than 5 s. Use a file instead.`,
+          "error",
+        );
+        return;
+      }
+      try {
+        const out = referencePath(paths.dir, paths.stem, key);
+        const seconds = await api.ttsExtractReference(project.videoPath, segments, out);
+        setVoiceover((v) => setVoice(v, key, { reference: out }));
+        notify(`Cloning the voice from ${segments.length} lines (${seconds.toFixed(1)} s).`);
+      } catch (e) {
+        notify(errorMessage(e), "error");
+      }
+    },
+    [paths, project.videoPath, cues, setVoiceover, notify],
+  );
+
+  /** Generated clips whose line changed or which run past their cue. */
+  const clipWarnings = useMemo(() => {
+    const warnings = new Map<string, "stale" | "overrun">();
+    for (const clip of project.voiceover.clips) {
+      if (isClipStale(project.voiceover, clip, cues)) warnings.set(clip.id, "stale");
+      else if (overrun(clip, cues) > 0) warnings.set(clip.id, "overrun");
+    }
+    return warnings;
+  }, [project.voiceover, cues]);
+
+  const selectedCueOfClip = useMemo(
+    () =>
+      selectedClip?.source ? cues.find((c) => c.id === selectedClip.source!.cueId) ?? null : null,
+    [selectedClip, cues],
+  );
+
+  /** Right-click on a cue in the Voiceover tab: its voice line and its duck. */
+  const openVoiceCueMenu = useCallback(
+    (cueId: string, x: number, y: number) => {
+      const cue = cues.find((c) => c.id === cueId);
+      if (!cue) return;
+      const clip = clipForCue(project.voiceover, cue.id);
+      const installed = voices.status?.installed ?? false;
+      const silent = speechText(cue) === "";
+      const why = silent
+        ? "The cue has no text"
+        : !paths
+          ? "Open a video first"
+          : voices.job
+            ? "Busy speaking other lines"
+            : undefined;
+      setContextMenu({
+        x,
+        y,
+        entries: [
+          installed
+            ? {
+                kind: "item",
+                label: clip ? "Generate new take" : "Generate voice line",
+                detail: why,
+                disabled: why !== undefined,
+                onSelect: () => void voices.generate([cue]),
+              }
+            : {
+                kind: "item",
+                label: "Install voice engine…",
+                detail: "Needed to generate voice lines",
+                onSelect: () => setShowTtsInstall(true),
+              },
+          {
+            kind: "item",
+            label: "Select its clip",
+            disabled: !clip,
+            onSelect: () => clip && setSelectedClipId(clip.id),
+          },
+          { kind: "separator" },
+          {
+            kind: "item",
+            label: "Duck under this cue",
+            checked: !project.voiceover.unduckedCueIds.includes(cue.id),
+            onSelect: () => setVoiceover((v) => toggleCueDuck(v, cue.id)),
+          },
+        ],
+      });
+    },
+    [cues, project.voiceover, voices, paths, setVoiceover],
+  );
+
   /** Text for the chat box, set from elsewhere — the Story panel's ✦ Story. */
   const [chatPrefill, setChatPrefill] = useState<{ text: string; nonce: number } | null>(null);
 
@@ -1778,6 +1906,7 @@ export default function App() {
     showHelp ||
     showRender ||
     showExportAudio ||
+    showTtsInstall ||
     showProofread ||
     showTranscribe ||
     fillOpen !== null;
@@ -2555,6 +2684,23 @@ export default function App() {
 
         <aside className="side-column">
           {voiceoverMode ? (
+            <>
+            <CastPanel
+              voiceover={project.voiceover}
+              cues={cues}
+              speakers={speakers}
+              status={voices.status}
+              job={voices.job}
+              canGenerate={Boolean(paths)}
+              onInstall={() => setShowTtsInstall(true)}
+              onGenerate={(list) => void voices.generate(list)}
+              onStop={voices.stop}
+              onSetVoice={(key, patch) =>
+                setVoiceover((v) => setVoice(v, key, patch), `voice:${key}:${Object.keys(patch).join()}`)
+              }
+              onReferenceFromFile={(key) => void referenceFromFile(key)}
+              onReferenceFromVideo={(key) => void referenceFromVideo(key)}
+            />
             <ClipInspector
               clip={selectedClip}
               track={
@@ -2562,13 +2708,30 @@ export default function App() {
                   ? project.voiceover.tracks.find((t) => t.id === selectedClip.trackId) ?? null
                   : null
               }
+              cueText={selectedCueOfClip ? selectedCueOfClip.text : null}
+              stale={selectedClip ? clipWarnings.get(selectedClip.id) === "stale" : false}
+              overrun={selectedClip ? overrun(selectedClip, cues) : 0}
+              canSpeak={Boolean(voices.status?.installed && paths && !voices.job)}
               onPatch={(patch) => selectedClip && patchClipById(selectedClip.id, patch)}
               onMoveToPlayhead={() =>
                 selectedClip &&
                 setVoiceover((v) => moveClip(v, selectedClip.id, currentTime))
               }
+              onMoveToCue={() =>
+                selectedClip &&
+                selectedCueOfClip &&
+                setVoiceover((v) => moveClip(v, selectedClip.id, selectedCueOfClip.start))
+              }
+              onSelectTake={(index) =>
+                selectedClip && setVoiceover((v) => selectTake(v, selectedClip.id, index))
+              }
+              onRemoveTake={(index) =>
+                selectedClip && setVoiceover((v) => removeTake(v, selectedClip.id, index))
+              }
+              onNewTake={() => selectedCueOfClip && void voices.generate([selectedCueOfClip])}
               onRemove={() => selectedClip && removeClipById(selectedClip.id)}
             />
+            </>
           ) : (
           <>
           <SpeakerPanel
@@ -2686,6 +2849,8 @@ export default function App() {
               }
               duck={duckPoints}
               onExport={canExportAudio ? () => setShowExportAudio(true) : undefined}
+              clipWarnings={clipWarnings}
+              onContextMenuCue={openVoiceCueMenu}
               onToggleCueDuck={(cueId) => setVoiceover((v) => toggleCueDuck(v, cueId))}
               onDuckChange={(patch) =>
                 setVoiceover((v) => patchDuck(v, patch), `duck:${Object.keys(patch).join()}`)
@@ -2844,6 +3009,14 @@ export default function App() {
           assText={assText}
           duration={duration}
           onClose={() => setShowRender(false)}
+        />
+      )}
+
+      {showTtsInstall && (
+        <TtsInstallDialog
+          status={voices.status}
+          onInstalled={voices.refreshStatus}
+          onClose={() => setShowTtsInstall(false)}
         />
       )}
 

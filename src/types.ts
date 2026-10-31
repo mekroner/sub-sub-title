@@ -117,6 +117,42 @@ export interface VoiceClip {
   /** Length of the whole file, so a trim can never reach past its end. */
   sourceDuration: number;
   gainDb: number;
+  /** Set when the clip was generated from a cue rather than imported. */
+  source?: ClipSource;
+  /** Every take generated for the cue; `file` is the one in use. */
+  takes?: ClipTake[];
+}
+
+/** What a generated clip was spoken from, to tell when it has gone stale. */
+export interface ClipSource {
+  cueId: string;
+  /** The text as it was spoken. */
+  text: string;
+  /** `voiceKey` of the cast entry it was spoken with. */
+  voiceKey: string;
+}
+
+export interface ClipTake {
+  file: string;
+  seed: number;
+  duration: number;
+}
+
+/** "turbo" takes inline tags like [laugh]; "standard" has an emotion setting. */
+export type TtsEngine = "turbo" | "standard";
+
+/** How one speaker is voiced. */
+export interface CastVoice {
+  /** A clip of the voice to clone. Absent means the model's default voice. */
+  reference?: string;
+  engine: TtsEngine;
+  /** Standard engine only: 0.25 (flat) .. 2 (theatrical); 0.5 is neutral. */
+  exaggeration: number;
+  /** Standard engine only: how closely to follow the reference's pacing. */
+  cfgWeight: number;
+  temperature: number;
+  /** The voice track this speaker's lines land on; absent picks one. */
+  trackId?: string;
 }
 
 /** How the original track ducks under the cues. Applied live, never baked. */
@@ -142,6 +178,8 @@ export interface Voiceover {
    * exceptions are what is stored — a new or split cue ducks without asking.
    */
   unduckedCueIds: string[];
+  /** Voices by speaker id; `""` is the voice for cues with no speaker. */
+  cast: Record<string, CastVoice>;
 }
 
 export interface Project {
@@ -333,6 +371,44 @@ export interface MixdownResult {
 
 export interface MixdownProgress {
   fraction: number;
+}
+
+export interface TtsStatus {
+  installed: boolean;
+  version: string;
+  downloadBytes: number;
+  requiredFreeBytes: number;
+  /** 0 when unknown. */
+  diskFreeBytes: number;
+}
+
+export interface TtsInstallProgress {
+  step: number;
+  steps: number;
+  label: string;
+  detail: string;
+}
+
+/** "loading" while a model goes onto the GPU, then "ready". */
+export interface TtsEvent {
+  event: string;
+  detail: string;
+}
+
+export interface TtsRequest {
+  engine: TtsEngine;
+  text: string;
+  reference: string | null;
+  seed: number;
+  exaggeration: number;
+  cfgWeight: number;
+  temperature: number;
+  outputPath: string;
+}
+
+export interface TtsResult {
+  path: string;
+  duration: number;
 }
 
 /** Progress while the transcription engine is being downloaded and unpacked. */

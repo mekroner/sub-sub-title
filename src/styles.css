@@ -2597,3 +2597,188 @@ button.fill-alt.on {
   flex-direction: row;
   gap: 6px;
 }
+
+/* --- Voices ------------------------------------------------------------- */
+
+.cast-panel {
+  flex: 1;
+  min-height: 0;
+}
+.cast-install,
+.cast-job {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.cast-install .hint {
+  margin: 0;
+}
+.cast-install button {
+  align-self: flex-start;
+}
+.cast-job-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cast-job-line {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cast-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.cast-empty {
+  padding: 10px;
+}
+.cast-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.cast-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cast-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+.cast-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cast-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.cast-stale {
+  color: #e0a84a;
+}
+.cast-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.cast-field > span:first-child {
+  width: 52px;
+  flex: none;
+  color: var(--text-dim);
+}
+.cast-field select,
+.cast-field input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+.cast-reference {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cast-value {
+  width: 32px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.cast-actions {
+  display: flex;
+  gap: 4px;
+  padding-left: 58px;
+}
+
+/* The inspector sits under the cast and takes what it needs. */
+.layout.voiceover .clip-inspector {
+  flex: none;
+  max-height: 45%;
+}
+.clip-line {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.clip-line-text {
+  font-style: italic;
+}
+.clip-warning {
+  margin: 0;
+  font-size: 12px;
+  color: #e0a84a;
+}
+.clip-takes {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.clip-takes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.clip-take {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.clip-take-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.vo-clip.stale {
+  border-style: dashed;
+  border-color: #e0a84a;
+}
+.vo-clip.overrun {
+  border-right: 3px solid #e0a84a;
+}
+.vo-clip-warning {
+  color: #ffd27a;
+}
+
+.install-detail {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.install-error {
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.clip-take-delete {
+  padding: 0 5px;
+  color: var(--text-dim);
+}
+.clip-take-delete:hover {
+  color: var(--danger);
+}

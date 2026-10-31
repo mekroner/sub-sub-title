@@ -21,6 +21,9 @@ import type {
   SpellDialect,
   StoryBeatsRequest,
   ToolStatus,
+  TtsRequest,
+  TtsResult,
+  TtsStatus,
 } from "../types";
 
 export const readTextFile = (path: string) =>
@@ -133,6 +136,19 @@ export const mixdownVoiceover = (request: MixdownRequest) =>
   invoke<MixdownResult>("mixdown_voiceover", { request });
 
 export const cancelMixdown = () => invoke<void>("cancel_mixdown");
+
+export const ttsStatus = () => invoke<TtsStatus>("tts_status");
+export const installTts = () => invoke<void>("install_tts");
+export const cancelTtsInstall = () => invoke<void>("cancel_tts_install");
+export const ttsGenerate = (request: TtsRequest) =>
+  invoke<TtsResult>("tts_generate", { request });
+/** Stops the voice engine, freeing the GPU memory its model holds. */
+export const ttsUnload = () => invoke<void>("tts_unload");
+export const ttsExtractReference = (
+  videoPath: string,
+  segments: Array<[number, number]>,
+  outputPath: string,
+) => invoke<number>("tts_extract_reference", { videoPath, segments, outputPath });
 
 /** Filesystem checks only — safe to call whenever the dialog opens. */
 export const transcribeStatus = (model: string) =>

@@ -64,6 +64,10 @@ interface Props {
   onDuckAllCues: () => void;
   /** Opens the audio export; absent while it cannot run (no video or no ffmpeg). */
   onExport?: () => void;
+  /** Generated clips that need attention: their line changed, or they overrun. */
+  clipWarnings: Map<string, "stale" | "overrun">;
+  /** Right-click on a cue block: the cue and where to open the menu. */
+  onContextMenuCue: (cueId: string, x: number, y: number) => void;
 }
 
 const RULER_HEIGHT = 22;
@@ -137,6 +141,8 @@ export function VoiceoverTimeline({
   onDuckChange,
   onDuckAllCues,
   onExport,
+  clipWarnings,
+  onContextMenuCue,
 }: Props) {
   const unducked = useMemo(() => new Set(voiceover.unduckedCueIds), [voiceover.unduckedCueIds]);
   /** Tracks whose curve is being edited. UI state, not part of the project. */
@@ -563,16 +569,21 @@ export function VoiceoverTimeline({
                       color: ducked ? contrastText(color) : "var(--text-dim)",
                       borderColor: color,
                     }}
-                    // The text itself is read-only here; the duck is the one
-                    // thing a cue block changes.
+                    // The text itself is read-only here; a click toggles the
+                    // duck and a right-click offers the voice line.
                     onPointerDown={(e) => {
                       if (e.button !== 0) return;
                       e.stopPropagation();
                       onToggleCueDuck(cue.id);
                     }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onContextMenuCue(cue.id, e.clientX, e.clientY);
+                    }}
                     title={`${speaker ? `${speaker.name}: ` : ""}${cue.text}\n${
                       ducked ? "Ducked — click to let the original through" : "Not ducked — click to duck"
-                    }`}
+                    }\nRight-click to generate its voice line`}
                   >
                     {cue.text}
                   </div>
@@ -621,6 +632,7 @@ export function VoiceoverTimeline({
                     clip={clip}
                     // A lane in curve editing belongs to the curve's points.
                     passive={editingCurves.has(clip.trackId)}
+                    warning={clipWarnings.get(clip.id) ?? null}
                     top={lane.top + CLIP_INSET}
                     height={lane.height - CLIP_INSET * 2}
                     zoom={zoom}
@@ -1150,6 +1162,7 @@ function DraftNumber({
 function ClipBlock({
   clip,
   passive,
+  warning,
   top,
   height,
   zoom,
@@ -1162,6 +1175,7 @@ function ClipBlock({
 }: {
   clip: VoiceClip;
   passive: boolean;
+  warning: "stale" | "overrun" | null;
   top: number;
   height: number;
   zoom: number;
@@ -1197,15 +1211,26 @@ function ClipBlock({
 
   return (
     <div
-      className={`vo-clip${selected ? " selected" : ""}${passive ? " passive" : ""}`}
+      className={`vo-clip${selected ? " selected" : ""}${passive ? " passive" : ""}${
+        warning ? ` ${warning}` : ""
+      }`}
       style={{ left: clip.start * zoom, top, width, height }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      title={`${clip.name} · ${formatShort(clip.start)}–${formatShort(clipEnd(clip))}`}
+      title={`${clip.name} · ${formatShort(clip.start)}–${formatShort(clipEnd(clip))}${
+        warning === "stale"
+          ? "\nIts cue has changed since it was spoken."
+          : warning === "overrun"
+            ? "\nRuns past the end of its cue."
+            : ""
+      }`}
     >
-      <span className="vo-clip-name">{clip.name}</span>
+      <span className="vo-clip-name">
+        {warning && <span className="vo-clip-warning">⚠ </span>}
+        {clip.name}
+      </span>
       <canvas
         ref={canvasRef}
         className="vo-clip-wave"

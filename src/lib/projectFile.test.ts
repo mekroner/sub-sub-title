@@ -52,10 +52,26 @@ const project: Project = {
         duration: 2,
         sourceDuration: 3,
         gainDb: 3,
+        source: { cueId: "a", text: "Hello", voiceKey: "turbo||0.8" },
+        takes: [
+          { file: "D:/vo/old.wav", seed: 1, duration: 2.5 },
+          { file: "D:/vo/line1.wav", seed: 2, duration: 3 },
+        ],
       },
     ],
     duck: { enabled: false, depthDb: -20, attack: 0.1, release: 0.5, bridge: 1 },
     unduckedCueIds: ["b"],
+    cast: {
+      s1: {
+        engine: "standard",
+        exaggeration: 0.9,
+        cfgWeight: 0.3,
+        temperature: 0.7,
+        reference: "D:/vo/ada.wav",
+        trackId: "vo1",
+      },
+      "": { engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
+    },
   },
 };
 

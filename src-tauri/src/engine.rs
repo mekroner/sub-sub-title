@@ -150,7 +150,7 @@ pub struct EngineStatus {
 
 // --- Paths ------------------------------------------------------------------
 
-fn local_dir(app: &AppHandle) -> AppResult<PathBuf> {
+pub(crate) fn local_dir(app: &AppHandle) -> AppResult<PathBuf> {
     app.path()
         .app_local_data_dir()
         .map_err(|e| AppError::msg(format!("No application data directory: {e}")))
@@ -255,7 +255,7 @@ pub fn status(app: &AppHandle, model: &str) -> EngineStatus {
 }
 
 #[cfg(windows)]
-fn free_space(path: &Path) -> u64 {
+pub(crate) fn free_space(path: &Path) -> u64 {
     use std::os::windows::ffi::OsStrExt;
     // GetDiskFreeSpaceExW wants a directory that exists; walk up until one does,
     // since the engine directory may not have been created yet.
@@ -294,11 +294,11 @@ fn free_space(path: &Path) -> u64 {
 }
 
 #[cfg(not(windows))]
-fn free_space(_path: &Path) -> u64 {
+pub(crate) fn free_space(_path: &Path) -> u64 {
     0
 }
 
-fn human_bytes(bytes: u64) -> String {
+pub(crate) fn human_bytes(bytes: u64) -> String {
     const GB: f64 = 1024.0 * 1024.0 * 1024.0;
     const MB: f64 = 1024.0 * 1024.0;
     let b = bytes as f64;
@@ -524,7 +524,7 @@ fn sha256_file(path: &Path) -> AppResult<String> {
 /// bsdtar, shipped with Windows since 10 1803. The absolute path is deliberate:
 /// Git for Windows and MSYS both put a `tar` on PATH, and theirs is GNU tar,
 /// which cannot read 7z at all.
-fn tar_bin() -> String {
+pub(crate) fn tar_bin() -> String {
     match std::env::var("SystemRoot") {
         Ok(root) => format!("{root}\\System32\\tar.exe"),
         Err(_) => "tar".to_string(),
