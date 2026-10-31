@@ -1,22 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import type { Cue } from "../types";
+import type { Cue, Voiceover } from "../types";
 import {
   DEFAULT_VOICE,
+  GROUP_MAX_CHARS,
   NO_SPEAKER,
   fitCuesToLines,
-  isClipStale,
-  lineState,
+  lineGroups,
+  lineIndex,
   overrun,
-  pendingCues,
   placeTake,
+  proportionalMarks,
   referenceSegments,
-  renderLine,
   removeTake,
+  renderGroup,
+  renderLine,
   selectTake,
+  setJoin,
   setVoice,
   setVoicing,
   speechText,
+  suggestedReferenceCues,
   takePath,
   trackForVoice,
   voiceFor,
@@ -31,6 +35,16 @@ const cue = (id: string, start: number, end: number, text: string, speakerId: st
   text,
   speakerId,
 });
+
+const take = (file: string, duration = 1.5) => ({ file, seed: 1, duration });
+
+/** The state of the line `c` is in. */
+const stateOf = (vo: Voiceover, cues: Cue[], c: Cue) => {
+  const index = lineIndex(vo, cues);
+  return index.stateOf(index.groupOf(c.id) ?? [c]);
+};
+
+const ids = (groups: Cue[][]) => groups.map((g) => g.map((c) => c.id));
 
 describe("voices", () => {
   it("falls back to the default voice and stores patches per speaker", () => {
@@ -55,14 +69,68 @@ describe("voices", () => {
   });
 });
 
-describe("generated lines", () => {
-  const take = (file: string, duration = 1.5) => ({ file, seed: 1, duration });
+describe("grouping", () => {
+  it("joins a sentence the subtitles split, with no pause between", () => {
+    const cues = [cue("a", 0, 2, "I told you the bridge"), cue("b", 2.2, 4, "is closed after dark.")];
+    expect(ids(lineGroups(defaultVoiceover(), cues))).toEqual([["a", "b"]]);
+  });
 
+  it("keeps apart what ends a sentence, pauses, or changes speaker or mode", () => {
+    const vo = defaultVoiceover();
+    const ended = [cue("a", 0, 2, "Stop."), cue("b", 2.1, 4, "now")];
+    expect(ids(lineGroups(vo, ended))).toEqual([["a"], ["b"]]);
+    const quoted = [cue("a", 0, 2, 'He said "stop!"'), cue("b", 2.1, 4, "and left")];
+    expect(ids(lineGroups(vo, quoted))).toEqual([["a"], ["b"]]);
+    const paused = [cue("a", 0, 2, "I told you"), cue("b", 3, 4, "the bridge")];
+    expect(ids(lineGroups(vo, paused))).toEqual([["a"], ["b"]]);
+    const speakers = [cue("a", 0, 2, "I told you"), cue("b", 2.1, 4, "the bridge", "s2")];
+    expect(ids(lineGroups(vo, speakers))).toEqual([["a"], ["b"]]);
+    const thought: Cue[] = [cue("a", 0, 2, "I told you"), { ...cue("b", 2.1, 4, "the bridge"), mode: "thought" }];
+    expect(ids(lineGroups(vo, thought))).toEqual([["a"], ["b"]]);
+  });
+
+  it("reads the voice script, tags aside, for where a sentence ends", () => {
+    const cues = [cue("a", 0, 2, "Wait"), cue("b", 2.1, 4, "for me")];
+    const ended = setVoicing(defaultVoiceover(), "a", "Wait", { spoken: "Wait. [sigh]" });
+    expect(ids(lineGroups(ended, cues))).toEqual([["a"], ["b"]]);
+  });
+
+  it("caps a line's length", () => {
+    const long = "word ".repeat(GROUP_MAX_CHARS / 10).trim();
+    const cues = [cue("a", 0, 5, long), cue("b", 5.1, 10, long), cue("c", 10.1, 15, long)];
+    expect(lineGroups(defaultVoiceover(), cues).every((g) => g.length < 3)).toBe(true);
+    const span = [cue("a", 0, 12, "one"), cue("b", 12.1, 24, "two")];
+    expect(ids(lineGroups(defaultVoiceover(), span))).toEqual([["a"], ["b"]]);
+  });
+
+  it("follows a split or join chosen by hand, but never across speakers", () => {
+    const cues = [cue("a", 0, 2, "I told you"), cue("b", 2.1, 4, "the bridge"), cue("c", 5, 6, "Fine.")];
+    let vo = setJoin(defaultVoiceover(), "a", "split");
+    expect(ids(lineGroups(vo, cues))).toEqual([["a"], ["b"], ["c"]]);
+    vo = setJoin(vo, "b", "join");
+    expect(ids(lineGroups(vo, cues))).toEqual([["a"], ["b", "c"]]);
+    vo = setJoin(vo, "a", undefined);
+    expect(ids(lineGroups(vo, cues))).toEqual([["a", "b", "c"]]);
+    const other = [cue("a", 0, 2, "Hi"), cue("b", 2.1, 4, "there", "s2")];
+    expect(ids(lineGroups(setJoin(defaultVoiceover(), "a", "join"), other))).toEqual([["a"], ["b"]]);
+  });
+
+  it("speaks a group's parts in order, at its strongest intensity", () => {
+    const cues = [cue("a", 0, 2, "I told you"), cue("b", 2.1, 4, "the bridge")];
+    let vo = setVoicing(defaultVoiceover(), "b", "the bridge", { spoken: "[sigh] the bridge" });
+    expect(renderGroup(vo, cues).text).toBe("I told you [sigh] the bridge");
+    vo = setVoice(vo, "s1", { engine: "standard", exaggeration: 0.5 });
+    vo = setVoicing(vo, "a", "I told you", { direction: "shouting" });
+    expect(renderGroup(vo, cues)).toMatchObject({ text: "I told you the bridge", exaggeration: 1.2 });
+  });
+});
+
+describe("generated lines", () => {
   it("places a first take at the cue, on a new track when there is none", () => {
-    const vo = placeTake(defaultVoiceover(), cue("c1", 4, 6, "Hello there"), take("a.wav"));
+    const vo = placeTake(defaultVoiceover(), [cue("c1", 4, 6, "Hello there")], take("a.wav"));
     expect(voiceTracks(vo)).toHaveLength(1);
     expect(vo.clips[0]).toMatchObject({ start: 4, file: "a.wav", duration: 1.5, name: "Hello there" });
-    expect(vo.clips[0].source).toMatchObject({ cueId: "c1", text: "Hello there" });
+    expect(vo.clips[0].source).toMatchObject({ cueIds: ["c1"], text: "Hello there" });
   });
 
   it("puts a speaker's lines on their own track when it exists", () => {
@@ -74,7 +142,7 @@ describe("generated lines", () => {
   });
 
   it("adds a new take to the existing clip, keeping where it was moved to", () => {
-    const line = cue("c1", 4, 6, "Hello");
+    const line = [cue("c1", 4, 6, "Hello")];
     let vo = placeTake(defaultVoiceover(), line, take("a.wav"));
     vo = moveClip(vo, vo.clips[0].id, 4.5);
     vo = placeTake(vo, line, take("b.wav", 2));
@@ -86,27 +154,48 @@ describe("generated lines", () => {
     expect(back).toMatchObject({ file: "a.wav", duration: 1.5, offset: 0 });
   });
 
-  it("fits cues to their lines, leaving their text and their neighbours alone", () => {
-    const cues = [cue("a", 1, 2, "One"), cue("b", 3, 4, "Two"), cue("c", 8, 9, "Three")];
-    let vo = placeTake(defaultVoiceover(), cues[0], take("a.wav", 1.5));
-    vo = moveClip(vo, vo.clips[0].id, 0.8);
-    // b's line is long enough to reach into c's room.
-    vo = placeTake(vo, cues[1], take("b.wav", 6));
+  it("replaces the separate clips of cues that are now spoken as one line", () => {
+    const cues = [cue("a", 0, 2, "I told you"), cue("b", 2.1, 4, "the bridge")];
+    let vo = setJoin(defaultVoiceover(), "a", "split");
+    vo = placeTake(vo, [cues[0]], take("a.wav"));
+    vo = placeTake(vo, [cues[1]], take("b.wav"));
+    vo = setJoin(vo, "a", undefined);
+    // Regrouped: both old clips are out of date until the line is spoken.
+    expect(vo.clips.every((c) => lineIndex(vo, cues).isStale(c))).toBe(true);
+    vo = placeTake(vo, cues, take("ab.wav", 3));
+    expect(vo.clips).toHaveLength(1);
+    expect(vo.clips[0].source?.cueIds).toEqual(["a", "b"]);
+    expect(stateOf(vo, cues, cues[1])).toBe("current");
+  });
 
-    const fitted = fitCuesToLines(cues, vo, 60, 0.1);
-    expect(fitted[0]).toMatchObject({ start: 0.8, end: 2.3, text: "One" });
-    // Stopped short of c, minus the gap.
-    expect(fitted[1].start).toBe(3);
-    expect(fitted[1].end).toBeCloseTo(7.9, 9);
-    // c has no line and does not move.
-    expect(fitted[2]).toEqual(cues[2]);
+  it("knows when a line is missing, current or stale", () => {
+    const line = cue("c1", 4, 6, "Hello");
+    const empty = defaultVoiceover();
+    expect(stateOf(empty, [line], line)).toBe("missing");
+    const vo = placeTake(empty, [line], take("a.wav"));
+    expect(stateOf(vo, [line], line)).toBe("current");
+    const edited = { ...line, text: "Hello!" };
+    expect(stateOf(vo, [edited], edited)).toBe("stale");
+    expect(stateOf(setVoice(vo, "s1", { reference: "new.wav" }), [line], line)).toBe("stale");
+    expect(lineIndex(vo, []).isStale(vo.clips[0])).toBe(true);
+    expect(lineIndex(vo, [line]).isStale(vo.clips[0])).toBe(false);
+  });
 
-    const onlyA = fitCuesToLines(cues, vo, 60, 0.1, new Set(["a"]));
-    expect(onlyA[1]).toEqual(cues[1]);
+  it("lists what needs generating, skipping empty cues", () => {
+    const cues = [cue("a", 0, 1, "One."), cue("b", 2, 3, "  "), cue("c", 4, 5, "Three.")];
+    const vo = placeTake(defaultVoiceover(), [cues[0]], take("a.wav"));
+    expect(ids(lineIndex(vo, cues).pending)).toEqual([["c"]]);
+  });
+
+  it("measures how far a line runs past its last cue", () => {
+    const cues = [cue("a", 4, 5, "Hello"), cue("b", 5.1, 6, "there")];
+    const vo = placeTake(defaultVoiceover(), cues, take("a.wav", 2.8));
+    expect(overrun(vo.clips[0], cues)).toBeCloseTo(0.8, 9);
+    expect(overrun(vo.clips[0], [cues[0], { ...cues[1], end: 7 }])).toBe(0);
   });
 
   it("deletes a take, falling back to a neighbour, and the clip with its last take", () => {
-    const line = cue("c1", 4, 6, "Hello");
+    const line = [cue("c1", 4, 6, "Hello")];
     let vo = placeTake(defaultVoiceover(), line, take("a.wav", 1));
     vo = placeTake(vo, line, take("b.wav", 2));
     vo = placeTake(vo, line, take("c.wav", 3));
@@ -130,35 +219,60 @@ describe("generated lines", () => {
     expect(single.clips).toEqual([]);
     expect(removeTake(vo, id, 9)).toBe(vo);
   });
+});
 
-  it("knows when a line is missing, current or stale", () => {
-    const line = cue("c1", 4, 6, "Hello");
-    const empty = defaultVoiceover();
-    expect(lineState(empty, line)).toBe("missing");
-    const vo = placeTake(empty, line, take("a.wav"));
-    expect(lineState(vo, line)).toBe("current");
-    expect(lineState(vo, { ...line, text: "Hello!" })).toBe("stale");
-    expect(lineState(setVoice(vo, "s1", { reference: "new.wav" }), line)).toBe("stale");
-    expect(isClipStale(vo, vo.clips[0], [])).toBe(true);
-    expect(isClipStale(vo, vo.clips[0], [line])).toBe(false);
+describe("fitting cues to lines", () => {
+  it("fits single cues to their clips, leaving text and neighbours alone", () => {
+    const cues = [cue("a", 1, 2, "One."), cue("b", 3, 4, "Two."), cue("c", 8, 9, "Three.")];
+    let vo = placeTake(defaultVoiceover(), [cues[0]], take("a.wav", 1.5));
+    vo = moveClip(vo, vo.clips[0].id, 0.8);
+    // b's line is long enough to reach into c's room.
+    vo = placeTake(vo, [cues[1]], take("b.wav", 6));
+
+    const fitted = fitCuesToLines(cues, vo, 60, 0.1);
+    expect(fitted[0]).toMatchObject({ start: 0.8, end: 2.3, text: "One." });
+    // Stopped short of c, minus the gap.
+    expect(fitted[1].start).toBe(3);
+    expect(fitted[1].end).toBeCloseTo(7.9, 9);
+    // c has no line and does not move.
+    expect(fitted[2]).toEqual(cues[2]);
+
+    const onlyA = fitCuesToLines(cues, vo, 60, 0.1, new Set(["a"]));
+    expect(onlyA[1]).toEqual(cues[1]);
   });
 
-  it("lists what needs generating, skipping empty cues", () => {
-    const cues = [cue("a", 0, 1, "One"), cue("b", 2, 3, "  "), cue("c", 4, 5, "Three")];
-    const vo = placeTake(defaultVoiceover(), cues[0], take("a.wav"));
-    expect(pendingCues(vo, cues).map((c) => c.id)).toEqual(["c"]);
+  it("fits each cue of a joined line to its own words, as aligned", () => {
+    const cues = [cue("a", 10, 12, "I told you"), cue("b", 12.1, 14, "the bridge")];
+    let vo = placeTake(defaultVoiceover(), cues, {
+      file: "ab.wav",
+      seed: 1,
+      duration: 4,
+      marks: [
+        [0.2, 1.5],
+        [1.9, 3.6],
+      ],
+    });
+    vo = moveClip(vo, vo.clips[0].id, 20);
+    const fitted = fitCuesToLines(cues, vo, 60, 0.1);
+    expect(fitted[0]).toMatchObject({ start: 20.2, end: 21.5 });
+    expect(fitted[1]).toMatchObject({ start: 21.9, end: 23.6 });
   });
 
-  it("measures how far a line runs past its cue", () => {
-    const line = cue("c1", 4, 5, "Hello");
-    const vo = placeTake(defaultVoiceover(), line, take("a.wav", 1.8));
-    expect(overrun(vo.clips[0], [line])).toBeCloseTo(0.8, 9);
-    expect(overrun(vo.clips[0], [{ ...line, end: 6 }])).toBe(0);
+  it("estimates by length when a joined take has no alignment", () => {
+    expect(proportionalMarks(["ab", "abcdef"], 4)).toEqual([
+      [0, 1],
+      [1, 4],
+    ]);
+    const cues = [cue("a", 0, 2, "ab"), cue("b", 2.1, 4, "abcdef")];
+    const vo = placeTake(defaultVoiceover(), cues, take("ab.wav", 4));
+    const fitted = fitCuesToLines(cues, vo, 60, 0.1);
+    expect(fitted[0]).toMatchObject({ start: 0, end: 1 });
+    expect(fitted[1]).toMatchObject({ start: 1.1, end: 4 });
   });
 });
 
 describe("references", () => {
-  it("takes the speaker's longest spoken lines, in story order", () => {
+  it("suggests the speaker's longest spoken lines, in story order", () => {
     const cues: Cue[] = [
       cue("a", 0, 2, "short"),
       cue("b", 10, 18, "long"),
@@ -168,16 +282,16 @@ describe("references", () => {
     ];
     cues[3].mode = "thought";
     // 7 + 8 = 15 s is enough; the thought and the other speaker are left out.
-    expect(referenceSegments(cues, "s1")).toEqual([
-      [10, 18],
-      [20, 27],
-    ]);
-    expect(referenceSegments([cue("x", 0, 3, "hi", null)], NO_SPEAKER)).toEqual([[0, 3]]);
+    expect(suggestedReferenceCues(cues, "s1").map((c) => c.id)).toEqual(["b", "c"]);
+    expect(suggestedReferenceCues([cue("x", 0, 3, "hi", null)], NO_SPEAKER).map((c) => c.id)).toEqual(["x"]);
   });
 
-  it("caps the total length", () => {
-    const segments = referenceSegments([cue("a", 0, 40, "a very long monologue")], "s1");
-    expect(segments).toEqual([[0, 25]]);
+  it("cuts the chosen cues in time order, capped in total length", () => {
+    expect(referenceSegments([cue("b", 10, 12, "b"), cue("a", 0, 3, "a")])).toEqual([
+      [0, 3],
+      [10, 12],
+    ]);
+    expect(referenceSegments([cue("a", 0, 40, "a very long monologue")])).toEqual([[0, 25]]);
   });
 
   it("writes takes beside the video", () => {
@@ -231,18 +345,17 @@ describe("voice scripts and direction", () => {
   });
 
   it("marks a spoken line stale when its script or direction changes", () => {
-    const take = { file: "a.wav", seed: 1, duration: 1 };
-    const vo = placeTake(defaultVoiceover(), line, take);
-    expect(lineState(vo, line)).toBe("current");
-    expect(lineState(setVoicing(vo, "c1", line.text, { direction: "angry" }), line)).toBe("stale");
-    expect(lineState(setVoicing(vo, "c1", line.text, { direction: "slowly" }), line)).toBe("current");
-    expect(lineState(setVoicing(vo, "c1", line.text, { spoken: "Fine." }), line)).toBe("stale");
+    const vo = placeTake(defaultVoiceover(), [line], take("a.wav", 1));
+    expect(stateOf(vo, [line], line)).toBe("current");
+    expect(stateOf(setVoicing(vo, "c1", line.text, { direction: "angry" }), [line], line)).toBe("stale");
+    expect(stateOf(setVoicing(vo, "c1", line.text, { direction: "slowly" }), [line], line)).toBe("current");
+    expect(stateOf(setVoicing(vo, "c1", line.text, { spoken: "Fine." }), [line], line)).toBe("stale");
   });
 
   it("counts a silent cue with a script as something to say", () => {
     const silent = cue("c2", 8, 9, "");
     const vo = setVoicing(defaultVoiceover(), "c2", "", { spoken: "[sigh]" });
-    expect(pendingCues(vo, [silent]).map((c) => c.id)).toEqual(["c2"]);
-    expect(pendingCues(defaultVoiceover(), [silent])).toEqual([]);
+    expect(ids(lineIndex(vo, [silent]).pending)).toEqual([["c2"]]);
+    expect(lineIndex(defaultVoiceover(), [silent]).pending).toEqual([]);
   });
 });

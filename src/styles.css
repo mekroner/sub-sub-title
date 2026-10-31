@@ -2879,3 +2879,111 @@ button.fill-alt.on {
   flex: none;
   color: var(--text-dim);
 }
+
+/* Two cues spoken as one line: a bridge across the boundary between them. */
+.vo-join {
+  position: absolute;
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 2px;
+  background: #e6ecf3;
+  opacity: 0.7;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* --- Reference picker --------------------------------------------------- */
+
+.modal.reference-dialog {
+  width: min(680px, 100%);
+}
+.modal-footer-spacer {
+  flex: 1;
+}
+.reference-list {
+  max-height: min(52vh, 460px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.reference-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  cursor: pointer;
+}
+.reference-row:last-child {
+  border-bottom: none;
+}
+.reference-row.chosen {
+  background: rgba(74, 158, 255, 0.08);
+}
+.reference-time,
+.reference-length {
+  flex: none;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.reference-time {
+  width: 58px;
+}
+.reference-length {
+  width: 42px;
+  text-align: right;
+}
+.reference-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reference-thought {
+  color: #c4a3ff;
+  font-style: italic;
+}
+
+/* --- Selection on the voiceover timeline -------------------------------- */
+
+.vo-cue.selected {
+  border-color: #cfe6ff;
+  box-shadow: inset 0 0 0 1px #cfe6ff;
+}
+/* The duck toggle: on hover, and always while the cue lets the original through. */
+.vo-cue-duck {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  width: 15px;
+  height: 15px;
+  margin-top: -7.5px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4);
+  color: #e6ecf3;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  z-index: 1;
+}
+.vo-cue:hover .vo-cue-duck,
+.vo-cue.unducked .vo-cue-duck {
+  opacity: 1;
+}
+.vo-cue-duck:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+.vo-box {
+  position: absolute;
+  border: 1px dashed #cfe6ff;
+  background: rgba(74, 158, 255, 0.12);
+  pointer-events: none;
+  z-index: 3;
+}

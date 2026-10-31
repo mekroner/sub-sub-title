@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CastVoice, Cue, Speaker, TtsStatus, Voiceover } from "../types";
 import type { GenerationJob } from "../hooks/useVoiceGeneration";
-import { NO_SPEAKER, castKey, hasSomethingToSay, lineState, voiceFor } from "../lib/tts";
+import { NO_SPEAKER, castKey, voiceFor, type LineIndex } from "../lib/tts";
 import { basename, voiceTracks } from "../lib/voiceover";
 
 interface Props {
   voiceover: Voiceover;
-  cues: Cue[];
+  /** The project's lines and their state, from `lineIndex`. */
+  lines: LineIndex;
   speakers: Speaker[];
   status: TtsStatus | null;
   job: GenerationJob | null;
@@ -25,7 +26,12 @@ interface Row {
   key: string;
   name: string;
   color: string;
+  /** Every cue of this speaker that has something to say. */
   cues: Cue[];
+  /** How many lines those cues are spoken in. */
+  lines: number;
+  /** The first cue of each line that is missing or out of date. */
+  pending: Cue[];
   missing: number;
   stale: number;
 }
@@ -33,7 +39,7 @@ interface Row {
 /** Who speaks how: a voice per speaker, and generating their lines. */
 export function CastPanel({
   voiceover,
-  cues,
+  lines,
   speakers,
   status,
   job,
@@ -46,20 +52,23 @@ export function CastPanel({
   onReferenceFromVideo,
 }: Props) {
   const rows = useMemo<Row[]>(() => {
-    const spoken = cues.filter((c) => hasSomethingToSay(voiceover, c));
-    const byKey = new Map<string, Cue[]>();
-    for (const cue of spoken) {
-      const key = castKey(cue);
-      byKey.set(key, [...(byKey.get(key) ?? []), cue]);
+    // Counted in lines, not cues: a sentence spoken across two cues is one
+    // line to generate.
+    const byKey = new Map<string, Cue[][]>();
+    for (const group of lines.groups) {
+      const key = castKey(group[0]);
+      byKey.set(key, [...(byKey.get(key) ?? []), group]);
     }
     const row = (key: string, name: string, color: string): Row => {
       const own = byKey.get(key) ?? [];
-      const states = own.map((c) => lineState(voiceover, c));
+      const states = own.map((g) => lines.stateOf(g));
       return {
         key,
         name,
         color,
-        cues: own,
+        cues: own.flat(),
+        lines: own.length,
+        pending: own.filter((_, i) => states[i] !== "current").map((g) => g[0]),
         missing: states.filter((s) => s === "missing").length,
         stale: states.filter((s) => s === "stale").length,
       };
@@ -67,11 +76,10 @@ export function CastPanel({
     const list = speakers.map((s) => row(s.id, s.name, s.color));
     if (byKey.has(NO_SPEAKER)) list.push(row(NO_SPEAKER, "No speaker", "#5b6b80"));
     return list;
-  }, [cues, speakers, voiceover]);
+  }, [lines, speakers]);
 
-  const pending = rows.flatMap((r) =>
-    r.cues.filter((c) => lineState(voiceover, c) !== "current"),
-  );
+  // One cue per line is enough: generating a cue speaks its whole line.
+  const pending = rows.flatMap((r) => r.pending);
   const installed = status?.installed ?? false;
 
   return (
@@ -137,9 +145,7 @@ export function CastPanel({
             busy={job !== null}
             canGenerate={installed && canGenerate}
             onSetVoice={(patch) => onSetVoice(row.key, patch)}
-            onGenerate={() =>
-              onGenerate(row.cues.filter((c) => lineState(voiceover, c) !== "current"))
-            }
+            onGenerate={() => onGenerate(row.pending)}
             onReferenceFromFile={() => onReferenceFromFile(row.key)}
             onReferenceFromVideo={() => onReferenceFromVideo(row.key)}
           />
@@ -178,7 +184,7 @@ function CastRow({
         <span className="cast-swatch" style={{ background: row.color }} />
         <span className="cast-name">{row.name}</span>
         <span className="cast-count" title="Lines spoken / lines">
-          {row.cues.length - todo}/{row.cues.length}
+          {row.lines - todo}/{row.lines}
           {row.stale > 0 && <span className="cast-stale"> · {row.stale} changed</span>}
         </span>
         <button
@@ -205,9 +211,9 @@ function CastRow({
           className="small"
           disabled={row.cues.length === 0}
           onClick={onReferenceFromVideo}
-          title="Clone the voice from this speaker's own lines in the video"
+          title="Choose which of this speaker's lines in the video to clone the voice from"
         >
-          From video
+          From video…
         </button>
         <button type="button" className="small" onClick={onReferenceFromFile} title="Clone a voice from an audio file">
           File…

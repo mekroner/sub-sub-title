@@ -52,10 +52,10 @@ const project: Project = {
         duration: 2,
         sourceDuration: 3,
         gainDb: 3,
-        source: { cueId: "a", text: "Hello", voiceKey: "turbo||0.8" },
+        source: { cueIds: ["a", "b"], text: "Hello", voiceKey: "turbo||0.8" },
         takes: [
           { file: "D:/vo/old.wav", seed: 1, duration: 2.5 },
-          { file: "D:/vo/line1.wav", seed: 2, duration: 3 },
+          { file: "D:/vo/line1.wav", seed: 2, duration: 3, marks: [[0, 1], [1.2, 2.9]] },
         ],
       },
     ],
@@ -69,6 +69,7 @@ const project: Project = {
         temperature: 0.7,
         reference: "D:/vo/ada.wav",
         trackId: "vo1",
+        referenceCueIds: ["a"],
       },
       "": { engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
     },
@@ -76,6 +77,7 @@ const project: Project = {
       a: { spoken: "[sigh] Hello.", direction: "tired" },
       b: { direction: "whispered" },
     },
+    joins: { a: "join", b: "split" },
   },
 };
 

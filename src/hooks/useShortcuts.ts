@@ -33,6 +33,8 @@ export interface ShortcutActions {
   zoom: (direction: number) => void;
   toggleFollow: () => void;
   toggleGhost: () => void;
+  /** The Voiceover tab's D: ducks or un-ducks the selected cues. */
+  toggleDuck: () => void;
   showHelp: () => void;
 }
 
@@ -150,6 +152,9 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
           break;
         case "toggleGhost":
           a.toggleGhost();
+          break;
+        case "toggleDuck":
+          a.toggleDuck();
           break;
         case "showHelp":
           a.showHelp();

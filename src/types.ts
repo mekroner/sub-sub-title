@@ -125,7 +125,11 @@ export interface VoiceClip {
 
 /** What a generated clip was spoken from, to tell when it has gone stale. */
 export interface ClipSource {
-  cueId: string;
+  /**
+   * The cues spoken as this one line, in order: usually one, more when a
+   * sentence runs across several cues of the same speaker.
+   */
+  cueIds: string[];
   /** The text as it was spoken. */
   text: string;
   /** `voiceKey` of the cast entry it was spoken with. */
@@ -136,6 +140,11 @@ export interface ClipTake {
   file: string;
   seed: number;
   duration: number;
+  /**
+   * For a line spoken across several cues: where each cue's words start and
+   * end in this take, in seconds, found by aligning the text to the audio.
+   */
+  marks?: Array<[number, number]>;
 }
 
 /** "turbo" takes inline tags like [laugh]; "standard" has an emotion setting. */
@@ -153,6 +162,8 @@ export interface CastVoice {
   temperature: number;
   /** The voice track this speaker's lines land on; absent picks one. */
   trackId?: string;
+  /** The cues the reference was cut from, when it was built from the video. */
+  referenceCueIds?: string[];
 }
 
 /** How the original track ducks under the cues. Applied live, never baked. */
@@ -182,6 +193,11 @@ export interface Voiceover {
   cast: Record<string, CastVoice>;
   /** How individual cues are voiced, by cue id. Most cues have no entry. */
   voicing: Record<string, CueVoicing>;
+  /**
+   * Overrides of the automatic grouping, keyed by the cue before the
+   * boundary: "join" speaks it together with the next cue, "split" apart.
+   */
+  joins: Record<string, "join" | "split">;
 }
 
 /**
@@ -417,11 +433,18 @@ export interface TtsRequest {
   cfgWeight: number;
   temperature: number;
   outputPath: string;
+  /**
+   * For a line spoken across several cues: each cue's words, untagged, to be
+   * found in the generated audio. Null for a single cue.
+   */
+  alignSegments: string[] | null;
 }
 
 export interface TtsResult {
   path: string;
   duration: number;
+  /** Each aligned segment's start and end, in seconds; absent if not asked or not found. */
+  marks?: Array<[number, number]>;
 }
 
 /** Progress while the transcription engine is being downloaded and unpacked. */

@@ -43,6 +43,7 @@ export function defaultVoiceover(): Voiceover {
     unduckedCueIds: [],
     cast: {},
     voicing: {},
+    joins: {},
   };
 }
 
@@ -222,6 +223,30 @@ export function moveClip(
     start: Math.max(0, start),
     trackId: target ? target.id : c.trackId,
   }));
+}
+
+/**
+ * Moves several clips by the same amount, keeping their tracks and spacing.
+ * The block stops at the timeline's zero rather than squashing against it;
+ * returns the amount actually moved alongside the result, so cues moved with
+ * the clips can stop where they do.
+ */
+export function moveClipsBy(
+  voiceover: Voiceover,
+  ids: Set<string>,
+  delta: number,
+): { voiceover: Voiceover; delta: number } {
+  const moving = voiceover.clips.filter((c) => ids.has(c.id));
+  if (moving.length === 0 || delta === 0) return { voiceover, delta: 0 };
+  const applied = Math.max(delta, -Math.min(...moving.map((c) => c.start)));
+  if (applied === 0) return { voiceover, delta: 0 };
+  return {
+    voiceover: {
+      ...voiceover,
+      clips: voiceover.clips.map((c) => (ids.has(c.id) ? { ...c, start: c.start + applied } : c)),
+    },
+    delta: applied,
+  };
 }
 
 /**

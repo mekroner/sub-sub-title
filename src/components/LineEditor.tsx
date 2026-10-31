@@ -8,7 +8,9 @@ interface Props {
   cue: Cue;
   speakerName: string;
   voicing: CueVoicing;
-  /** What the engine will be asked to say, direction applied. */
+  /** How many cues are spoken in this cue's line, itself included. */
+  groupSize: number;
+  /** What the engine will be asked to say for the whole line, direction applied. */
   rendered: RenderedLine;
   state: LineState;
   /** Whether a line can be spoken right now. */
@@ -28,6 +30,7 @@ export function LineEditor({
   cue,
   speakerName,
   voicing,
+  groupSize,
   rendered,
   state,
   canSpeak,
@@ -144,6 +147,12 @@ export function LineEditor({
           <span className="line-render-label">Speaks</span>
           <span>{rendered.text || <em>nothing</em>}</span>
         </div>
+        {groupSize > 1 && (
+          <p className="hint line-note">
+            Spoken as one line with {groupSize - 1} neighbouring cue{groupSize > 2 ? "s" : ""}, so
+            the sentence flows. Right-click a cue to speak it separately.
+          </p>
+        )}
         {state === "stale" && (
           <p className="clip-warning">The generated clip says something else; generate a new take.</p>
         )}

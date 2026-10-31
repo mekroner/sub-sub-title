@@ -26,6 +26,13 @@ import {
   type TrackPatch,
 } from "../lib/voiceover";
 import { CLIP_PEAKS_PER_SECOND } from "../audio/mixer";
+import {
+  isSelected,
+  selectionSize,
+  type SelectionChange,
+  type VoItem,
+  type VoSelection,
+} from "../lib/voSelection";
 import { MAX_ZOOM, MIN_ZOOM, WHEEL_ZOOM_STEP, wheelPixels } from "./WaveformPane";
 
 interface Props {
@@ -40,14 +47,17 @@ interface Props {
   playing: boolean;
   zoom: number;
   follow: boolean;
-  selectedClipId: string | null;
+  /** Cues and clips picked on the timeline. */
+  selection: VoSelection;
   /** A decoded clip file's absolute peaks, or null while it is still decoding. */
   clipPeaks: (file: string) => Float32Array | null;
   /** Bumped whenever a file finishes decoding, so its waveform gets drawn. */
   decodeVersion: number;
   onSeek: (time: number) => void;
   onZoomChange: (zoom: number) => void;
-  onSelectClip: (id: string | null) => void;
+  onSelect: (change: SelectionChange) => void;
+  /** Every selected cue and clip moved by `delta` seconds; `drag` identifies the gesture. */
+  onMoveSelection: (delta: number, drag: string) => void;
   onPatchTrack: (id: string, patch: TrackPatch) => void;
   onAddTrack: () => void;
   onRemoveTrack: (id: string) => void;
@@ -66,6 +76,8 @@ interface Props {
   onExport?: () => void;
   /** Generated clips that need attention: their line changed, or they overrun. */
   clipWarnings: Map<string, "stale" | "overrun">;
+  /** Boundaries between cues spoken as one line, as [end of one, start of next]. */
+  lineJoins: Array<[number, number]>;
   /** Right-click on a cue block: the cue and where to open the menu. */
   onContextMenuCue: (cueId: string, x: number, y: number) => void;
   /** Double-click on a cue block: open its voice line for editing. */
@@ -119,15 +131,6 @@ const MIN_TICK_PX = 70;
 
 type DragMode = "move" | "start" | "end";
 
-interface Drag {
-  id: string;
-  mode: DragMode;
-  key: string;
-  pointerX: number;
-  /** The clip as it was when the gesture began. */
-  origin: VoiceClip;
-}
-
 export function VoiceoverTimeline({
   voiceover,
   cues,
@@ -139,12 +142,13 @@ export function VoiceoverTimeline({
   playing,
   zoom,
   follow,
-  selectedClipId,
+  selection,
   clipPeaks,
   decodeVersion,
   onSeek,
   onZoomChange,
-  onSelectClip,
+  onSelect,
+  onMoveSelection,
   onPatchTrack,
   onAddTrack,
   onRemoveTrack,
@@ -158,6 +162,7 @@ export function VoiceoverTimeline({
   onDuckAllCues,
   onExport,
   clipWarnings,
+  lineJoins,
   onContextMenuCue,
   onEditCueLine,
   onRetimeCue,
@@ -178,7 +183,6 @@ export function VoiceoverTimeline({
   const [view, setView] = useState({ left: 0, width: 0 });
   /** Scroll position to restore after a wheel zoom, keeping the pointer's moment put. */
   const pendingScroll = useRef<number | null>(null);
-  const drag = useRef<Drag | null>(null);
   const scrubbing = useRef(false);
 
   const original = voiceover.tracks.find((t) => t.kind === "original");
@@ -405,136 +409,205 @@ export function VoiceoverTimeline({
     return times;
   }, [cues, voiceover.clips, currentTime]);
 
-  const startClipDrag = (e: ReactPointerEvent<HTMLDivElement>, clip: VoiceClip) => {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    onSelectClip(clip.id);
-    const rect = e.currentTarget.getBoundingClientRect();
-    const fromLeft = e.clientX - rect.left;
-    const fromRight = rect.right - e.clientX;
-    const mode: DragMode =
-      rect.width > EDGE_GRAB_PX * 3 && fromLeft <= EDGE_GRAB_PX
-        ? "start"
-        : rect.width > EDGE_GRAB_PX * 3 && fromRight <= EDGE_GRAB_PX
-          ? "end"
-          : "move";
-    e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = {
-      id: clip.id,
-      mode,
-      key: `${clip.id}:${mode}:${Date.now()}`,
-      pointerX: e.clientX,
-      origin: clip,
-    };
-  };
-
-  const moveClipDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
-    const d = drag.current;
-    if (!d) return;
-    const delta = (e.clientX - d.pointerX) / zoom;
-    // Alt drags freely, the way it does in most editors.
-    const snap = (t: number) =>
-      e.altKey
-        ? t
-        : snapTime(
-            t,
-            snapCandidates.filter((c) => !isOwnEdge(c, d.origin)),
-            SNAP_PX / zoom,
-          );
-
-    if (d.mode === "move") {
-      // Either edge may snap; the one with the shorter jump wins.
-      const raw = Math.max(0, d.origin.start + delta);
-      const byHead = snap(raw);
-      const byTail = snap(raw + d.origin.duration) - d.origin.duration;
-      const headJump = byHead === raw ? Infinity : Math.abs(byHead - raw);
-      const tailJump = byTail === raw ? Infinity : Math.abs(byTail - raw);
-      const start = headJump === Infinity && tailJump === Infinity
-        ? raw
-        : headJump <= tailJump
-          ? byHead
-          : byTail;
-      const trackId = laneUnder(e.clientX, e.clientY) ?? d.origin.trackId;
-      onMoveClip(d.id, Math.max(0, start), trackId, d.key);
-    } else if (d.mode === "start") {
-      onTrimClip(d.id, "start", snap(d.origin.start + delta), d.key);
-    } else {
-      onTrimClip(d.id, "end", snap(clipEnd(d.origin) + delta), d.key);
-    }
-  };
-
-  const endClipDrag = () => {
-    drag.current = null;
-  };
-
-  // --- Pointer: cue gestures ------------------------------------------------
-  // A cue's text cannot change here, but its timing can, so it can be lined
-  // up with the voice line generated for it. A press that never moves is
-  // still a click, which toggles the cue's duck.
-  const cueDrag = useRef<{
-    id: string;
+  // --- Pointer: cues and clips ---------------------------------------------
+  // Cues and clips are picked and dragged alike. A press selects (Ctrl
+  // toggles, Shift extends from the last item clicked); dragging a selected
+  // item moves the whole selection; an edge trims one item. A cue's text
+  // cannot change here, but its timing can, so it can be lined up with the
+  // voice line generated for it.
+  const itemDrag = useRef<{
+    item: VoItem;
     mode: DragMode;
     key: string;
     pointerX: number;
-    origin: Cue;
     moved: boolean;
+    /** The item's span when the press began. */
+    start: number;
+    end: number;
+    clip?: VoiceClip;
+    /** Moving every selected item, rather than this one alone. */
+    group: boolean;
+    /** Ctrl or Shift: a click that changes the selection, never a drag. */
+    modifier: "toggle" | "range" | null;
   } | null>(null);
 
-  const startCueDrag = (e: ReactPointerEvent<HTMLDivElement>, cue: Cue) => {
+  /** Everything of the same kind between the last item clicked and `item`. */
+  const rangeTo = (item: VoItem, start: number): VoItem[] => {
+    const anchor = selection.primary;
+    if (!anchor || anchor.kind !== item.kind) return [item];
+    if (item.kind === "cue") {
+      const from = cues.find((c) => c.id === anchor.id);
+      if (!from) return [item];
+      const [lo, hi] = [Math.min(from.start, start), Math.max(from.start, start)];
+      return cues.filter((c) => c.start >= lo && c.start <= hi).map((c) => ({ kind: "cue", id: c.id }));
+    }
+    const from = voiceover.clips.find((c) => c.id === anchor.id);
+    const to = voiceover.clips.find((c) => c.id === item.id);
+    if (!from || !to) return [item];
+    const [lo, hi] = [Math.min(from.start, start), Math.max(from.start, start)];
+    const laneIndex = (trackId: string) => lanes.findIndex((l) => l.track.id === trackId);
+    const [top, bottom] = [laneIndex(from.trackId), laneIndex(to.trackId)].sort((a, b) => a - b);
+    return voiceover.clips
+      .filter((c) => c.start >= lo && c.start <= hi)
+      .filter((c) => laneIndex(c.trackId) >= top && laneIndex(c.trackId) <= bottom)
+      .map((c) => ({ kind: "clip", id: c.id }));
+  };
+
+  const startItemDrag = (
+    e: ReactPointerEvent<HTMLDivElement>,
+    item: VoItem,
+    start: number,
+    end: number,
+    edgePx: number,
+    clip?: VoiceClip,
+  ) => {
     if (e.button !== 0) return;
     e.stopPropagation();
+    const modifier = e.ctrlKey || e.metaKey ? "toggle" : e.shiftKey ? "range" : null;
     const rect = e.currentTarget.getBoundingClientRect();
-    const grabbable = rect.width > CUE_EDGE_PX * 3;
+    const grabbable = !modifier && rect.width > edgePx * 3;
     const mode: DragMode =
-      grabbable && e.clientX - rect.left <= CUE_EDGE_PX
+      grabbable && e.clientX - rect.left <= edgePx
         ? "start"
-        : grabbable && rect.right - e.clientX <= CUE_EDGE_PX
+        : grabbable && rect.right - e.clientX <= edgePx
           ? "end"
           : "move";
+    const selected = isSelected(selection, item);
+    // Pressing an unselected item selects it at once, so the drag that may
+    // follow moves it and it alone.
+    if (!modifier && !selected) onSelect({ items: [item], mode: "replace" });
     e.currentTarget.setPointerCapture(e.pointerId);
-    cueDrag.current = {
-      id: cue.id,
+    itemDrag.current = {
+      item,
       mode,
-      key: `${cue.id}:${mode}:${Date.now()}`,
+      key: `${item.id}:${mode}:${Date.now()}`,
       pointerX: e.clientX,
-      origin: cue,
       moved: false,
+      start,
+      end,
+      clip,
+      group: !modifier && selected && selectionSize(selection) > 1 && mode === "move",
+      modifier,
     };
   };
 
-  const moveCueDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
-    const d = cueDrag.current;
-    if (!d) return;
+  const moveItemDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = itemDrag.current;
+    if (!d || d.modifier) return;
     if (!d.moved && Math.abs(e.clientX - d.pointerX) < CLICK_SLOP_PX) return;
     d.moved = true;
     const delta = (e.clientX - d.pointerX) / zoom;
-    // Voice lines and the playhead are what a cue is lined up with here.
-    const candidates = [currentTime];
-    for (const clip of voiceover.clips) candidates.push(clip.start, clipEnd(clip));
+    // Nothing snaps to an edge that is itself moving. Alt drags freely, the
+    // way it does in most editors.
+    const moving = (t: number) =>
+      d.group
+        ? [...selection.cues].some((id) => {
+            const c = cues.find((x) => x.id === id);
+            return c !== undefined && (c.start === t || c.end === t);
+          }) ||
+          [...selection.clips].some((id) => {
+            const c = voiceover.clips.find((x) => x.id === id);
+            return c !== undefined && (c.start === t || clipEnd(c) === t);
+          })
+        : t === d.start || t === d.end;
+    const candidates = snapCandidates.filter((t) => !moving(t));
     const snap = (t: number) => (e.altKey ? t : snapTime(t, candidates, SNAP_PX / zoom));
-    const { start, end } = d.origin;
-    const length = end - start;
+    const length = d.end - d.start;
 
     if (d.mode === "move") {
-      const raw = Math.max(0, start + delta);
+      // Either edge may snap; the one with the shorter jump wins.
+      const raw = Math.max(0, d.start + delta);
       const byHead = snap(raw);
       const byTail = snap(raw + length) - length;
       const headJump = byHead === raw ? Infinity : Math.abs(byHead - raw);
       const tailJump = byTail === raw ? Infinity : Math.abs(byTail - raw);
       const next =
         headJump === Infinity && tailJump === Infinity ? raw : headJump <= tailJump ? byHead : byTail;
-      onRetimeCue(d.id, next, next + length, "move", d.key);
+      if (d.group) onMoveSelection(next - d.start, d.key);
+      else if (d.clip) {
+        const trackId = laneUnder(e.clientX, e.clientY) ?? d.clip.trackId;
+        onMoveClip(d.item.id, next, trackId, d.key);
+      } else onRetimeCue(d.item.id, next, next + length, "move", d.key);
+    } else if (d.clip) {
+      if (d.mode === "start") onTrimClip(d.item.id, "start", snap(d.start + delta), d.key);
+      else onTrimClip(d.item.id, "end", snap(d.end + delta), d.key);
     } else if (d.mode === "start") {
-      onRetimeCue(d.id, snap(start + delta), end, "resize", d.key);
+      onRetimeCue(d.item.id, snap(d.start + delta), d.end, "resize", d.key);
     } else {
-      onRetimeCue(d.id, start, snap(end + delta), "resize", d.key);
+      onRetimeCue(d.item.id, d.start, snap(d.end + delta), "resize", d.key);
     }
   };
 
-  const endCueDrag = () => {
-    const d = cueDrag.current;
-    cueDrag.current = null;
-    if (d && !d.moved) onToggleCueDuck(d.id);
+  const endItemDrag = () => {
+    const d = itemDrag.current;
+    itemDrag.current = null;
+    if (!d || d.moved) return;
+    if (d.modifier === "toggle") onSelect({ items: [d.item], mode: "toggle" });
+    else if (d.modifier === "range") {
+      onSelect({ items: rangeTo(d.item, d.start), mode: "add", primary: d.item });
+    }
+    // A plain click on one of several selected items narrows to it.
+    else onSelect({ items: [d.item], mode: "replace" });
+  };
+
+  // --- Pointer: empty lane space ----------------------------------------------
+  // A plain press clears the selection and scrubs; Ctrl or Shift draws a box
+  // that selects every cue and clip it touches.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [box, setBox] = useState<{ x0: number; y0: number; x1: number; y1: number; add: boolean } | null>(
+    null,
+  );
+
+  const contentPoint = (e: ReactPointerEvent<HTMLElement>) => {
+    const rect = contentRef.current?.getBoundingClientRect();
+    return rect ? { x: e.clientX - rect.left, y: e.clientY - rect.top } : { x: 0, y: 0 };
+  };
+
+  const startLane = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const { x, y } = contentPoint(e);
+      setBox({ x0: x, y0: y, x1: x, y1: y, add: true });
+      return;
+    }
+    onSelect({ items: [], mode: "replace" });
+    startScrub(e);
+  };
+
+  const moveLane = (e: ReactPointerEvent<HTMLElement>) => {
+    if (box) {
+      const { x, y } = contentPoint(e);
+      setBox({ ...box, x1: x, y1: y });
+      return;
+    }
+    moveScrub(e);
+  };
+
+  const endLane = () => {
+    endScrub();
+    if (!box) return;
+    setBox(null);
+    const [left, right] = [Math.min(box.x0, box.x1), Math.max(box.x0, box.x1)];
+    const [top, bottom] = [Math.min(box.y0, box.y1), Math.max(box.y0, box.y1)];
+    const [from, to] = [left / zoom, right / zoom];
+    const overlaps = (a: number, b: number, lo: number, hi: number) => a < hi && b > lo;
+    const items: VoItem[] = [];
+    if (overlaps(RULER_HEIGHT, RULER_HEIGHT + CUE_LANE_HEIGHT, top, bottom)) {
+      for (const cue of cues) {
+        if (overlaps(cue.start, cue.end, from, to)) items.push({ kind: "cue", id: cue.id });
+      }
+    }
+    for (const clip of voiceover.clips) {
+      const lane = laneOf.get(clip.trackId);
+      if (!lane || lane.track.kind !== "voice") continue;
+      const clipTop = lane.top + CLIP_INSET;
+      const clipBottom = lane.top + lane.height - CLIP_INSET;
+      if (overlaps(clipTop, clipBottom, top, bottom) && overlaps(clip.start, clipEnd(clip), from, to)) {
+        items.push({ kind: "clip", id: clip.id });
+      }
+    }
+    onSelect({ items, mode: box.add ? "add" : "replace" });
   };
 
   // --- Render -------------------------------------------------------------
@@ -626,7 +699,7 @@ export function VoiceoverTimeline({
             setView({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })
           }
         >
-          <div className="vo-content" style={{ width: contentWidth }}>
+          <div ref={contentRef} className="vo-content" style={{ width: contentWidth }}>
             <div
               className="vo-lane vo-lane-ruler"
               style={{ height: RULER_HEIGHT }}
@@ -638,61 +711,84 @@ export function VoiceoverTimeline({
             <div
               className="vo-lane vo-lane-cues"
               style={{ height: CUE_LANE_HEIGHT }}
-              onPointerDown={startScrub}
-              onPointerMove={moveScrub}
-              onPointerUp={endScrub}
+              onPointerDown={startLane}
+              onPointerMove={moveLane}
+              onPointerUp={endLane}
             >
               {visibleCues.map((cue) => {
                 const speaker = cue.speakerId ? speakerById.get(cue.speakerId) ?? null : null;
                 const color =
                   cue.mode === "thought" ? thoughtColor(speaker) : speaker?.color ?? "#5b6b80";
                 const ducked = !unducked.has(cue.id);
+                const selected = selection.cues.has(cue.id);
                 return (
                   <div
                     key={cue.id}
-                    className={ducked ? "vo-cue" : "vo-cue unducked"}
+                    className={`vo-cue${ducked ? "" : " unducked"}${selected ? " selected" : ""}`}
                     style={{
                       left: cue.start * zoom,
                       width: Math.max(2, (cue.end - cue.start) * zoom),
                       background: withAlpha(color, ducked ? 0.75 : 0.22),
                       color: ducked ? contrastText(color) : "var(--text-dim)",
-                      borderColor: color,
+                      borderColor: selected ? undefined : color,
                     }}
-                    // The text is read-only here. A click toggles the duck, a
-                    // drag retimes the cue, a right-click offers its line.
-                    onPointerDown={(e) => startCueDrag(e, cue)}
-                    onPointerMove={moveCueDrag}
-                    onPointerUp={endCueDrag}
+                    // The text is read-only here. A click selects, a drag
+                    // retimes (with the rest of the selection), a right-click
+                    // offers the cue's line.
+                    onPointerDown={(e) =>
+                      startItemDrag(e, { kind: "cue", id: cue.id }, cue.start, cue.end, CUE_EDGE_PX)
+                    }
+                    onPointerMove={moveItemDrag}
+                    onPointerUp={endItemDrag}
                     onPointerCancel={() => {
-                      cueDrag.current = null;
+                      itemDrag.current = null;
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
                       onContextMenuCue(cue.id, e.clientX, e.clientY);
                     }}
-                    // Its two clicks toggle the duck off and back on, so a
-                    // double-click leaves the duck as it was.
                     onDoubleClick={() => onEditCueLine(cue.id)}
                     title={`${speaker ? `${speaker.name}: ` : ""}${cue.text}\n${
-                      ducked ? "Ducked — click to let the original through" : "Not ducked — click to duck"
-                    }\nDouble-click to edit its voice line · drag to move, drag an edge to trim · right-click for more`}
+                      ducked ? "Ducked" : "Not ducked"
+                    } · click to select, drag to move, drag an edge to trim · double-click for its voice line · right-click for more`}
                   >
+                    <button
+                      type="button"
+                      className="vo-cue-duck"
+                      // Its own press: neither a selection nor a drag.
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        if (e.button === 0) onToggleCueDuck(cue.id);
+                      }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      title={ducked ? "Ducked — click to let the original through" : "Not ducked — click to duck"}
+                      aria-label={ducked ? "Stop ducking under this cue" : "Duck under this cue"}
+                    >
+                      {ducked ? "◐" : "○"}
+                    </button>
                     {cue.text}
                   </div>
                 );
               })}
+              {lineJoins
+                .filter(([a, b]) => b >= visibleFrom && a <= visibleTo)
+                .map(([a, b]) => (
+                  <div
+                    key={`join-${a}`}
+                    className="vo-join"
+                    style={{ left: a * zoom - 3, width: Math.max(6, (b - a) * zoom + 6) }}
+                    title="Spoken as one line — right-click a cue to split it"
+                  />
+                ))}
             </div>
 
             <div
               className="vo-lane vo-lane-original"
               style={{ height: originalHeight }}
-              onPointerDown={(e) => {
-                onSelectClip(null);
-                startScrub(e);
-              }}
-              onPointerMove={moveScrub}
-              onPointerUp={endScrub}
+              onPointerDown={startLane}
+              onPointerMove={moveLane}
+              onPointerUp={endLane}
             />
 
             {voices.map((track) => (
@@ -701,12 +797,9 @@ export function VoiceoverTimeline({
                 className={`vo-lane vo-lane-voice${isAudible(voiceover, track) ? "" : " silent"}`}
                 data-track-id={track.id}
                 style={{ height: heightOf(track) }}
-                onPointerDown={(e) => {
-                  onSelectClip(null);
-                  startScrub(e);
-                }}
-                onPointerMove={moveScrub}
-                onPointerUp={endScrub}
+                onPointerDown={startLane}
+                onPointerMove={moveLane}
+                onPointerUp={endLane}
               />
             ))}
 
@@ -729,16 +822,30 @@ export function VoiceoverTimeline({
                     top={lane.top + CLIP_INSET}
                     height={lane.height - CLIP_INSET * 2}
                     zoom={zoom}
-                    selected={clip.id === selectedClipId}
+                    selected={selection.clips.has(clip.id)}
                     peaks={clipPeaks(clip.file)}
                     decodeVersion={decodeVersion}
-                    onPointerDown={(e) => startClipDrag(e, clip)}
-                    onPointerMove={moveClipDrag}
-                    onPointerUp={endClipDrag}
+                    onPointerDown={(e) =>
+                      startItemDrag(e, { kind: "clip", id: clip.id }, clip.start, clipEnd(clip), EDGE_GRAB_PX, clip)
+                    }
+                    onPointerMove={moveItemDrag}
+                    onPointerUp={endItemDrag}
                   />
                 );
               })}
             </div>
+
+            {box && (
+              <div
+                className="vo-box"
+                style={{
+                  left: Math.min(box.x0, box.x1),
+                  top: Math.min(box.y0, box.y1),
+                  width: Math.abs(box.x1 - box.x0),
+                  height: Math.abs(box.y1 - box.y0),
+                }}
+              />
+            )}
 
             {lanes.map(({ track, top, height }) =>
               track.automation.length > 0 || editingCurves.has(track.id) ? (
@@ -1354,11 +1461,6 @@ function laneUnder(x: number, y: number): string | null {
     if (id) return id;
   }
   return null;
-}
-
-/** A clip should not snap to where its own edges started. */
-function isOwnEdge(time: number, clip: VoiceClip): boolean {
-  return time === clip.start || time === clipEnd(clip);
 }
 
 /** Sizes a canvas for the device pixel ratio and returns a cleared context. */

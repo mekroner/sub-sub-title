@@ -183,3 +183,34 @@ describe("duck settings", () => {
     expect(project.voiceover.unduckedCueIds).toEqual(["x"]);
   });
 });
+
+describe("reading lines from older project files", () => {
+  it("turns a clip's single cue into a one-cue line, and keeps only whole marks", () => {
+    const project = parseProjectFile(
+      JSON.stringify({
+        voiceover: {
+          tracks: [{ id: "v1", kind: "voice", name: "A" }],
+          clips: [
+            {
+              id: "c1",
+              trackId: "v1",
+              file: "a.wav",
+              start: 1,
+              offset: 0,
+              duration: 2,
+              sourceDuration: 2,
+              source: { cueId: "cue-a", text: "Hi", voiceKey: "k" },
+              takes: [{ file: "a.wav", seed: 1, duration: 2, marks: [[0, 1], ["x", 2]] }],
+            },
+          ],
+          joins: { "cue-a": "join", "cue-b": "maybe" },
+        },
+      }),
+    );
+    const clip = project.voiceover.clips[0];
+    expect(clip.source?.cueIds).toEqual(["cue-a"]);
+    // A partly broken list would pair marks with the wrong cues.
+    expect(clip.takes?.[0]).not.toHaveProperty("marks");
+    expect(project.voiceover.joins).toEqual({ "cue-a": "join" });
+  });
+});

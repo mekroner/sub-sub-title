@@ -39,6 +39,7 @@ export type ShortcutCommand =
   | { type: "zoom"; direction: number }
   | { type: "toggleFollow" }
   | { type: "toggleGhost" }
+  | { type: "toggleDuck" }
   | { type: "showHelp" };
 
 export interface KeyLike {
@@ -149,6 +150,8 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
       return { type: "fitReadingSpeed" };
     case "KeyT":
       return { type: "toggleThought" };
+    case "KeyD":
+      return { type: "toggleDuck" };
     case "KeyB":
       return { type: "addSection" };
     case "PageUp":

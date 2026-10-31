@@ -20,6 +20,7 @@ import { ExportAudioDialog } from "./components/ExportAudioDialog";
 import { TtsInstallDialog } from "./components/TtsInstallDialog";
 import { CastPanel } from "./components/CastPanel";
 import { LineEditor } from "./components/LineEditor";
+import { ReferenceDialog } from "./components/ReferenceDialog";
 import {
   DEFAULT_SIDE_WIDTH,
   MAX_SIDE_WIDTH,
@@ -43,6 +44,13 @@ import { TranscribeDialog } from "./components/TranscribeDialog";
 import { VoiceoverTimeline } from "./components/VoiceoverTimeline";
 import { ClipInspector } from "./components/ClipInspector";
 import { VoiceoverMixer } from "./audio/mixer";
+import {
+  EMPTY_SELECTION,
+  applySelection,
+  pruneSelection,
+  type SelectionChange,
+  type VoSelection,
+} from "./lib/voSelection";
 
 import { emptyProject, useProjectHistory } from "./state/useProjectHistory";
 import { useShortcuts, type ShortcutActions } from "./hooks/useShortcuts";
@@ -91,6 +99,7 @@ import {
   addTrack,
   defaultVoiceover,
   moveClip,
+  moveClipsBy,
   newClip,
   patchClip,
   patchTrack,
@@ -105,20 +114,25 @@ import {
   type TrackPatch,
 } from "./lib/voiceover";
 import {
+  NO_SPEAKER,
+  castKey,
   clipForCue,
   fitCuesToLines,
-  isClipStale,
+  hasSomethingToSay,
+  lineIndex,
   overrun,
   referencePath,
   referenceSegments,
   removeTake,
-  selectTake,
-  setVoice,
-  hasSomethingToSay,
-  lineState,
+  renderGroup,
   renderLine,
+  selectTake,
+  setJoin,
+  setVoice,
   setVoicing,
   speechText,
+  suggestedReferenceCues,
+  voiceFor,
 } from "./lib/tts";
 import { DEFAULT_TARGET_CPS, clamp, durationForText, formatShort } from "./lib/time";
 import {
@@ -382,7 +396,12 @@ export default function App() {
    */
   const [mixer, setMixer] = useState<VoiceoverMixer | null>(null);
   const [decodeVersion, setDecodeVersion] = useState(0);
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  /** Cues and clips selected on the voiceover timeline; separate from the cue list's. */
+  const [voSel, setVoSel] = useState<VoSelection>(EMPTY_SELECTION);
+  const selectVo = useCallback(
+    (change: SelectionChange) => setVoSel((current) => applySelection(current, change)),
+    [],
+  );
   const voiceoverMode = workspace === "voiceover";
 
   useEffect(() => {
@@ -408,9 +427,12 @@ export default function App() {
 
   const canExportAudio = Boolean(project.videoPath && paths && tools?.ffmpeg);
 
+  // Set while a cue is auditioned as a cloning reference (see `previewCue`).
+  const [previewCueId, setPreviewCueId] = useState<string | null>(null);
+
   useEffect(() => {
-    mixer?.setMix(project.voiceover, voiceoverMode, duckPoints);
-  }, [mixer, project.voiceover, voiceoverMode, duckPoints]);
+    mixer?.setMix(project.voiceover, voiceoverMode && previewCueId === null, duckPoints);
+  }, [mixer, project.voiceover, voiceoverMode, previewCueId, duckPoints]);
 
   // Decode every clip's file up front, so a reopened project draws its clip
   // waveforms and the first clip plays on time. Loads are cached per file.
@@ -427,17 +449,28 @@ export default function App() {
     }
   }, [mixer, project.voiceover.clips, notify]);
 
-  const selectedClip = useMemo(
-    () => project.voiceover.clips.find((c) => c.id === selectedClipId) ?? null,
-    [project.voiceover.clips, selectedClipId],
-  );
+  /**
+   * What the side panels show: the primary item's clip — the clip itself, or
+   * the clip holding a selected cue's line — and the primary item's cue.
+   */
+  const selectedClip = useMemo(() => {
+    const primary = voSel.primary;
+    if (!primary) return null;
+    return primary.kind === "clip"
+      ? project.voiceover.clips.find((c) => c.id === primary.id) ?? null
+      : clipForCue(project.voiceover, primary.id) ?? null;
+  }, [project.voiceover, voSel.primary]);
 
-  // A clip removed by an undo, or with its track, must not stay selected.
+  // Anything removed by an undo, a delete or a load leaves the selection.
   useEffect(() => {
-    if (selectedClipId && !project.voiceover.clips.some((c) => c.id === selectedClipId)) {
-      setSelectedClipId(null);
-    }
-  }, [project.voiceover.clips, selectedClipId]);
+    setVoSel((current) =>
+      pruneSelection(
+        current,
+        new Set(project.cues.map((c) => c.id)),
+        new Set(project.voiceover.clips.map((c) => c.id)),
+      ),
+    );
+  }, [project.cues, project.voiceover.clips]);
 
   // --- Transport ----------------------------------------------------------
   // Loading a new source resets volume/rate on the element, so re-apply on
@@ -956,14 +989,15 @@ export default function App() {
       }
       if (clips.length === 0) return;
       setVoiceover((v) => addClips(v, clips));
-      setSelectedClipId(clips[clips.length - 1].id);
+      selectVo({ items: [{ kind: "clip", id: clips[clips.length - 1].id }], mode: "replace" });
     },
-    [mixer, notify, setVoiceover],
+    [mixer, notify, setVoiceover, selectVo],
   );
 
   // --- Voices -------------------------------------------------------------
   const voices = useVoiceGeneration({
     voiceover: project.voiceover,
+    cues,
     paths,
     // A whole run is one undo step, however long it takes.
     commit: dragVoiceover,
@@ -982,71 +1016,174 @@ export default function App() {
     [setVoiceover],
   );
 
-  /** Clones a speaker's voice from their own lines in the video. */
-  const referenceFromVideo = useCallback(
-    async (key: string) => {
-      if (!paths || !project.videoPath) return;
-      const segments = referenceSegments(cues, key);
-      const total = segments.reduce((sum, [a, b]) => sum + b - a, 0);
-      if (total < 5) {
-        notify(
-          `This speaker has only ${total.toFixed(1)} s of spoken lines; a voice needs more than 5 s. Use a file instead.`,
-          "error",
-        );
-        return;
-      }
-      try {
-        const out = referencePath(paths.dir, paths.stem, key);
-        const seconds = await api.ttsExtractReference(project.videoPath, segments, out);
-        setVoiceover((v) => setVoice(v, key, { reference: out }));
-        notify(`Cloning the voice from ${segments.length} lines (${seconds.toFixed(1)} s).`);
-      } catch (e) {
-        notify(errorMessage(e), "error");
-      }
+  /** The speaker whose reference cues are being chosen, while the picker is open. */
+  const [referenceKey, setReferenceKey] = useState<string | null>(null);
+
+  /**
+   * Plays one cue's stretch of the video, for judging it as a reference. The
+   * mix is bypassed meanwhile (see the mixer effect): the duck would bury the
+   * very voice being listened for, and generated clips would talk over it.
+   */
+  const stopPreviewRef = useRef<(() => void) | null>(null);
+  const stopPreview = useCallback(() => {
+    stopPreviewRef.current?.();
+  }, []);
+  const previewCue = useCallback(
+    (cue: Cue) => {
+      stopPreviewRef.current?.();
+      const video = videoRef.current;
+      if (!video) return;
+      let frame = 0;
+      const stop = () => {
+        cancelAnimationFrame(frame);
+        video.removeEventListener("pause", stop);
+        stopPreviewRef.current = null;
+        setPreviewCueId(null);
+        if (!video.paused) video.pause();
+      };
+      // Polled per frame rather than on `timeupdate`, which fires only a few
+      // times a second and would let the next line bleed in.
+      const watch = () => {
+        if (video.currentTime >= cue.end) stop();
+        else frame = requestAnimationFrame(watch);
+      };
+      seek(cue.start);
+      video.addEventListener("pause", stop);
+      stopPreviewRef.current = stop;
+      setPreviewCueId(cue.id);
+      void video.play().then(() => {
+        frame = requestAnimationFrame(watch);
+      }, stop);
     },
-    [paths, project.videoPath, cues, setVoiceover, notify],
+    [seek],
   );
 
-  /** Generated clips whose line changed or which run past their cue. */
+  /** Clones a speaker's voice from the cues chosen in the reference picker. */
+  const buildReference = useCallback(
+    async (key: string, chosen: Cue[]) => {
+      if (!paths || !project.videoPath) return;
+      const segments = referenceSegments(chosen);
+      const out = referencePath(paths.dir, paths.stem, key);
+      const seconds = await api.ttsExtractReference(project.videoPath, segments, out);
+      setVoiceover((v) =>
+        setVoice(v, key, { reference: out, referenceCueIds: chosen.map((c) => c.id) }),
+      );
+      notify(`Cloning the voice from ${segments.length} lines (${seconds.toFixed(1)} s).`);
+    },
+    [paths, project.videoPath, setVoiceover, notify],
+  );
+
+  /** Lines, their cues and their state: worked out once per change. */
+  const lines = useMemo(() => lineIndex(project.voiceover, cues), [project.voiceover, cues]);
+
+  /** Boundaries between cues spoken as one line: from one cue's end to the next one's start. */
+  const lineJoins = useMemo(
+    () =>
+      lines.groups.flatMap((group) =>
+        group.slice(1).map((cue, i): [number, number] => [group[i].end, cue.start]),
+      ),
+    [lines],
+  );
+
+  /** Generated clips whose line changed or which run past their last cue. */
   const clipWarnings = useMemo(() => {
     const warnings = new Map<string, "stale" | "overrun">();
     for (const clip of project.voiceover.clips) {
-      if (isClipStale(project.voiceover, clip, cues)) warnings.set(clip.id, "stale");
+      if (lines.isStale(clip)) warnings.set(clip.id, "stale");
       else if (overrun(clip, cues) > 0) warnings.set(clip.id, "overrun");
     }
     return warnings;
-  }, [project.voiceover, cues]);
+  }, [project.voiceover.clips, lines, cues]);
 
+  /** The first cue of the selected clip's line. */
   const selectedCueOfClip = useMemo(
     () =>
-      selectedClip?.source ? cues.find((c) => c.id === selectedClip.source!.cueId) ?? null : null,
+      selectedClip?.source
+        ? cues.find((c) => c.id === selectedClip.source!.cueIds[0]) ?? null
+        : null,
     [selectedClip, cues],
   );
 
   // --- Voice lines --------------------------------------------------------
   /**
-   * The cue whose voice line is open in the editor: one chosen explicitly
-   * (double-click, or the cue menu), else the cue of the selected clip.
+   * The cue whose voice line is open in the editor: the selected cue, or the
+   * first cue of the selected clip's line.
    */
-  const [lineCueId, setLineCueId] = useState<string | null>(null);
-  const editedCue = useMemo(
-    () => (lineCueId ? cues.find((c) => c.id === lineCueId) ?? null : selectedCueOfClip),
-    [lineCueId, cues, selectedCueOfClip],
-  );
+  const editedCue = useMemo(() => {
+    const primary = voSel.primary;
+    if (primary?.kind === "cue") return cues.find((c) => c.id === primary.id) ?? null;
+    return selectedCueOfClip;
+  }, [voSel.primary, cues, selectedCueOfClip]);
 
   const editCueLine = useCallback(
-    (cueId: string) => {
-      setLineCueId(cueId);
-      setSelectedClipId(clipForCue(project.voiceover, cueId)?.id ?? null);
-    },
-    [project.voiceover],
+    (cueId: string) => selectVo({ items: [{ kind: "cue", id: cueId }], mode: "replace" }),
+    [selectVo],
   );
 
-  /** Selecting a clip shows its own cue's line rather than one opened before. */
-  const selectClip = useCallback((id: string | null) => {
-    setSelectedClipId(id);
-    setLineCueId(null);
-  }, []);
+  const selectClip = useCallback(
+    (id: string) => selectVo({ items: [{ kind: "clip", id }], mode: "replace" }),
+    [selectVo],
+  );
+
+  /**
+   * D: one press ducks every selected cue, or — when they all are already —
+   * lets the original through under all of them.
+   */
+  const toggleDuckOnSelection = useCallback(() => {
+    const ids = [...voSel.cues];
+    if (ids.length === 0) return;
+    setVoiceover((v) => {
+      const allDucked = ids.every((id) => !v.unduckedCueIds.includes(id));
+      const others = v.unduckedCueIds.filter((id) => !ids.includes(id));
+      return { ...v, unduckedCueIds: allDucked ? [...others, ...ids] : others };
+    });
+  }, [voSel.cues, setVoiceover]);
+
+  /**
+   * Remembers where everything stood when a selection drag began: each event
+   * moves the selection by the whole distance dragged, from there.
+   */
+  const selectionDragOrigin = useRef<{ key: string; cues: Cue[]; voiceover: Voiceover } | null>(
+    null,
+  );
+
+  /**
+   * Moves every selected cue and clip by the same amount: one block, one undo
+   * step. Clips stop at zero and cues at their unselected neighbours, and
+   * whichever stops first stops both, so the selection never comes apart.
+   */
+  const moveSelection = useCallback(
+    (delta: number, drag: string) => {
+      update(
+        (current) => {
+          if (selectionDragOrigin.current?.key !== drag) {
+            selectionDragOrigin.current = {
+              key: drag,
+              cues: current.cues,
+              voiceover: current.voiceover,
+            };
+          }
+          const origin = selectionDragOrigin.current;
+          const clips = moveClipsBy(origin.voiceover, voSel.clips, delta);
+          let applied = voSel.clips.size > 0 ? clips.delta : delta;
+          let movedCues = origin.cues;
+          if (voSel.cues.size > 0) {
+            movedCues = moveCuesBy(origin.cues, voSel.cues, applied, duration, settings.minGap);
+            const probe = origin.cues.find((c) => voSel.cues.has(c.id));
+            const after = probe && movedCues.find((c) => c.id === probe.id);
+            if (probe && after) applied = after.start - probe.start;
+          }
+          const voiceover =
+            voSel.clips.size > 0
+              ? moveClipsBy(origin.voiceover, voSel.clips, applied).voiceover
+              : origin.voiceover;
+          return { ...current, cues: movedCues, voiceover };
+        },
+        { mergeKey: `selection:${drag}`, mergeWindowMs: Infinity },
+      );
+    },
+    [update, voSel.cues, voSel.clips, duration, settings.minGap],
+  );
 
   const suggestLine = useCallback(
     async (cue: Cue) => {
@@ -1113,6 +1250,26 @@ export default function App() {
           : voices.job
             ? "Busy speaking other lines"
             : undefined;
+      const group = lines.groupOf(cue.id) ?? [cue];
+      const size = group.length > 1 ? ` (${group.length} cues)` : "";
+
+      // The boundary after this cue: what joining or splitting it would do.
+      const speakable = cues.filter((c) => hasSomethingToSay(project.voiceover, c));
+      const next = speakable[speakable.findIndex((c) => c.id === cue.id) + 1];
+      const joined = next !== undefined && group.some((c) => c.id === next.id);
+      const joinable =
+        next !== undefined &&
+        !joined &&
+        lineIndex(setJoin(project.voiceover, cue.id, "join"), cues)
+          .groupOf(cue.id)
+          ?.some((c) => c.id === next.id) === true;
+      const joinWhy =
+        next === undefined
+          ? "It is the last line"
+          : next.speakerId !== cue.speakerId || (next.mode ?? "") !== (cue.mode ?? "")
+            ? "The next cue is another speaker or mode"
+            : "Together they are too long for one line";
+
       setContextMenu({
         x,
         y,
@@ -1120,7 +1277,7 @@ export default function App() {
           installed
             ? {
                 kind: "item",
-                label: clip ? "Generate new take" : "Generate voice line",
+                label: (clip ? "Generate new take" : "Generate voice line") + size,
                 detail: why,
                 disabled: why !== undefined,
                 onSelect: () => void voices.generate([cue]),
@@ -1142,6 +1299,28 @@ export default function App() {
             label: "Select its clip",
             disabled: !clip,
             onSelect: () => clip && selectClip(clip.id),
+          },
+          { kind: "separator" },
+          joined
+            ? {
+                kind: "item",
+                label: "Speak separately from the next cue",
+                detail: "Splits the line here",
+                onSelect: () => setVoiceover((v) => setJoin(v, cue.id, "split")),
+              }
+            : {
+                kind: "item",
+                label: "Speak together with the next cue",
+                detail: joinable ? "One line, so the sentence flows" : joinWhy,
+                disabled: !joinable,
+                onSelect: () => setVoiceover((v) => setJoin(v, cue.id, "join")),
+              },
+          {
+            kind: "item",
+            label: "Group automatically here",
+            detail: "Forget the choice made for this boundary",
+            disabled: project.voiceover.joins[cue.id] === undefined,
+            onSelect: () => setVoiceover((v) => setJoin(v, cue.id, undefined)),
           },
           { kind: "separator" },
           {
@@ -1167,7 +1346,7 @@ export default function App() {
         ],
       });
     },
-    [cues, project.voiceover, voices, paths, setVoiceover, fitCues, editCueLine, selectClip],
+    [cues, project.voiceover, lines, voices, paths, setVoiceover, fitCues, editCueLine, selectClip],
   );
 
   /** Text for the chat box, set from elsewhere — the Story panel's ✦ Story. */
@@ -2077,6 +2256,7 @@ export default function App() {
       zoom: zoomBy,
       toggleFollow: () => setFollow((f) => !f),
       toggleGhost,
+      toggleDuck: () => undefined,
       showHelp: () => setShowHelp(true),
   };
 
@@ -2099,17 +2279,25 @@ export default function App() {
     toggleThought: () => undefined,
     addSectionAtPlayhead: () => undefined,
     duplicateSelected: () => undefined,
+    // Cues cannot be deleted here, so Delete takes only the selected clips.
     deleteSelected: () => {
-      if (selectedClipId) removeClipById(selectedClipId);
+      if (voSel.clips.size === 0) return;
+      const ids = voSel.clips;
+      setVoiceover((v) => ({ ...v, clips: v.clips.filter((c) => !ids.has(c.id)) }));
     },
-    selectAll: () => undefined,
+    selectAll: () =>
+      selectVo({
+        items: project.voiceover.clips.map((c) => ({ kind: "clip" as const, id: c.id })),
+        mode: "replace",
+      }),
     clearSelection: () => {
       if (contextMenu) setContextMenu(null);
-      else setSelectedClipId(null);
+      else setVoSel(EMPTY_SELECTION);
     },
     openFind: () => undefined,
     openFill: () => undefined,
     toggleGhost: () => undefined,
+    toggleDuck: toggleDuckOnSelection,
   };
 
   useShortcuts(
@@ -2788,7 +2976,7 @@ export default function App() {
             <>
             <CastPanel
               voiceover={project.voiceover}
-              cues={cues}
+              lines={lines}
               speakers={speakers}
               status={voices.status}
               job={voices.job}
@@ -2800,7 +2988,7 @@ export default function App() {
                 setVoiceover((v) => setVoice(v, key, patch), `voice:${key}:${Object.keys(patch).join()}`)
               }
               onReferenceFromFile={(key) => void referenceFromFile(key)}
-              onReferenceFromVideo={(key) => void referenceFromVideo(key)}
+              onReferenceFromVideo={setReferenceKey}
             />
             {editedCue && (
               <LineEditor
@@ -2812,8 +3000,9 @@ export default function App() {
                   speakers.find((s) => s.id === editedCue.speakerId)?.name ?? "No speaker"
                 }
                 voicing={project.voiceover.voicing[editedCue.id] ?? {}}
-                rendered={renderLine(project.voiceover, editedCue)}
-                state={lineState(project.voiceover, editedCue)}
+                groupSize={lines.groupOf(editedCue.id)?.length ?? 1}
+                rendered={renderGroup(project.voiceover, lines.groupOf(editedCue.id) ?? [editedCue])}
+                state={lines.stateOf(lines.groupOf(editedCue.id) ?? [editedCue])}
                 canSpeak={Boolean(voices.status?.installed && paths && !voices.job)}
                 onSuggest={apiKeySet ? () => suggestLine(editedCue) : undefined}
                 onChange={(patch) =>
@@ -2823,10 +3012,7 @@ export default function App() {
                   )
                 }
                 onGenerate={() => void voices.generate([editedCue])}
-                onClose={() => {
-                  setLineCueId(null);
-                  setSelectedClipId(null);
-                }}
+                onClose={() => setVoSel(EMPTY_SELECTION)}
               />
             )}
             <ClipInspector
@@ -2956,12 +3142,13 @@ export default function App() {
               playing={playing}
               zoom={zoom}
               follow={follow}
-              selectedClipId={selectedClipId}
+              selection={voSel}
               clipPeaks={(file) => mixer?.peaksFor(file) ?? null}
               decodeVersion={decodeVersion}
               onSeek={seek}
               onZoomChange={setZoom}
-              onSelectClip={selectClip}
+              onSelect={selectVo}
+              onMoveSelection={moveSelection}
               onPatchTrack={patchTrackById}
               onAddTrack={() => setVoiceover(addTrack)}
               onRemoveTrack={(id) => setVoiceover((v) => removeTrack(v, id))}
@@ -2978,6 +3165,7 @@ export default function App() {
               duck={duckPoints}
               onExport={canExportAudio ? () => setShowExportAudio(true) : undefined}
               clipWarnings={clipWarnings}
+              lineJoins={lineJoins}
               onContextMenuCue={openVoiceCueMenu}
               onEditCueLine={editCueLine}
               onRetimeCue={retimeCueInVoiceover}
@@ -3139,6 +3327,28 @@ export default function App() {
           assText={assText}
           duration={duration}
           onClose={() => setShowRender(false)}
+        />
+      )}
+
+      {referenceKey !== null && (
+        <ReferenceDialog
+          speakerName={
+            referenceKey === NO_SPEAKER
+              ? "the unassigned"
+              : speakers.find((s) => s.id === referenceKey)?.name ?? "this speaker"
+          }
+          cues={cues.filter((c) => castKey(c) === referenceKey)}
+          initial={
+            new Set(
+              voiceFor(project.voiceover, referenceKey).referenceCueIds ??
+                suggestedReferenceCues(cues, referenceKey).map((c) => c.id),
+            )
+          }
+          playingId={previewCueId}
+          onPlay={previewCue}
+          onStop={stopPreview}
+          onBuild={(chosen) => buildReference(referenceKey, chosen)}
+          onClose={() => setReferenceKey(null)}
         />
       )}
 

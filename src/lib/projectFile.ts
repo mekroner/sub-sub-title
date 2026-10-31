@@ -171,17 +171,39 @@ function coerceClip(raw: unknown): VoiceClip | null {
   };
 }
 
+function strings(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === "string" && s !== "") : [];
+}
+
 function coerceSource(raw: unknown): { source?: ClipSource } {
   if (typeof raw !== "object" || raw === null) return {};
-  const s = raw as Partial<ClipSource>;
-  if (typeof s.cueId !== "string" || typeof s.text !== "string") return {};
+  // `cueId` is how files written before lines could span cues name the cue.
+  const s = raw as Partial<ClipSource> & { cueId?: unknown };
+  const cueIds = strings(s.cueIds);
+  if (cueIds.length === 0 && typeof s.cueId === "string" && s.cueId) cueIds.push(s.cueId);
+  if (cueIds.length === 0 || typeof s.text !== "string") return {};
   return {
     source: {
-      cueId: s.cueId,
+      cueIds,
       text: s.text,
       voiceKey: typeof s.voiceKey === "string" ? s.voiceKey : "",
     },
   };
+}
+
+function coerceMarks(raw: unknown): { marks?: Array<[number, number]> } {
+  if (!Array.isArray(raw)) return {};
+  const marks = raw.filter(
+    (m): m is [number, number] =>
+      Array.isArray(m) &&
+      m.length === 2 &&
+      typeof m[0] === "number" &&
+      typeof m[1] === "number" &&
+      Number.isFinite(m[0]) &&
+      Number.isFinite(m[1]),
+  );
+  // A partial list would pair marks with the wrong cues; all or nothing.
+  return marks.length && marks.length === raw.length ? { marks } : {};
 }
 
 function coerceTakes(raw: unknown): { takes?: ClipTake[] } {
@@ -191,9 +213,20 @@ function coerceTakes(raw: unknown): { takes?: ClipTake[] } {
     const take = t as Partial<ClipTake>;
     if (typeof take.file !== "string" || !take.file) return [];
     const duration = finite(take.duration, 0);
-    return duration > 0 ? [{ file: take.file, seed: finite(take.seed, 0), duration }] : [];
+    return duration > 0
+      ? [{ file: take.file, seed: finite(take.seed, 0), duration, ...coerceMarks(take.marks) }]
+      : [];
   });
   return takes.length ? { takes } : {};
+}
+
+function coerceJoins(raw: unknown): Record<string, "join" | "split"> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const joins: Record<string, "join" | "split"> = {};
+  for (const [cueId, value] of Object.entries(raw)) {
+    if (value === "join" || value === "split") joins[cueId] = value;
+  }
+  return joins;
 }
 
 /** Keeps only entries that still say something; a blank field is dropped. */
@@ -227,6 +260,7 @@ function coerceCast(raw: unknown): Record<string, CastVoice> {
       temperature: Math.min(1.5, Math.max(0.05, finite(v.temperature, DEFAULT_VOICE.temperature))),
       ...(typeof v.reference === "string" && v.reference ? { reference: v.reference } : {}),
       ...(typeof v.trackId === "string" && v.trackId ? { trackId: v.trackId } : {}),
+      ...(strings(v.referenceCueIds).length ? { referenceCueIds: strings(v.referenceCueIds) } : {}),
     };
   }
   return cast;
@@ -269,6 +303,7 @@ function coerceVoiceover(raw: unknown): Voiceover {
       unduckedCueIds: [],
       cast: coerceCast(v.cast),
       voicing: coerceVoicing(v.voicing),
+      joins: coerceJoins(v.joins),
     },
     {
       enabled: rawDuck.enabled !== false,

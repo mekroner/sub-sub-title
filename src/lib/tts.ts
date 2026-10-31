@@ -1,7 +1,7 @@
 /**
- * Generated speech: who is voiced how, which clip belongs to which cue, and
- * when a clip no longer says what its cue does. Pure functions over
- * `Voiceover`, like the rest of the mix.
+ * Generated speech: who is voiced how, which cues are spoken as one line,
+ * which clip holds each line, and when a clip no longer says what its cues
+ * do. Pure functions over `Voiceover`, like the rest of the mix.
  */
 
 import type { CastVoice, ClipTake, Cue, CueVoicing, VoiceClip, Voiceover } from "../types";
@@ -12,11 +12,21 @@ import { addTrack, clipEnd, voiceTracks } from "./voiceover";
 
 /** Cast key for cues with no speaker. */
 export const NO_SPEAKER = "";
-/** A line running this far past its cue is worth a warning. */
+/** A line running this far past its last cue is worth a warning. */
 export const OVERRUN_TOLERANCE = 0.05;
 /** How much of a speaker's own audio makes a good cloning reference. */
 export const REFERENCE_TARGET_SECONDS = 15;
 export const REFERENCE_MAX_SECONDS = 25;
+
+/**
+ * Automatic grouping is deliberately conservative: only a sentence that a
+ * subtitle split across neighbouring cues, with no real pause between them,
+ * is spoken as one line. Anything else can still be joined by hand.
+ */
+export const GROUP_MAX_GAP = 0.5;
+/** Chatterbox rushes and drops words on long inputs; groups stay under these. */
+export const GROUP_MAX_SPAN = 20;
+export const GROUP_MAX_CHARS = 300;
 
 export const DEFAULT_VOICE: CastVoice = {
   engine: "turbo",
@@ -43,6 +53,7 @@ export function setVoice(
   // `undefined` in a patch clears an optional field rather than storing it.
   if (next.reference === undefined) delete next.reference;
   if (next.trackId === undefined) delete next.trackId;
+  if (next.referenceCueIds === undefined) delete next.referenceCueIds;
   return { ...voiceover, cast: { ...voiceover.cast, [key]: next } };
 }
 
@@ -61,8 +72,9 @@ export function speechText(cue: Pick<Cue, "text">): string {
   return cue.text.replace(/\s+/g, " ").trim();
 }
 
+/** The clip holding the line a cue is part of, if one has been generated. */
 export function clipForCue(voiceover: Voiceover, cueId: string): VoiceClip | undefined {
-  return voiceover.clips.find((c) => c.source?.cueId === cueId);
+  return voiceover.clips.find((c) => c.source?.cueIds.includes(cueId));
 }
 
 export type LineState = "missing" | "stale" | "current";
@@ -102,7 +114,7 @@ export interface RenderedLine {
 }
 
 /**
- * What a cue's line comes out as for its voice's model: its spoken text (or
+ * What one cue's part comes out as for its voice's model: its spoken text (or
  * its own), with the direction turned into tags for Turbo, or into an
  * intensity for Expressive — which reads tags aloud, so it gets none.
  */
@@ -126,38 +138,23 @@ export function renderLine(voiceover: Voiceover, cue: Cue): RenderedLine {
   };
 }
 
+/**
+ * A whole line: each cue's part in order, so a tag written in the second cue
+ * lands where that cue begins. One intensity serves the line, the strongest
+ * any cue asks for.
+ */
+export function renderGroup(voiceover: Voiceover, group: Cue[]): RenderedLine {
+  const parts = group.map((cue) => renderLine(voiceover, cue));
+  return {
+    text: parts.map((p) => p.text).filter(Boolean).join(" "),
+    exaggeration: Math.max(...parts.map((p) => p.exaggeration)),
+    voice: parts[0].voice,
+  };
+}
+
 /** `voiceKey` with the line's own intensity, which direction can change. */
 function renderedKey(line: RenderedLine): string {
   return voiceKey({ ...line.voice, exaggeration: line.exaggeration });
-}
-
-export function lineState(voiceover: Voiceover, cue: Cue): LineState {
-  const clip = clipForCue(voiceover, cue.id);
-  if (!clip?.source) return "missing";
-  const line = renderLine(voiceover, cue);
-  const fresh = clip.source.text === line.text && clip.source.voiceKey === renderedKey(line);
-  return fresh ? "current" : "stale";
-}
-
-/** A generated clip whose cue has changed, gone, or been revoiced. */
-export function isClipStale(voiceover: Voiceover, clip: VoiceClip, cues: Cue[]): boolean {
-  if (!clip.source) return false;
-  const cue = cues.find((c) => c.id === clip.source!.cueId);
-  return !cue || lineState(voiceover, cue) === "stale";
-}
-
-/** Seconds the clip runs past its cue's end; 0 when it fits. */
-export function overrun(clip: VoiceClip, cues: Cue[]): number {
-  if (!clip.source) return 0;
-  const cue = cues.find((c) => c.id === clip.source!.cueId);
-  if (!cue) return 0;
-  const over = clipEnd(clip) - cue.end;
-  return over > OVERRUN_TOLERANCE ? over : 0;
-}
-
-/** Cues with something to say whose line is missing or out of date. */
-export function pendingCues(voiceover: Voiceover, cues: Cue[]): Cue[] {
-  return cues.filter((cue) => hasSomethingToSay(voiceover, cue) && lineState(voiceover, cue) !== "current");
 }
 
 /**
@@ -166,6 +163,117 @@ export function pendingCues(voiceover: Voiceover, cues: Cue[]): Cue[] {
  */
 export function hasSomethingToSay(voiceover: Voiceover, cue: Cue): boolean {
   return renderLine(voiceover, cue).text !== "";
+}
+
+// --- Grouping -----------------------------------------------------------------
+
+/** Ends with sentence punctuation, perhaps inside a closing quote or bracket. */
+const SENTENCE_END = /[.!?…]["'”’)\]]*$/;
+
+function endsSentence(voiceover: Voiceover, cue: Cue): boolean {
+  const spoken = stripTags(speechText({ text: voicingFor(voiceover, cue.id).spoken ?? cue.text }));
+  return SENTENCE_END.test(spoken);
+}
+
+/**
+ * Whether `next` is spoken together with the group ending in `prev`. A
+ * speaker or mode change and the length caps always separate; an override
+ * decides next; otherwise only a sentence split by the subtitles, with no
+ * real pause, is joined.
+ */
+function joinsGroup(voiceover: Voiceover, group: Cue[], next: Cue): boolean {
+  const prev = group[group.length - 1];
+  if (castKey(prev) !== castKey(next) || (prev.mode ?? "") !== (next.mode ?? "")) return false;
+  const chars = [...group, next].reduce((n, c) => n + renderLine(voiceover, c).text.length, 0);
+  if (next.end - group[0].start > GROUP_MAX_SPAN || chars > GROUP_MAX_CHARS) return false;
+  const override = voiceover.joins[prev.id];
+  if (override) return override === "join";
+  return next.start - prev.end <= GROUP_MAX_GAP && !endsSentence(voiceover, prev);
+}
+
+/** The cues with something to say, as the lines they are spoken in. */
+export function lineGroups(voiceover: Voiceover, cues: Cue[]): Cue[][] {
+  const groups: Cue[][] = [];
+  for (const cue of sortCues(cues)) {
+    if (!hasSomethingToSay(voiceover, cue)) continue;
+    const current = groups[groups.length - 1];
+    if (current && joinsGroup(voiceover, current, cue)) current.push(cue);
+    else groups.push([cue]);
+  }
+  return groups;
+}
+
+/** Sets or clears the grouping override at the boundary after `cueId`. */
+export function setJoin(
+  voiceover: Voiceover,
+  cueId: string,
+  join: "join" | "split" | undefined,
+): Voiceover {
+  const joins = { ...voiceover.joins };
+  if (join) joins[cueId] = join;
+  else delete joins[cueId];
+  return { ...voiceover, joins };
+}
+
+function sameIds(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/**
+ * The lines of a project and their state, worked out once. Every question
+ * about lines goes through this, so the Cast panel, the timeline and the
+ * generator can never disagree about what belongs together.
+ */
+export interface LineIndex {
+  groups: Cue[][];
+  /** The line a cue is spoken in. */
+  groupOf: (cueId: string) => Cue[] | undefined;
+  stateOf: (group: Cue[]) => LineState;
+  /** A generated clip whose cues, text or voice have changed, or gone. */
+  isStale: (clip: VoiceClip) => boolean;
+  /** Lines that are missing or out of date. */
+  pending: Cue[][];
+}
+
+export function lineIndex(voiceover: Voiceover, cues: Cue[]): LineIndex {
+  const groups = lineGroups(voiceover, cues);
+  const byCue = new Map<string, Cue[]>();
+  for (const group of groups) for (const cue of group) byCue.set(cue.id, group);
+
+  const stateOf = (group: Cue[]): LineState => {
+    const clip = clipForCue(voiceover, group[0].id);
+    if (!clip?.source) return "missing";
+    const line = renderGroup(voiceover, group);
+    const fresh =
+      sameIds(clip.source.cueIds, group.map((c) => c.id)) &&
+      clip.source.text === line.text &&
+      clip.source.voiceKey === renderedKey(line);
+    return fresh ? "current" : "stale";
+  };
+
+  const isStale = (clip: VoiceClip): boolean => {
+    if (!clip.source) return false;
+    const group = byCue.get(clip.source.cueIds[0]);
+    if (!group || clipForCue(voiceover, group[0].id) !== clip) return true;
+    return stateOf(group) !== "current";
+  };
+
+  return {
+    groups,
+    groupOf: (cueId) => byCue.get(cueId),
+    stateOf,
+    isStale,
+    pending: groups.filter((g) => stateOf(g) !== "current"),
+  };
+}
+
+/** Seconds the clip runs past the end of its last cue; 0 when it fits. */
+export function overrun(clip: VoiceClip, cues: Cue[]): number {
+  if (!clip.source) return 0;
+  const own = cues.filter((c) => clip.source!.cueIds.includes(c.id));
+  if (own.length === 0) return 0;
+  const over = clipEnd(clip) - Math.max(...own.map((c) => c.end));
+  return over > OVERRUN_TOLERANCE ? over : 0;
 }
 
 /**
@@ -186,29 +294,31 @@ export function trackForVoice(
 }
 
 /**
- * Places a freshly generated take. A cue that already has a clip gets the
- * take added to it — keeping where the clip was moved to, its track and its
- * gain — and plays it untrimmed; otherwise a new clip starts at the cue.
- * `line` is what was actually spoken; it defaults to the line as it reads now.
+ * Places a freshly generated take of a line. The clip already holding the
+ * line's first cue gets the take — keeping where it was moved to, its track
+ * and its gain — and plays it untrimmed; otherwise a new clip starts at the
+ * line's first cue. Any other clip that only held cues of this line is
+ * removed: the new line speaks those words now. `line` is what was actually
+ * spoken; it defaults to the line as it reads now.
  */
 export function placeTake(
   voiceover: Voiceover,
-  cue: Cue,
+  group: Cue[],
   take: ClipTake,
-  line: RenderedLine = renderLine(voiceover, cue),
+  line: RenderedLine = renderGroup(voiceover, group),
 ): Voiceover {
-  const key = castKey(cue);
-  const source = {
-    cueId: cue.id,
-    text: line.text,
-    voiceKey: renderedKey(line),
-  };
-  const existing = clipForCue(voiceover, cue.id);
+  const ids = group.map((c) => c.id);
+  const source = { cueIds: ids, text: line.text, voiceKey: renderedKey(line) };
+  const existing = clipForCue(voiceover, ids[0]);
+  const superseded = (c: VoiceClip) =>
+    c !== existing && !!c.source && c.source.cueIds.every((id) => ids.includes(id));
+  const clips = voiceover.clips.filter((c) => !superseded(c));
+
   if (existing) {
     const takes = [...(existing.takes ?? []), take];
     return {
       ...voiceover,
-      clips: voiceover.clips.map((c) =>
+      clips: clips.map((c) =>
         c.id === existing.id
           ? {
               ...c,
@@ -224,14 +334,14 @@ export function placeTake(
     };
   }
 
-  const placed = trackForVoice(voiceover, key);
+  const placed = trackForVoice({ ...voiceover, clips }, castKey(group[0]));
   const clip: VoiceClip = {
     id: makeId(),
     trackId: placed.trackId,
     file: take.file,
-    // Named after the subtitle, not the script: tags make poor labels.
-    name: clipName(speechText(cue) || stripTags(source.text)),
-    start: cue.start,
+    // Named after the subtitles, not the script: tags make poor labels.
+    name: clipName(group.map(speechText).join(" ") || stripTags(source.text)),
+    start: group[0].start,
     offset: 0,
     duration: take.duration,
     sourceDuration: take.duration,
@@ -261,11 +371,27 @@ export function selectTake(voiceover: Voiceover, clipId: string, index: number):
 }
 
 /**
- * Retimes cues to span their generated lines exactly, so the subtitle shows
- * while the voice speaks. Only the timing changes; each cue stays inside the
- * room its neighbours leave it (with `minGap`), so a line that overlaps the
- * next cue fits as far as it can. `ids` limits which cues move; by default
- * every cue that has a line does.
+ * Where each cue's words fall in a take, when alignment did not say: shares
+ * of the take in proportion to each cue's text. Rough, but never empty.
+ */
+export function proportionalMarks(parts: string[], duration: number): Array<[number, number]> {
+  const weights = parts.map((p) => Math.max(1, stripTags(p).length));
+  const total = weights.reduce((a, b) => a + b, 0);
+  let at = 0;
+  return weights.map((w) => {
+    const start = at;
+    at += (w / total) * duration;
+    return [start, at];
+  });
+}
+
+/**
+ * Retimes cues to their generated lines, so each subtitle shows while its
+ * words are spoken: a single cue spans its whole clip, the cues of a joined
+ * line span their own words (aligned when the take was made, proportional
+ * otherwise). Only the timing changes; each cue stays inside the room its
+ * neighbours leave it (with `minGap`). `ids` limits which cues move; by
+ * default every cue that has a line does.
  */
 export function fitCuesToLines(
   cues: Cue[],
@@ -274,12 +400,45 @@ export function fitCuesToLines(
   minGap: number,
   ids?: Set<string>,
 ): Cue[] {
+  const targets = new Map<string, [number, number]>();
+  for (const clip of voiceover.clips) {
+    const cueIds = clip.source?.cueIds;
+    if (!cueIds?.length) continue;
+    if (cueIds.length === 1) {
+      targets.set(cueIds[0], [clip.start, clipEnd(clip)]);
+      continue;
+    }
+    const take = clip.takes?.find((t) => t.file === clip.file);
+    const marks =
+      take?.marks?.length === cueIds.length
+        ? take.marks
+        : proportionalMarks(
+            cueIds.map((id) => {
+              const cue = cues.find((c) => c.id === id);
+              return cue ? renderLine(voiceover, cue).text : "";
+            }),
+            clip.sourceDuration,
+          );
+    cueIds.forEach((id, i) => {
+      const [from, to] = marks[i];
+      const start = Math.max(clip.start, clip.start + from - clip.offset);
+      const end = Math.min(clipEnd(clip), clip.start + to - clip.offset);
+      if (end > start) targets.set(id, [start, end]);
+    });
+  }
+
+  // Each cue is clamped by its neighbours as they stand, so the order matters:
+  // cues moving left go first to last, cues moving right last to first, so a
+  // cue never runs into a neighbour that is about to move out of its way.
+  const moving = sortCues(cues).filter(
+    (cue) => (!ids || ids.has(cue.id)) && targets.has(cue.id),
+  );
+  const leftward = moving.filter((cue) => targets.get(cue.id)![0] <= cue.start);
+  const rightward = moving.filter((cue) => targets.get(cue.id)![0] > cue.start).reverse();
   let next = cues;
-  for (const cue of sortCues(cues)) {
-    if (ids && !ids.has(cue.id)) continue;
-    const clip = clipForCue(voiceover, cue.id);
-    if (!clip) continue;
-    next = resizeCue(next, cue.id, clip.start, clipEnd(clip), duration, minGap);
+  for (const cue of [...leftward, ...rightward]) {
+    const [start, end] = targets.get(cue.id)!;
+    next = resizeCue(next, cue.id, start, end, duration, minGap);
   }
   return next;
 }
@@ -312,12 +471,12 @@ export function removeTake(voiceover: Voiceover, clipId: string, index: number):
 }
 
 /**
- * The stretches of a speaker's spoken lines to clone their voice from: the
- * longest first, so a few good lines beat many fragments, until there is
- * enough; then in story order. Thoughts are left out, since they are not the
+ * The cues a reference is suggested from, before anyone has chosen: the
+ * speaker's longest spoken lines, so a few good lines beat many fragments,
+ * until there is enough. Thoughts are left out, since they are not the
  * character's audible voice.
  */
-export function referenceSegments(cues: Cue[], key: string): Array<[number, number]> {
+export function suggestedReferenceCues(cues: Cue[], key: string): Cue[] {
   const candidates = cues
     .filter((c) => castKey(c) === key && c.mode !== "thought" && speechText(c) !== "")
     .sort((a, b) => b.end - b.start - (a.end - a.start));
@@ -325,12 +484,24 @@ export function referenceSegments(cues: Cue[], key: string): Array<[number, numb
   let total = 0;
   for (const cue of candidates) {
     if (total >= REFERENCE_TARGET_SECONDS) break;
+    if (cue.end - cue.start <= 0.3) continue;
+    picked.push(cue);
+    total += cue.end - cue.start;
+  }
+  return sortCues(picked);
+}
+
+/** The stretches of video to cut a reference from, capped in total length. */
+export function referenceSegments(chosen: Cue[]): Array<[number, number]> {
+  const segments: Array<[number, number]> = [];
+  let total = 0;
+  for (const cue of sortCues(chosen)) {
     const length = Math.min(cue.end - cue.start, REFERENCE_MAX_SECONDS - total);
-    if (length <= 0.3) continue;
-    picked.push({ ...cue, end: cue.start + length });
+    if (length <= 0) break;
+    segments.push([cue.start, cue.start + length]);
     total += length;
   }
-  return picked.sort((a, b) => a.start - b.start).map((c) => [c.start, c.end]);
+  return segments;
 }
 
 /** A new random seed; a take records it so it can be reproduced. */

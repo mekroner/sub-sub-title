@@ -115,6 +115,10 @@ pub struct TtsRequest {
     pub cfg_weight: f64,
     pub temperature: f64,
     pub output_path: String,
+    /// For a line spoken across several cues: each cue's words, to be found
+    /// in the generated audio.
+    #[serde(default)]
+    pub align_segments: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -122,6 +126,9 @@ pub struct TtsRequest {
 pub struct TtsResult {
     pub path: String,
     pub duration: f64,
+    /// Where each aligned segment starts and ends, in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marks: Option<Vec<[f64; 2]>>,
 }
 
 // --- Paths ------------------------------------------------------------------
@@ -154,6 +161,8 @@ fn apply_env(cmd: &mut Command, root: &Path) {
         .env("HF_HUB_DISABLE_TELEMETRY", "1")
         // Windows without Developer Mode cannot symlink; the cache copes.
         .env("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        // The aligner's weights, fetched through torch.hub on first use.
+        .env("TORCH_HOME", root.join("torch"))
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONIOENCODING", "utf-8")
         // Stray `pip` config or an activated venv in the user's shell must not
@@ -489,6 +498,7 @@ struct Reply {
     path: Option<String>,
     duration: Option<f64>,
     detail: Option<String>,
+    marks: Option<Vec<[f64; 2]>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -514,56 +524,44 @@ fn generate(
         *guard = Some(spawn_sidecar(root, python)?);
     }
     let sidecar = guard.as_mut().expect("just ensured");
-    sidecar.next_id += 1;
-    let id = sidecar.next_id;
 
-    let line = serde_json::json!({
-        "id": id,
-        "op": "generate",
-        "engine": request.engine,
-        "text": request.text,
-        "reference": request.reference,
-        "seed": request.seed,
-        "exaggeration": request.exaggeration,
-        "cfgWeight": request.cfg_weight,
-        "temperature": request.temperature,
-        "out": request.output_path,
+    let outcome = exchange(
+        sidecar,
+        serde_json::json!({
+            "op": "generate",
+            "engine": request.engine,
+            "text": request.text,
+            "reference": request.reference,
+            "seed": request.seed,
+            "exaggeration": request.exaggeration,
+            "cfgWeight": request.cfg_weight,
+            "temperature": request.temperature,
+            "out": request.output_path,
+        }),
+        on_event,
+    )
+    .map(|reply| {
+        let path = reply.path.unwrap_or_else(|| request.output_path.clone());
+        // A line spoken across cues also needs to know where each cue's
+        // words fell. A failed alignment costs only that: the caller falls
+        // back to an estimate, and the line itself stands.
+        let marks = match &request.align_segments {
+            Some(segments) if segments.len() > 1 => exchange(
+                sidecar,
+                serde_json::json!({ "op": "align", "audio": path, "segments": segments }),
+                on_event,
+            )
+            .ok()
+            .and_then(|r| r.marks)
+            .filter(|m| m.len() == segments.len()),
+            _ => None,
+        };
+        TtsResult {
+            path,
+            duration: reply.duration.unwrap_or(0.0),
+            marks,
+        }
     });
-    let sent = writeln!(sidecar.stdin, "{line}").and_then(|_| sidecar.stdin.flush());
-
-    let outcome = sent
-        .map_err(|e| AppError::msg(format!("The voice engine stopped listening ({e}).")))
-        .and_then(|_| loop {
-            let mut text = String::new();
-            if sidecar.stdout.read_line(&mut text)? == 0 {
-                break Err(AppError::msg("The voice engine stopped unexpectedly."));
-            }
-            let Ok(reply) = serde_json::from_str::<Reply>(text.trim()) else {
-                continue;
-            };
-            if let Some(event) = reply.event {
-                // "loading" while a model is read into the GPU; the first time,
-                // that includes downloading its weights.
-                on_event(TtsEvent {
-                    event,
-                    detail: reply.detail.unwrap_or_default(),
-                });
-                continue;
-            }
-            if reply.id != Some(id) {
-                continue;
-            }
-            break if reply.ok == Some(true) {
-                Ok(TtsResult {
-                    path: reply.path.unwrap_or_else(|| request.output_path.clone()),
-                    duration: reply.duration.unwrap_or(0.0),
-                })
-            } else {
-                Err(AppError::msg(
-                    reply.error.unwrap_or_else(|| "The voice engine failed.".to_string()),
-                ))
-            };
-        });
 
     if outcome.is_err() && !matches!(sidecar.child.try_wait(), Ok(None)) {
         // It died: report why, and start a fresh one next time.
@@ -578,6 +576,49 @@ fn generate(
         )));
     }
     outcome
+}
+
+/// Sends one request and waits for its reply, passing events on as they come.
+/// An error reply is an `Err` carrying the sidecar's own message.
+fn exchange(
+    sidecar: &mut Sidecar,
+    mut request: serde_json::Value,
+    on_event: &dyn Fn(TtsEvent),
+) -> AppResult<Reply> {
+    sidecar.next_id += 1;
+    let id = sidecar.next_id;
+    request["id"] = id.into();
+    writeln!(sidecar.stdin, "{request}")
+        .and_then(|_| sidecar.stdin.flush())
+        .map_err(|e| AppError::msg(format!("The voice engine stopped listening ({e}).")))?;
+    loop {
+        let mut text = String::new();
+        if sidecar.stdout.read_line(&mut text)? == 0 {
+            return Err(AppError::msg("The voice engine stopped unexpectedly."));
+        }
+        let Ok(reply) = serde_json::from_str::<Reply>(text.trim()) else {
+            continue;
+        };
+        if let Some(event) = reply.event {
+            // "loading" while a model is read into the GPU; the first time,
+            // that includes downloading its weights.
+            on_event(TtsEvent {
+                event,
+                detail: reply.detail.unwrap_or_default(),
+            });
+            continue;
+        }
+        if reply.id != Some(id) {
+            continue;
+        }
+        return if reply.ok == Some(true) {
+            Ok(reply)
+        } else {
+            Err(AppError::msg(
+                reply.error.unwrap_or_else(|| "The voice engine failed.".to_string()),
+            ))
+        };
+    }
 }
 
 fn spawn_sidecar(root: &Path, python: &Path) -> AppResult<Sidecar> {
@@ -649,10 +690,17 @@ fn extract_reference(
     if let Some(dir) = Path::new(&output_path).parent() {
         std::fs::create_dir_all(dir)?;
     }
+    // Each line is brought to the same loudness before they are joined: lines
+    // cut from a film sit at whatever level the scene had, and a model cloning
+    // a shout next to a mumble learns neither.
     let mut graph = String::new();
     for (i, [start, end]) in segments.iter().enumerate() {
+        let gain = measure_loudness(video_path, *start, *end)
+            .map(|m| m.gain_to(REFERENCE_LUFS, REFERENCE_PEAK_DBTP))
+            .unwrap_or(0.0);
         graph.push_str(&format!(
-            "[0:a]atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS[s{i}];"
+            "[0:a]atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,\
+             volume={gain:.2}dB[s{i}];"
         ));
     }
     for i in 0..segments.len() {
@@ -678,9 +726,141 @@ fn extract_reference(
     Ok(segments.iter().map(|[a, b]| b - a).sum())
 }
 
+/// Every reference is brought to this integrated loudness — the level
+/// Chatterbox Turbo itself normalises a reference to, so the two agree and
+/// every voice in a project is cloned from equally loud speech.
+const REFERENCE_LUFS: f64 = -27.0;
+/// Gain never pushes a line's true peak above this.
+const REFERENCE_PEAK_DBTP: f64 = -1.0;
+
+/// A stretch of audio's loudness, as ffmpeg's EBU R128 meter reports it.
+#[derive(Debug, Clone, Copy)]
+struct Loudness {
+    /// Integrated loudness, LUFS.
+    integrated: f64,
+    /// True peak, dBTP.
+    true_peak: f64,
+}
+
+impl Loudness {
+    /// The gain, in dB, that brings this to `target` LUFS without the true
+    /// peak passing `ceiling`. Silence, or a stretch too short to measure, is
+    /// left as it is.
+    fn gain_to(self, target: f64, ceiling: f64) -> f64 {
+        if !self.integrated.is_finite() || self.integrated < -70.0 {
+            return 0.0;
+        }
+        let wanted = target - self.integrated;
+        if self.true_peak.is_finite() {
+            wanted.min(ceiling - self.true_peak)
+        } else {
+            wanted
+        }
+    }
+}
+
+/// Measures one stretch of a file with ffmpeg's `loudnorm` in analysis mode.
+fn measure_loudness(path: &str, start: f64, end: f64) -> Option<Loudness> {
+    let out = quiet_command(&ffmpeg_bin())
+        .args(["-hide_banner", "-nostdin", "-ss", &format!("{start:.3}"), "-to", &format!("{end:.3}"), "-i"])
+        .arg(path)
+        .args(["-vn", "-af", "loudnorm=print_format=json", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+    parse_loudnorm(&String::from_utf8_lossy(&out.stderr))
+}
+
+/// The JSON block `loudnorm` prints last on stderr. Its numbers are strings,
+/// and "-inf" for silence.
+fn parse_loudnorm(stderr: &str) -> Option<Loudness> {
+    let json = &stderr[stderr.rfind('{')?..=stderr.rfind('}')?];
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let number = |key: &str| value.get(key)?.as_str()?.trim().parse::<f64>().ok();
+    Some(Loudness {
+        integrated: number("input_i")?,
+        true_peak: number("input_tp").unwrap_or(f64::NAN),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn levels_a_line_without_letting_it_clip() {
+        // 13 dB too quiet, with room to spare: the full lift.
+        let quiet = Loudness { integrated: -40.0, true_peak: -20.0 };
+        assert!((quiet.gain_to(-27.0, -1.0) - 13.0).abs() < 1e-9);
+        // Loud enough already: turned down.
+        let loud = Loudness { integrated: -14.0, true_peak: -2.0 };
+        assert!((loud.gain_to(-27.0, -1.0) + 13.0).abs() < 1e-9);
+        // Peaky: lifted only as far as the peak allows.
+        let peaky = Loudness { integrated: -40.0, true_peak: -5.0 };
+        assert!((peaky.gain_to(-27.0, -1.0) - 4.0).abs() < 1e-9);
+        // Silence is left alone rather than amplified into noise.
+        let silent = Loudness { integrated: f64::NEG_INFINITY, true_peak: f64::NEG_INFINITY };
+        assert_eq!(silent.gain_to(-27.0, -1.0), 0.0);
+    }
+
+    /// End to end through real ffmpeg: a quiet line and a loud one come out
+    /// of the reference equally loud, at the target. Skipped without ffmpeg.
+    #[test]
+    fn evens_out_the_lines_of_a_reference() {
+        let ok = quiet_command(&ffmpeg_bin()).arg("-version").stdout(Stdio::null()).status();
+        if !ok.is_ok_and(|s| s.success()) {
+            eprintln!("ffmpeg not found; skipping");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("sst-level-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let video = dir.join("video.wav");
+        let out = dir.join("ref.wav");
+        // 20 dB apart: a mumble for three seconds, then a shout.
+        let made = quiet_command(&ffmpeg_bin())
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=if(lt(t\\,3)\\,0.03\\,0.3)*sin(2*PI*300*t):d=6:s=48000",
+            ])
+            .arg(&video)
+            .status()
+            .unwrap();
+        assert!(made.success());
+
+        extract_reference(
+            &video.to_string_lossy(),
+            vec![[0.5, 2.5], [3.5, 5.5]],
+            &out.to_string_lossy(),
+        )
+        .expect("extracts");
+
+        let path = out.to_string_lossy();
+        let first = measure_loudness(&path, 0.0, 2.0).expect("first measured");
+        let second = measure_loudness(&path, 2.0, 4.0).expect("second measured");
+        assert!(
+            (first.integrated - second.integrated).abs() < 1.0,
+            "{first:?} vs {second:?}"
+        );
+        assert!((first.integrated - REFERENCE_LUFS).abs() < 1.0, "{first:?}");
+        assert!(second.true_peak <= REFERENCE_PEAK_DBTP + 0.5, "{second:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_loudnorm_output() {
+        let stderr = "[Parsed_loudnorm_0 @ 0x1] \n{\n\t\"input_i\" : \"-31.52\",\n\t\"input_tp\" : \"-12.03\",\n\t\"input_lra\" : \"1.20\"\n}\n";
+        let m = parse_loudnorm(stderr).expect("parses");
+        assert_eq!(m.integrated, -31.52);
+        assert_eq!(m.true_peak, -12.03);
+        assert!(parse_loudnorm("no json here").is_none());
+    }
 
     #[test]
     fn cuts_and_joins_a_reference_from_the_video() {
@@ -744,6 +924,7 @@ mod tests {
             cfg_weight: 0.5,
             temperature: 0.8,
             output_path: out.to_string_lossy().into(),
+            align_segments: None,
         };
         let on_event = |e: TtsEvent| events.lock().unwrap().push(e.event);
 
