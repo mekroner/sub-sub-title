@@ -62,6 +62,8 @@ interface Props {
   onToggleCueDuck: (cueId: string) => void;
   onDuckChange: (patch: Partial<DuckSettings>) => void;
   onDuckAllCues: () => void;
+  /** Opens the audio export; absent while it cannot run (no video or no ffmpeg). */
+  onExport?: () => void;
 }
 
 const RULER_HEIGHT = 22;
@@ -134,6 +136,7 @@ export function VoiceoverTimeline({
   onToggleCueDuck,
   onDuckChange,
   onDuckAllCues,
+  onExport,
 }: Props) {
   const unducked = useMemo(() => new Set(voiceover.unduckedCueIds), [voiceover.unduckedCueIds]);
   /** Tracks whose curve is being edited. UI state, not part of the project. */
@@ -491,6 +494,15 @@ export function VoiceoverTimeline({
             title={`Up to ${MAX_VOICE_TRACKS} voice tracks`}
           >
             + Track
+          </button>
+          <button
+            type="button"
+            className="small"
+            disabled={!onExport}
+            onClick={onExport}
+            title="Render the mix to an audio file"
+          >
+            Export…
           </button>
         </div>
       </div>

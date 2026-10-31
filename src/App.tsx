@@ -16,6 +16,7 @@ import type { AcceptedFill } from "./components/FillDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { RenderDialog } from "./components/RenderDialog";
+import { ExportAudioDialog } from "./components/ExportAudioDialog";
 import {
   DEFAULT_SIDE_WIDTH,
   MAX_SIDE_WIDTH,
@@ -267,6 +268,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showRender, setShowRender] = useState(false);
+  const [showExportAudio, setShowExportAudio] = useState(false);
   const [showProofread, setShowProofread] = useState(false);
   const [showTranscribe, setShowTranscribe] = useState(false);
   /** The Fill dialog, with what it was opened on. Null while closed. */
@@ -383,6 +385,8 @@ export default function App() {
     () => cueDuckCurve(project.voiceover, project.cues),
     [project.voiceover, project.cues],
   );
+
+  const canExportAudio = Boolean(project.videoPath && paths && tools?.ffmpeg);
 
   useEffect(() => {
     mixer?.setMix(project.voiceover, voiceoverMode, duckPoints);
@@ -1773,6 +1777,7 @@ export default function App() {
     showSettings ||
     showHelp ||
     showRender ||
+    showExportAudio ||
     showProofread ||
     showTranscribe ||
     fillOpen !== null;
@@ -2244,6 +2249,12 @@ export default function App() {
           disabled: cues.length === 0 || !tools?.ffmpeg,
           onSelect: () => setShowRender(true),
         },
+        {
+          kind: "item",
+          label: "Export voiceover audio…",
+          disabled: !canExportAudio,
+          onSelect: () => setShowExportAudio(true),
+        },
         { kind: "separator" },
         { kind: "item", label: "Settings…", onSelect: () => setShowSettings(true) },
         // Goes through the same close guard as the window's own close button.
@@ -2674,6 +2685,7 @@ export default function App() {
                 )
               }
               duck={duckPoints}
+              onExport={canExportAudio ? () => setShowExportAudio(true) : undefined}
               onToggleCueDuck={(cueId) => setVoiceover((v) => toggleCueDuck(v, cueId))}
               onDuckChange={(patch) =>
                 setVoiceover((v) => patchDuck(v, patch), `duck:${Object.keys(patch).join()}`)
@@ -2832,6 +2844,21 @@ export default function App() {
           assText={assText}
           duration={duration}
           onClose={() => setShowRender(false)}
+        />
+      )}
+
+      {showExportAudio && paths && (
+        <ExportAudioDialog
+          defaultOutput={`${paths.dir}${paths.dir.includes("\\") ? "\\" : "/"}${paths.stem}.voiceover.wav`}
+          request={{
+            videoPath: project.videoPath,
+            includeOriginal: media?.hasAudio ?? false,
+            duration,
+            tracks: project.voiceover.tracks,
+            clips: project.voiceover.clips,
+            duck: duckPoints,
+          }}
+          onClose={() => setShowExportAudio(false)}
         />
       )}
     </div>

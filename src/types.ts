@@ -310,6 +310,31 @@ export interface RenderProgress {
   speed: string;
 }
 
+/** Everything the export mixer needs; it mixes exactly what the preview plays. */
+export interface MixdownRequest {
+  videoPath: string;
+  /** False when the video has no audio stream. */
+  includeOriginal: boolean;
+  outputPath: string;
+  duration: number;
+  tracks: VoiceTrack[];
+  clips: VoiceClip[];
+  /** The original's automatic duck under the cues. */
+  duck: GainPoint[];
+}
+
+export interface MixdownResult {
+  seconds: number;
+  /** Loudest sample before limiting, in dBFS. */
+  peakDb: number;
+  /** Samples past full scale, clamped. */
+  clipped: number;
+}
+
+export interface MixdownProgress {
+  fraction: number;
+}
+
 /** Progress while the transcription engine is being downloaded and unpacked. */
 export interface EngineProgress {
   phase: "downloading" | "verifying" | "extracting" | "locating" | "done";

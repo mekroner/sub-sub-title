@@ -9,6 +9,7 @@ mod files;
 mod fill;
 mod ghost;
 mod media;
+mod mixdown;
 mod project_state;
 mod proofread;
 mod render;
@@ -23,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(render::RenderState::default())
+        .manage(mixdown::MixdownState::default())
         .manage(spelling::SpellState::default())
         .manage(proofread::ProofreadState::default())
         .manage(transcribe::TranscribeState::default())
@@ -69,6 +71,8 @@ pub fn run() {
             chat::cancel_chat,
             render::render_burn_in,
             render::cancel_render,
+            mixdown::mixdown_voiceover,
+            mixdown::cancel_mixdown,
             spelling::check_cues,
             proofread::ai_proofread,
             proofread::cancel_proofread,

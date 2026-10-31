@@ -2593,3 +2593,7 @@ button.fill-alt.on {
 .duck-panel:focus {
   outline: none;
 }
+.vo-header.vo-header-add {
+  flex-direction: row;
+  gap: 6px;
+}

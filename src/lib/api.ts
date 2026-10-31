@@ -11,6 +11,8 @@ import type {
   FillRequest,
   GhostRequest,
   MediaInfo,
+  MixdownRequest,
+  MixdownResult,
   ModelInfo,
   Peaks,
   ProjectPaths,
@@ -126,6 +128,11 @@ export const renderBurnIn = (args: {
 }) => invoke<void>("render_burn_in", args);
 
 export const cancelRender = () => invoke<void>("cancel_render");
+
+export const mixdownVoiceover = (request: MixdownRequest) =>
+  invoke<MixdownResult>("mixdown_voiceover", { request });
+
+export const cancelMixdown = () => invoke<void>("cancel_mixdown");
 
 /** Filesystem checks only — safe to call whenever the dialog opens. */
 export const transcribeStatus = (model: string) =>
