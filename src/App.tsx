@@ -101,6 +101,7 @@ import {
   moveClip,
   moveClipsBy,
   newClip,
+  overlappingClips,
   patchClip,
   patchTrack,
   removeClip,
@@ -111,6 +112,7 @@ import {
   trimClipEnd,
   trimClipStart,
   type ClipPatch,
+  type ClipWarning,
   type TrackPatch,
 } from "./lib/voiceover";
 import {
@@ -1109,15 +1111,17 @@ export default function App() {
     [lines],
   );
 
-  /** Generated clips whose line changed or which run past their last cue. */
+  /** Clips whose line changed, which play over each other, or which run past their cue. */
   const clipWarnings = useMemo(() => {
-    const warnings = new Map<string, "stale" | "overrun">();
+    const warnings = new Map<string, ClipWarning>();
+    const overlapping = overlappingClips(project.voiceover);
     for (const clip of project.voiceover.clips) {
       if (lines.isStale(clip)) warnings.set(clip.id, "stale");
+      else if (overlapping.has(clip.id)) warnings.set(clip.id, "overlap");
       else if (overrun(clip, cues) > 0) warnings.set(clip.id, "overrun");
     }
     return warnings;
-  }, [project.voiceover.clips, lines, cues]);
+  }, [project.voiceover, lines, cues]);
 
   /** The first cue of the selected clip's line. */
   const selectedCueOfClip = useMemo(

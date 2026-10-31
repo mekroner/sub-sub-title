@@ -23,6 +23,7 @@ import {
   isAudible,
   snapTime,
   voiceTracks,
+  type ClipWarning,
   type TrackPatch,
 } from "../lib/voiceover";
 import { CLIP_PEAKS_PER_SECOND } from "../audio/mixer";
@@ -74,8 +75,8 @@ interface Props {
   onDuckAllCues: () => void;
   /** Opens the audio export; absent while it cannot run (no video or no ffmpeg). */
   onExport?: () => void;
-  /** Generated clips that need attention: their line changed, or they overrun. */
-  clipWarnings: Map<string, "stale" | "overrun">;
+  /** Clips that need attention: their line changed, they overlap, or they overrun. */
+  clipWarnings: Map<string, ClipWarning>;
   /** Boundaries between cues spoken as one line, as [end of one, start of next]. */
   lineJoins: Array<[number, number]>;
   /** Right-click on a cue block: the cue and where to open the menu. */
@@ -1375,7 +1376,7 @@ function ClipBlock({
 }: {
   clip: VoiceClip;
   passive: boolean;
-  warning: "stale" | "overrun" | null;
+  warning: ClipWarning | null;
   top: number;
   height: number;
   zoom: number;
@@ -1422,9 +1423,11 @@ function ClipBlock({
       title={`${clip.name} · ${formatShort(clip.start)}–${formatShort(clipEnd(clip))}${
         warning === "stale"
           ? "\nIts cue has changed since it was spoken."
-          : warning === "overrun"
-            ? "\nRuns past the end of its cue."
-            : ""
+          : warning === "overlap"
+            ? "\nPlays over another clip on this track."
+            : warning === "overrun"
+              ? "\nRuns past the end of its cue."
+              : ""
       }`}
     >
       <span className="vo-clip-name">

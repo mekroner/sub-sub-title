@@ -281,7 +281,7 @@ function CastRow({
           value={voice.trackId && tracks.some((t) => t.id === voice.trackId) ? voice.trackId : ""}
           onChange={(e) => onSetVoice({ trackId: e.target.value || undefined })}
         >
-          <option value="">First voice track</option>
+          <option value="">A free track, picked on its first line</option>
           {tracks.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}

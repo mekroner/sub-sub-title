@@ -37,7 +37,7 @@ import {
   voiceFor,
   voiceKey,
 } from "./tts";
-import { addTrack, defaultVoiceover, moveClip, voiceTracks } from "./voiceover";
+import { MAX_VOICE_TRACKS, addTrack, defaultVoiceover, moveClip, voiceTracks } from "./voiceover";
 
 const cue = (id: string, start: number, end: number, text: string, speakerId: string | null = "s1"): Cue => ({
   id,
@@ -150,6 +150,25 @@ describe("generated lines", () => {
     vo = setVoice(vo, "s1", { trackId: second });
     expect(trackForVoice(vo, "s1").trackId).toBe(second);
     expect(trackForVoice(vo, "s2").trackId).toBe(voiceTracks(vo)[0].id);
+  });
+
+  it("gives each new speaker a track of their own, then shares when there is no room", () => {
+    let vo = placeTake(defaultVoiceover(), [cue("a", 0, 1, "One.", "s1")], take("a.wav"));
+    vo = placeTake(vo, [cue("b", 2, 3, "Two.", "s2")], take("b.wav"));
+    const [first, second] = voiceTracks(vo);
+    expect(vo.clips.map((c) => c.trackId)).toEqual([first.id, second.id]);
+    // The tracks found are remembered, so later lines follow them.
+    expect(voiceFor(vo, "s1").trackId).toBe(first.id);
+    expect(voiceFor(vo, "s2").trackId).toBe(second.id);
+    vo = placeTake(vo, [cue("c", 4, 5, "Three.", "s1")], take("c.wav"));
+    expect(vo.clips[2].trackId).toBe(first.id);
+
+    // Every track claimed and none to add: the first is shared.
+    for (const s of ["s3", "s4", "s5"]) vo = trackForVoice(vo, s).voiceover;
+    expect(voiceTracks(vo)).toHaveLength(MAX_VOICE_TRACKS);
+    const shared = trackForVoice(vo, "s6");
+    expect(shared.trackId).toBe(first.id);
+    expect(voiceTracks(shared.voiceover)).toHaveLength(MAX_VOICE_TRACKS);
   });
 
   it("adds a new take to the existing clip, keeping where it was moved to", () => {

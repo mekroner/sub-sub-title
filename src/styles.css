@@ -2761,6 +2761,14 @@ button.fill-alt.on {
   border-style: dashed;
   border-color: #e0a84a;
 }
+.vo-clip.overlap {
+  border-color: #e0a84a;
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(224, 168, 74, 0.18) 0 6px,
+    transparent 6px 12px
+  );
+}
 .vo-clip.overrun {
   border-right: 3px solid #e0a84a;
 }

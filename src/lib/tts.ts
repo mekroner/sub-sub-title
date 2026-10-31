@@ -8,7 +8,7 @@ import type { CastVoice, ClipTake, Cue, CueVoicing, VoiceClip, Voiceover } from 
 import { directionIntensity, directionTags, hasTag, stripTags } from "./direction";
 import { resizeCue, sortCues } from "./cues";
 import { makeId } from "./ids";
-import { addTrack, clipEnd, voiceTracks } from "./voiceover";
+import { addTrack, canAddTrack, clipEnd, voiceTracks } from "./voiceover";
 
 /** Cast key for cues with no speaker. */
 export const NO_SPEAKER = "";
@@ -404,8 +404,11 @@ export function addTake(voiceover: Voiceover, clipId: string, take: ClipTake): V
 }
 
 /**
- * The voice track a speaker's lines land on: theirs if it still exists,
- * otherwise the first voice track, otherwise a new one.
+ * The voice track a speaker's lines land on: theirs if it still exists.
+ * Otherwise one no other speaker has, then a new one while there is room,
+ * and only then the first, shared. A track found this way becomes the
+ * speaker's, so their later lines follow it and two voices never share a
+ * lane by accident.
  */
 export function trackForVoice(
   voiceover: Voiceover,
@@ -415,9 +418,21 @@ export function trackForVoice(
   const wanted = voiceFor(voiceover, key).trackId;
   const own = tracks.find((t) => t.id === wanted);
   if (own) return { voiceover, trackId: own.id };
-  if (tracks.length > 0) return { voiceover, trackId: tracks[0].id };
-  const withTrack = addTrack(voiceover);
-  return { voiceover: withTrack, trackId: voiceTracks(withTrack)[0].id };
+
+  const claimed = new Set(
+    Object.entries(voiceover.cast)
+      .filter(([other]) => other !== key)
+      .map(([, voice]) => voice.trackId),
+  );
+  let next = voiceover;
+  let trackId = tracks.find((t) => !claimed.has(t.id))?.id;
+  if (!trackId && canAddTrack(voiceover)) {
+    next = addTrack(voiceover);
+    trackId = voiceTracks(next)[voiceTracks(next).length - 1].id;
+  }
+  // Every track taken and no room for another: the first is shared.
+  trackId ??= tracks[0].id;
+  return { voiceover: setVoice(next, key, { trackId }), trackId };
 }
 
 /**

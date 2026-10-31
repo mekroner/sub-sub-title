@@ -17,6 +17,7 @@ import {
   toggleCueDuck,
   moveClip,
   newClip,
+  overlappingClips,
   patchTrack,
   removeTrack,
   snapTime,
@@ -106,6 +107,27 @@ describe("clips", () => {
     expect(trimClipEnd(base, clip.id, 0).clips[0].duration).toBe(MIN_CLIP_SECONDS);
     expect(trimClipStart(base, clip.id, 99).clips[0].duration).toBeCloseTo(MIN_CLIP_SECONDS);
     expect(trimClipEnd(base, clip.id, 99).clips[0].duration).toBe(4);
+  });
+
+  it("finds clips that play over another on their track, and only those", () => {
+    let vo = addTrack(addTrack(defaultVoiceover()));
+    const [first, second] = voiceTracks(vo);
+    const a = newClip(first.id, "a.wav", 0, 3);
+    const b = newClip(first.id, "b.wav", 2, 2); // into a
+    const c = newClip(first.id, "c.wav", 4, 1); // touches b's end
+    const d = newClip(first.id, "d.wav", 4.99, 1); // a crossfade's worth into c
+    const e = newClip(second.id, "e.wav", 0, 10); // another track
+    const f = newClip(first.id, "f.wav", 8, 1);
+    const g = newClip(first.id, "g.wav", 7, 0.5); // inside nothing, before f
+    vo = addClips(vo, [a, b, c, d, e, f, g]);
+    expect([...overlappingClips(vo)].sort()).toEqual([a.id, b.id].sort());
+
+    // A long clip reaching past several later ones collides with each.
+    const long = newClip(second.id, "long.wav", 20, 10);
+    const late = newClip(second.id, "late.wav", 25, 1);
+    vo = addClips(vo, [long, late]);
+    expect(overlappingClips(vo).has(late.id)).toBe(true);
+    expect(overlappingClips(vo).has(long.id)).toBe(true);
   });
 });
 

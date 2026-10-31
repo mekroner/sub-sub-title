@@ -169,6 +169,38 @@ export function clipEnd(clip: VoiceClip): number {
   return clip.start + clip.duration;
 }
 
+/**
+ * What a clip on the timeline is flagged for, most pressing first: its line
+ * has changed, it plays over another clip on its track, or it runs past its
+ * cue.
+ */
+export type ClipWarning = "stale" | "overlap" | "overrun";
+
+/** Overlaps shorter than this are a crossfade's worth, not a collision. */
+const OVERLAP_TOLERANCE = 0.02;
+
+/** Clips that play over another clip on the same track. */
+export function overlappingClips(voiceover: Voiceover): Set<string> {
+  const overlapping = new Set<string>();
+  const byTrack = new Map<string, VoiceClip[]>();
+  for (const clip of voiceover.clips) {
+    byTrack.set(clip.trackId, [...(byTrack.get(clip.trackId) ?? []), clip]);
+  }
+  for (const clips of byTrack.values()) {
+    const sorted = [...clips].sort((a, b) => a.start - b.start);
+    // The clip reaching furthest so far, which a later one may run into.
+    let reach: VoiceClip | null = null;
+    for (const clip of sorted) {
+      if (reach && clip.start < clipEnd(reach) - OVERLAP_TOLERANCE) {
+        overlapping.add(clip.id);
+        overlapping.add(reach.id);
+      }
+      if (!reach || clipEnd(clip) > clipEnd(reach)) reach = clip;
+    }
+  }
+  return overlapping;
+}
+
 export function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
