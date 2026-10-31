@@ -2751,6 +2751,11 @@ button.fill-alt.on {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
+.clip-take-suspect {
+  color: #e0a84a;
+  font-size: 12px;
+  cursor: help;
+}
 
 .vo-clip.stale {
   border-style: dashed;

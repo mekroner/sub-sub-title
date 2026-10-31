@@ -8,6 +8,7 @@ import type {
   CastVoice,
   ClipSource,
   ClipTake,
+  TakeCheck,
   Cue,
   CueVoicing,
   DuckSettings,
@@ -206,6 +207,22 @@ function coerceMarks(raw: unknown): { marks?: Array<[number, number]> } {
   return marks.length && marks.length === raw.length ? { marks } : {};
 }
 
+/** A speech window inside the take, or nothing: a bad one would play the wrong part. */
+function coerceSpeech(raw: unknown, duration: number): { speech?: [number, number] } {
+  if (!Array.isArray(raw) || raw.length !== 2) return {};
+  const [from, to] = raw;
+  if (typeof from !== "number" || typeof to !== "number") return {};
+  return from >= 0 && to > from && to <= duration + 1e-6 ? { speech: [from, to] } : {};
+}
+
+function coerceCheck(raw: unknown): { check?: TakeCheck } {
+  if (typeof raw !== "object" || raw === null) return {};
+  const c = raw as Partial<TakeCheck>;
+  return Number.isFinite(c.score) && Number.isFinite(c.rate)
+    ? { check: { score: c.score as number, rate: c.rate as number } }
+    : {};
+}
+
 function coerceTakes(raw: unknown): { takes?: ClipTake[] } {
   if (!Array.isArray(raw)) return {};
   const takes = raw.flatMap((t): ClipTake[] => {
@@ -214,7 +231,16 @@ function coerceTakes(raw: unknown): { takes?: ClipTake[] } {
     if (typeof take.file !== "string" || !take.file) return [];
     const duration = finite(take.duration, 0);
     return duration > 0
-      ? [{ file: take.file, seed: finite(take.seed, 0), duration, ...coerceMarks(take.marks) }]
+      ? [
+          {
+            file: take.file,
+            seed: finite(take.seed, 0),
+            duration,
+            ...coerceMarks(take.marks),
+            ...coerceSpeech(take.speech, duration),
+            ...coerceCheck(take.check),
+          },
+        ]
       : [];
   });
   return takes.length ? { takes } : {};

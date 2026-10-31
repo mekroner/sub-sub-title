@@ -1,6 +1,7 @@
 import type { VoiceClip, VoiceTrack } from "../types";
 import { formatShort } from "../lib/time";
 import { MAX_DB, MIN_DB, clipEnd, type ClipPatch } from "../lib/voiceover";
+import { isSuspect } from "../lib/tts";
 import { formatDb } from "./VoiceoverTimeline";
 
 interface Props {
@@ -129,8 +130,17 @@ export function ClipInspector({
                   />
                   <span>Take {i + 1}</span>
                   <span className="clip-take-meta">
-                    {take.duration.toFixed(2)} s · seed {take.seed}
+                    {(take.speech ? take.speech[1] - take.speech[0] : take.duration).toFixed(2)} s · seed{" "}
+                    {take.seed}
                   </span>
+                  {isSuspect(take) && (
+                    <span
+                      className="clip-take-suspect"
+                      title={`The words were hard to find in this take (score ${take.check!.score.toFixed(2)}, ${take.check!.rate.toFixed(1)} letters/s): it may have dropped or garbled some.`}
+                    >
+                      ⚠
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="icon-button clip-take-delete"

@@ -7,10 +7,14 @@ import {
   NO_SPEAKER,
   fitCuesToLines,
   lineGroups,
+  SUSPECT_RATE,
+  SUSPECT_SCORE,
+  isSuspect,
   lineIndex,
   nextLine,
   overrun,
   placeTake,
+  playTake,
   proportionalMarks,
   referenceSegments,
   removeTake,
@@ -155,6 +159,34 @@ describe("generated lines", () => {
     expect(back).toMatchObject({ file: "a.wav", duration: 1.5, offset: 0 });
   });
 
+  it("plays a take's speech, so the first word lands where the clip starts", () => {
+    const line = [cue("c1", 4, 6, "Hello")];
+    const spoken = { ...take("a.wav", 2), speech: [0.3, 1.6] as [number, number] };
+    let vo = placeTake(defaultVoiceover(), line, spoken);
+    expect(vo.clips[0]).toMatchObject({ start: 4, offset: 0.3, sourceDuration: 2 });
+    expect(vo.clips[0].duration).toBeCloseTo(1.3, 9);
+
+    // A take without a window plays whole; switching back trims again.
+    vo = placeTake(vo, line, take("b.wav", 2.5));
+    expect(vo.clips[0]).toMatchObject({ file: "b.wav", offset: 0, duration: 2.5 });
+    vo = selectTake(vo, vo.clips[0].id, 0);
+    expect(vo.clips[0]).toMatchObject({ file: "a.wav", offset: 0.3 });
+    vo = removeTake(vo, vo.clips[0].id, 0);
+    expect(vo.clips[0]).toMatchObject({ file: "b.wav", offset: 0, duration: 2.5 });
+
+    // A window that does not fit the file is held inside it.
+    expect(playTake({ ...take("c.wav", 1), speech: [0.2, 4] })).toMatchObject({ offset: 0.2, duration: 0.8 });
+  });
+
+  it("flags a checked take whose words were hard to find, or that rushed or stalled", () => {
+    const checked = (score: number, rate: number) => ({ ...take("a.wav"), check: { score, rate } });
+    expect(isSuspect(take("a.wav"))).toBe(false);
+    expect(isSuspect(checked(0.8, 14))).toBe(false);
+    expect(isSuspect(checked(SUSPECT_SCORE - 0.01, 14))).toBe(true);
+    expect(isSuspect(checked(0.8, SUSPECT_RATE[1] + 1))).toBe(true);
+    expect(isSuspect(checked(0.8, SUSPECT_RATE[0] - 1))).toBe(true);
+  });
+
   it("replaces the separate clips of cues that are now spoken as one line", () => {
     const cues = [cue("a", 0, 2, "I told you"), cue("b", 2.1, 4, "the bridge")];
     let vo = setJoin(defaultVoiceover(), "a", "split");
@@ -287,6 +319,20 @@ describe("fitting cues to lines", () => {
     const fitted = fitCuesToLines(cues, vo, 60, 0.1);
     expect(fitted[0]).toMatchObject({ start: 0, end: 1 });
     expect(fitted[1]).toMatchObject({ start: 1.1, end: 4 });
+  });
+
+  it("estimates within a take's speech, not its silence", () => {
+    expect(proportionalMarks(["ab", "abcdef"], 4, 0.5)).toEqual([
+      [0.5, 1.5],
+      [1.5, 4.5],
+    ]);
+    const cues = [cue("a", 10, 12, "ab"), cue("b", 12.1, 15, "abcdef")];
+    const spoken = { ...take("ab.wav", 5), speech: [0.5, 4.5] as [number, number] };
+    const vo = placeTake(defaultVoiceover(), cues, spoken);
+    // The clip starts at 10 with the speech, so the words run 10..11 and 11..14.
+    const fitted = fitCuesToLines(cues, vo, 60, 0.1);
+    expect(fitted[0]).toMatchObject({ start: 10, end: 11 });
+    expect(fitted[1]).toMatchObject({ start: 11.1, end: 14 });
   });
 });
 

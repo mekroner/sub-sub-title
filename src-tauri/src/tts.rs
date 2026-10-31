@@ -119,6 +119,9 @@ pub struct TtsRequest {
     /// in the generated audio.
     #[serde(default)]
     pub align_segments: Option<Vec<String>>,
+    /// Also judge whether the take says the line: costs an alignment.
+    #[serde(default)]
+    pub check: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -129,6 +132,15 @@ pub struct TtsResult {
     /// Where each aligned segment starts and ends, in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marks: Option<Vec<[f64; 2]>>,
+    /// Where the voice starts and ends in the take, padded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speech: Option<[f64; 2]>,
+    /// How confidently the line's words were found in the take, 0..1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// Letters per second of speech.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate: Option<f64>,
 }
 
 // --- Paths ------------------------------------------------------------------
@@ -499,6 +511,9 @@ struct Reply {
     duration: Option<f64>,
     detail: Option<String>,
     marks: Option<Vec<[f64; 2]>>,
+    speech: Option<[f64; 2]>,
+    score: Option<f64>,
+    rate: Option<f64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -537,6 +552,7 @@ fn generate(
             "cfgWeight": request.cfg_weight,
             "temperature": request.temperature,
             "out": request.output_path,
+            "check": request.check,
         }),
         on_event,
     )
@@ -560,6 +576,9 @@ fn generate(
             path,
             duration: reply.duration.unwrap_or(0.0),
             marks,
+            speech: reply.speech,
+            score: reply.score,
+            rate: reply.rate,
         }
     });
 
@@ -925,12 +944,15 @@ mod tests {
             temperature: 0.8,
             output_path: out.to_string_lossy().into(),
             align_segments: None,
+            check: false,
         };
         let on_event = |e: TtsEvent| events.lock().unwrap().push(e.event);
 
         let first = generate(&root, Path::new(&python), &slot, &request("Testing, one two. [chuckle]", None), &on_event)
             .expect("first line");
         assert!(first.duration > 0.5, "got {}", first.duration);
+        let [start, end] = first.speech.expect("a speech window");
+        assert!(0.0 <= start && start < end && end <= first.duration, "got {start}..{end}");
         assert!(out.is_file());
         assert!(events.lock().unwrap().contains(&"loading".to_string()));
 
@@ -945,5 +967,11 @@ mod tests {
         assert!(generate(&root, Path::new(&python), &slot, &request("Nope.", missing), &on_event).is_err());
         generate(&root, Path::new(&python), &slot, &request("Still here.", None), &on_event)
             .expect("after a failure");
+
+        // A checked take says how well its words were found, and how fast.
+        let checked = TtsRequest { check: true, ..request("This one is checked.", None) };
+        let checked = generate(&root, Path::new(&python), &slot, &checked, &on_event).expect("checked");
+        assert!(checked.score.is_some_and(|s| (0.0..=1.0).contains(&s)), "got {:?}", checked.score);
+        assert!(checked.rate.is_some_and(|r| r > 0.0), "got {:?}", checked.rate);
     }
 }

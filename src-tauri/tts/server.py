@@ -9,9 +9,16 @@ Libraries print freely, so the real stdout is kept for the protocol alone and
 
     {"id": 1, "op": "generate", "engine": "turbo", "text": "...",
      "reference": "C:/ref.wav" | null, "seed": 7, "exaggeration": 0.5,
-     "cfgWeight": 0.5, "temperature": 0.8, "out": "C:/line.wav"}
-    -> {"id": 1, "ok": true, "path": "C:/line.wav", "duration": 2.41}
+     "cfgWeight": 0.5, "temperature": 0.8, "out": "C:/line.wav", "check": false}
+    -> {"id": 1, "ok": true, "path": "C:/line.wav", "duration": 2.41,
+        "speech": [0.18, 2.30]}
     -> {"id": 1, "ok": false, "error": "..."}
+
+Every take is levelled to VOICE_LUFS before it is written. `speech` is where
+the voice starts and ends in it, padded; absent when no voice was found.
+With "check": true the reply also carries "score" (how well the words were
+found in the take, 0..1) and "rate" (letters per second of speech), or
+neither if the check could not be made.
 
     {"id": 2, "op": "align", "audio": "C:/line.wav", "segments": ["One two", "three"]}
     -> {"id": 2, "ok": true, "marks": [[0.12, 0.81], [0.95, 1.40]]}
@@ -77,8 +84,60 @@ def load(engine):
 # normalises to internally; the Expressive model does not normalise at all.
 # References built from the video arrive here already level line by line.
 REFERENCE_LUFS = -27.0
+# Every take is written at this integrated loudness, so lines from different
+# voices and models sit at one level in the mix before anyone touches a fader.
+VOICE_LUFS = -20.0
 # Gain never takes a sample past this (-1 dBFS).
-REFERENCE_PEAK = 10 ** (-1.0 / 20)
+PEAK_CEILING = 10 ** (-1.0 / 20)
+
+
+def level(audio, sr, target):
+    """`audio` at `target` integrated loudness, its peak never past
+    PEAK_CEILING. Anything the meter cannot measure — shorter than its one
+    400 ms block, or silent — comes back as the same object, untouched."""
+    import numpy as np
+    import pyloudnorm
+
+    if len(audio) < 0.4 * sr:
+        return audio
+    loudness = pyloudnorm.Meter(sr).integrated_loudness(audio)
+    if not np.isfinite(loudness) or loudness < -70:
+        return audio
+    gain = 10 ** ((target - loudness) / 20)
+    peak = float(np.abs(audio).max())
+    if peak * gain > PEAK_CEILING:
+        gain = PEAK_CEILING / peak
+    return audio * gain
+
+
+# Speech is any 20 ms frame within 40 dB of the take's loudest frame (and
+# above -60 dBFS); the window is padded so a soft onset or breath survives.
+SPEECH_FRAME = 0.02
+SPEECH_RANGE_DB = 40.0
+SPEECH_FLOOR_DB = -60.0
+SPEECH_PAD = 0.06
+
+
+def speech_window(audio, sr):
+    """[start, end] of the voice in seconds, padded and clamped to the take,
+    or None if nothing in it is loud enough to be speech."""
+    import numpy as np
+
+    frame = max(1, int(SPEECH_FRAME * sr))
+    count = len(audio) // frame
+    if count == 0:
+        return None
+    frames = audio[: count * frame].reshape(count, frame)
+    rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+    db = 20 * np.log10(np.maximum(rms, 1e-10))
+    threshold = max(float(db.max()) - SPEECH_RANGE_DB, SPEECH_FLOOR_DB)
+    loud = np.nonzero(db >= threshold)[0]
+    if len(loud) == 0:
+        return None
+    seconds = len(audio) / sr
+    start = max(0.0, loud[0] * frame / sr - SPEECH_PAD)
+    end = min(seconds, (loud[-1] + 1) * frame / sr + SPEECH_PAD)
+    return [round(start, 4), round(end, 4)]
 
 
 def normalized_reference(path):
@@ -98,23 +157,14 @@ def normalized_reference(path):
 
     try:
         import librosa
-        import numpy as np
-        import pyloudnorm
         import soundfile
 
         audio, sr = librosa.load(path, sr=None, mono=True)
-        # The meter needs at least one 400 ms block.
-        if len(audio) < 0.4 * sr:
+        levelled = level(audio, sr, REFERENCE_LUFS)
+        if levelled is audio:
             return path
-        loudness = pyloudnorm.Meter(sr).integrated_loudness(audio)
-        if not np.isfinite(loudness) or loudness < -70:
-            return path
-        gain = 10 ** ((REFERENCE_LUFS - loudness) / 20)
-        peak = float(np.abs(audio).max())
-        if peak * gain > REFERENCE_PEAK:
-            gain = REFERENCE_PEAK / peak
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        soundfile.write(out, audio * gain, sr, subtype="PCM_16")
+        soundfile.write(out, levelled, sr, subtype="PCM_16")
         return out
     except Exception:  # noqa: BLE001 — a reference that cannot be levelled still clones
         traceback.print_exc()
@@ -133,7 +183,7 @@ def seed_everything(seed):
 
 
 def generate(request):
-    import torchaudio
+    import soundfile
 
     engine = request.get("engine", "turbo")
     model = load(engine)
@@ -166,10 +216,22 @@ def generate(request):
 
     seed_everything(int(request.get("seed", 0)))
     wav = model.generate(request["text"], **kwargs)
+    audio = level(wav.squeeze(0).cpu().numpy(), model.sr, VOICE_LUFS)
     out = request["out"]
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-    torchaudio.save(out, wav.cpu(), model.sr)
-    return {"path": out, "duration": wav.shape[-1] / model.sr}
+    soundfile.write(out, audio, model.sr, subtype="PCM_16")
+
+    duration = len(audio) / model.sr
+    result = {"path": out, "duration": duration}
+    speech = speech_window(audio, model.sr)
+    if speech:
+        result["speech"] = speech
+    if request.get("check"):
+        try:
+            result.update(check(out, request["text"], speech or [0.0, duration]))
+        except Exception:  # noqa: BLE001 — an unchecked take is still a take
+            traceback.print_exc()
+    return result
 
 
 _aligner = None
@@ -212,30 +274,55 @@ def words_of(text):
     return words
 
 
-def align(request):
-    """Where each segment's words fall in the audio: [start, end] per segment,
-    in seconds. A segment with no alignable words (a lone tag) gets the gap
-    between its neighbours, so the list always matches the segments."""
+def align_words(path, words):
+    """The aligner's spans for `words` in the audio at `path`: one list of
+    letter spans per word. Also the audio's length, and seconds per frame."""
     import torch
     import torchaudio
 
     a = load_aligner()
     bundle = a["bundle"]
-    waveform, sr = torchaudio.load(request["audio"])
+    waveform, sr = torchaudio.load(path)
     waveform = waveform.mean(dim=0, keepdim=True)
     if sr != bundle.sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, bundle.sample_rate)
     seconds = waveform.size(1) / bundle.sample_rate
 
+    with torch.inference_mode():
+        emission, _ = a["model"](waveform.to(a["device"]))
+        spans = a["align"](emission[0], a["tokenizer"](words))
+    return spans, seconds, seconds / emission.size(1)
+
+
+def check(path, text, speech):
+    """How well the take says `text`. Forced alignment always places every
+    word somewhere, but a word the voice dropped or garbled is placed with
+    little confidence, which pulls the mean letter score down. The rate is
+    letters per second of speech: a take that rushes, or stalls in silence,
+    falls outside what a person speaks."""
+    words = words_of(text)
+    if not words:
+        return {}
+    spans, _, _ = align_words(path, words)
+    scores = [span.score for word in spans for span in word]
+    letters = sum(len(word.replace("'", "")) for word in words)
+    length = max(speech[1] - speech[0], 1e-3)
+    return {
+        "score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+        "rate": round(letters / length, 2),
+    }
+
+
+def align(request):
+    """Where each segment's words fall in the audio: [start, end] per segment,
+    in seconds. A segment with no alignable words (a lone tag) gets the gap
+    between its neighbours, so the list always matches the segments."""
     segments = [words_of(text) for text in request["segments"]]
     flat = [word for words in segments for word in words]
     if not flat:
         raise ValueError("Nothing in the line can be aligned.")
 
-    with torch.inference_mode():
-        emission, _ = a["model"](waveform.to(a["device"]))
-        spans = a["align"](emission[0], a["tokenizer"](flat))
-    ratio = seconds / emission.size(1)
+    spans, seconds, ratio = align_words(request["audio"], flat)
 
     marks, at = [], 0
     for words in segments:

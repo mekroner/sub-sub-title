@@ -145,6 +145,21 @@ export interface ClipTake {
    * end in this take, in seconds, found by aligning the text to the audio.
    */
   marks?: Array<[number, number]>;
+  /**
+   * Where the voice starts and ends in the file, padded: the part a clip
+   * plays, so the first word lands where the clip starts. Absent on takes
+   * made before it was measured, which play whole.
+   */
+  speech?: [number, number];
+  /** How well the take says its line, when that was checked. */
+  check?: TakeCheck;
+}
+
+export interface TakeCheck {
+  /** How confidently the line's words were found in the take, 0..1. */
+  score: number;
+  /** Letters per second of speech. */
+  rate: number;
 }
 
 /** "turbo" takes inline tags like [laugh]; "standard" has an emotion setting. */
@@ -438,6 +453,8 @@ export interface TtsRequest {
    * found in the generated audio. Null for a single cue.
    */
   alignSegments: string[] | null;
+  /** Also judge whether the take says the line; costs an alignment. */
+  check: boolean;
 }
 
 export interface TtsResult {
@@ -445,6 +462,11 @@ export interface TtsResult {
   duration: number;
   /** Each aligned segment's start and end, in seconds; absent if not asked or not found. */
   marks?: Array<[number, number]>;
+  /** Where the voice starts and ends in the take; absent if none was found. */
+  speech?: [number, number];
+  /** Present only when a check was asked for and could be made. */
+  score?: number;
+  rate?: number;
 }
 
 /** Progress while the transcription engine is being downloaded and unpacked. */

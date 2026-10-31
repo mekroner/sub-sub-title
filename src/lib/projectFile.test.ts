@@ -55,7 +55,14 @@ const project: Project = {
         source: { cueIds: ["a", "b"], text: "Hello", voiceKey: "turbo||0.8" },
         takes: [
           { file: "D:/vo/old.wav", seed: 1, duration: 2.5 },
-          { file: "D:/vo/line1.wav", seed: 2, duration: 3, marks: [[0, 1], [1.2, 2.9]] },
+          {
+            file: "D:/vo/line1.wav",
+            seed: 2,
+            duration: 3,
+            marks: [[0, 1], [1.2, 2.9]],
+            speech: [0.25, 2.25],
+            check: { score: 0.82, rate: 14.5 },
+          },
         ],
       },
     ],

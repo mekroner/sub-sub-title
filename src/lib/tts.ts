@@ -297,6 +297,25 @@ export function nextLine(
   return best;
 }
 
+/**
+ * A checked take whose words were found with less confidence than this has
+ * likely dropped or garbled some. Forced alignment places every word
+ * somewhere; a word that is not there is placed on whatever is nearby.
+ */
+export const SUSPECT_SCORE = 0.45;
+/**
+ * Letters per second of speech outside this range is not how people talk: a
+ * rushed take has skipped words, a slow one has stalled or added sounds.
+ */
+export const SUSPECT_RATE: [number, number] = [6, 24];
+
+/** Whether a checked take probably does not say its line. Unchecked takes are not. */
+export function isSuspect(take: ClipTake): boolean {
+  if (!take.check) return false;
+  const { score, rate } = take.check;
+  return score < SUSPECT_SCORE || rate < SUSPECT_RATE[0] || rate > SUSPECT_RATE[1];
+}
+
 /** Seconds the clip runs past the end of its last cue; 0 when it fits. */
 export function overrun(clip: VoiceClip, cues: Cue[]): number {
   if (!clip.source) return 0;
@@ -324,9 +343,28 @@ export function trackForVoice(
 }
 
 /**
+ * What a clip plays of a take: the part where the voice is, so the silence a
+ * model leaves around a line never pushes its first word late. A take with
+ * no speech window plays whole.
+ */
+export function playTake(
+  take: ClipTake,
+): Pick<VoiceClip, "file" | "offset" | "duration" | "sourceDuration"> {
+  const [from, to] = take.speech ?? [0, take.duration];
+  const offset = Math.min(Math.max(0, from), take.duration);
+  const end = Math.min(Math.max(offset, to), take.duration);
+  return {
+    file: take.file,
+    offset,
+    duration: end > offset ? end - offset : take.duration - offset,
+    sourceDuration: take.duration,
+  };
+}
+
+/**
  * Places a freshly generated take of a line. The clip already holding the
  * line's first cue gets the take — keeping where it was moved to, its track
- * and its gain — and plays it untrimmed; otherwise a new clip starts at the
+ * and its gain — playing its speech; otherwise a new clip starts at the
  * line's first cue. Any other clip that only held cues of this line is
  * removed: the new line speaks those words now. `line` is what was actually
  * spoken; it defaults to the line as it reads now.
@@ -350,15 +388,7 @@ export function placeTake(
       ...voiceover,
       clips: clips.map((c) =>
         c.id === existing.id
-          ? {
-              ...c,
-              file: take.file,
-              offset: 0,
-              duration: take.duration,
-              sourceDuration: take.duration,
-              source,
-              takes,
-            }
+          ? { ...c, ...playTake(take), source, takes }
           : c,
       ),
     };
@@ -368,13 +398,10 @@ export function placeTake(
   const clip: VoiceClip = {
     id: makeId(),
     trackId: placed.trackId,
-    file: take.file,
+    ...playTake(take),
     // Named after the subtitles, not the script: tags make poor labels.
     name: clipName(group.map(speechText).join(" ") || stripTags(source.text)),
     start: group[0].start,
-    offset: 0,
-    duration: take.duration,
-    sourceDuration: take.duration,
     gainDb: 0,
     source,
     takes: [take],
@@ -382,32 +409,31 @@ export function placeTake(
   return { ...placed.voiceover, clips: [...placed.voiceover.clips, clip] };
 }
 
-/** Switches a clip to another of its takes, untrimmed. */
+/** Switches a clip to another of its takes, playing its speech. */
 export function selectTake(voiceover: Voiceover, clipId: string, index: number): Voiceover {
   return {
     ...voiceover,
     clips: voiceover.clips.map((c) => {
       const take = c.takes?.[index];
       if (c.id !== clipId || !take || c.file === take.file) return c;
-      return {
-        ...c,
-        file: take.file,
-        offset: 0,
-        duration: take.duration,
-        sourceDuration: take.duration,
-      };
+      return { ...c, ...playTake(take) };
     }),
   };
 }
 
 /**
  * Where each cue's words fall in a take, when alignment did not say: shares
- * of the take in proportion to each cue's text. Rough, but never empty.
+ * of `duration` seconds from `from`, in proportion to each cue's text. Rough,
+ * but never empty.
  */
-export function proportionalMarks(parts: string[], duration: number): Array<[number, number]> {
+export function proportionalMarks(
+  parts: string[],
+  duration: number,
+  from = 0,
+): Array<[number, number]> {
   const weights = parts.map((p) => Math.max(1, stripTags(p).length));
   const total = weights.reduce((a, b) => a + b, 0);
-  let at = 0;
+  let at = from;
   return weights.map((w) => {
     const start = at;
     at += (w / total) * duration;
@@ -439,6 +465,7 @@ export function fitCuesToLines(
       continue;
     }
     const take = clip.takes?.find((t) => t.file === clip.file);
+    const [speechFrom, speechTo] = take?.speech ?? [0, clip.sourceDuration];
     const marks =
       take?.marks?.length === cueIds.length
         ? take.marks
@@ -447,7 +474,8 @@ export function fitCuesToLines(
               const cue = cues.find((c) => c.id === id);
               return cue ? renderLine(voiceover, cue).text : "";
             }),
-            clip.sourceDuration,
+            speechTo - speechFrom,
+            speechFrom,
           );
     cueIds.forEach((id, i) => {
       const [from, to] = marks[i];
@@ -475,7 +503,7 @@ export function fitCuesToLines(
 
 /**
  * Drops one take. Deleting the take in use switches to its neighbour (the
- * next, else the previous), untrimmed; deleting the only take removes the
+ * next, else the previous); deleting the only take removes the
  * clip. The audio file is left on disk: undo can bring the take back.
  */
 export function removeTake(voiceover: Voiceover, clipId: string, index: number): Voiceover {
@@ -488,14 +516,7 @@ export function removeTake(voiceover: Voiceover, clipId: string, index: number):
   const remaining = takes.filter((_, i) => i !== index);
   let next: VoiceClip = { ...clip, takes: remaining };
   if (takes[index].file === clip.file) {
-    const take = remaining[Math.min(index, remaining.length - 1)];
-    next = {
-      ...next,
-      file: take.file,
-      offset: 0,
-      duration: take.duration,
-      sourceDuration: take.duration,
-    };
+    next = { ...next, ...playTake(remaining[Math.min(index, remaining.length - 1)]) };
   }
   return { ...voiceover, clips: voiceover.clips.map((c) => (c.id === clipId ? next : c)) };
 }

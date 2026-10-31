@@ -152,19 +152,25 @@ export function useVoiceGeneration({ voiceover, cues, paths, commit, notify }: O
             temperature: voice.temperature,
             outputPath: takePath(paths.dir, paths.stem, group[0].id, seed),
             alignSegments: group.length > 1 ? parts.map(stripTags) : null,
+            check: false,
           });
+          const [from, to] = result.speech ?? [0, result.duration];
           const marks =
             group.length > 1
               ? result.marks?.length === group.length
                 ? result.marks
                 : // Alignment failed or found nothing: an estimate beats none.
-                  proportionalMarks(parts, result.duration)
+                  proportionalMarks(parts, to - from, from)
               : undefined;
           const take: ClipTake = {
             file: result.path,
             seed,
             duration: result.duration,
             ...(marks ? { marks } : {}),
+            ...(result.speech ? { speech: result.speech } : {}),
+            ...(result.score !== undefined && result.rate !== undefined
+              ? { check: { score: result.score, rate: result.rate } }
+              : {}),
           };
           // Records the line as sent, even if its script was edited meanwhile.
           commit((v) => placeTake(v, group, take, line), batch);
