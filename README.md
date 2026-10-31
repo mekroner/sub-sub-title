@@ -258,6 +258,8 @@ Drop onto the window:
   or `.srt`;
 - an **`.srt`** — imports its cues into the video already open.
 
+In the Edit tab, dropped videos and images are added to the edit instead.
+
 Dropping several at once prefers the project, then the video. This uses Tauri's own drag-drop events
 rather than the HTML5 ones, because only those carry a real filesystem path,
 which is what ffmpeg needs.
@@ -464,6 +466,41 @@ clears the conversation, and so does opening another video. The panel's height
 is set by dragging the divider above it. Chat uses the main model and temperature
 from Settings, and the conversation is built in `src/lib/chat.ts`.
 
+## Edit — cutting before subtitling
+
+The **Edit** tab (first of the three) cuts one or more videos into a sequence and
+bakes the result into a new MP4, which then becomes the project's video. The
+Subtitles and Voiceover tabs carry on with that file as if it had been opened, so
+nothing downstream knows an edit happened. A project that never opens the tab
+behaves as before.
+
+- **Start** from the open video (*Start an edit from this video*), or add videos
+  and images with *Add files…* or by dropping them on the window. In this tab a
+  dropped video joins the edit instead of opening as a new project.
+- **The main track** holds clips end to end; they never overlap, and a gap is
+  black and silent. Drag a clip to move it, drag its edges to trim, and drag the
+  small handles in its top corners to fade. Drag a file from the *Media* list
+  onto the track, or double-click it to add it at the end.
+- **Fades** go to and from black, picture and sound together, so a clip that
+  fades out followed by one that fades in dips to black between them.
+- **Keys:** `Space` plays, `S` splits at the playhead, `Delete` removes the
+  selected clip, and `←` `→` (or `[` `]`) move it by a frame. Every change undoes
+  like any other.
+- **Bake…** writes `<project>.cut.mp4` beside the project file (beside the first
+  source if the project is unsaved). Re-baking takes the next free name
+  (`.cut-2.mp4`, …), switches the project to it, and sends the previous bake to
+  the Recycle Bin. The chip beside the button says whether the last bake still
+  matches the cut. Cues and voice clips keep their times when you re-bake, so a
+  re-cut that moves things leaves them out of step; the dialog warns when there
+  are any.
+
+The preview has its own clock, with a small pool of `<video>` elements slaved to
+it; the next clip is loaded and seeked a couple of seconds before its cut. It
+plays what the webview can decode (H.264, VP8/9, AV1); other codecs are flagged
+in the media list but bake fine. The bake places every layer with the same
+functions the preview uses, and the edit's canvas size and frame rate are set
+on the *Canvas* tab.
+
 ## Burn-in
 
 `Burn in…` re-encodes with libx264 (CRF configurable, default 18) and copies the
@@ -516,5 +553,13 @@ sub-sub-title.exe "D:\footage\scene.mp4"
   than assuming rigid blocks, tolerates CRLF, missing blank lines, and repairs
   reversed timecodes. Files are decoded with BOM sniffing and a Windows-1252
   fallback, since subtitles are frequently not UTF-8.
+- **The Edit tab bakes rather than composes live.** TypeScript resolves the cut
+  into a render plan in output pixels and seconds (`src/lib/editPlan.ts`); Rust
+  turns the plan into an ffmpeg filter graph (`src-tauri/src/edit.rs`): a black
+  base, each clip seeked at the demuxer (`-ss`/`-t` per input, so a clip late in
+  a long file does not decode what comes before it), faded in alpha and laid
+  over with `overlay`. The graph holds no paths and goes in a file
+  (`-filter_complex_script`), since Windows caps a command line at 32k
+  characters.
 - **The video is served over Tauri's asset protocol**, and each opened file is
   granted to the scope at runtime rather than globbing the whole filesystem.

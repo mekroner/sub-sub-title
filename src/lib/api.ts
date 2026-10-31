@@ -17,6 +17,7 @@ import type {
   Peaks,
   ProjectPaths,
   ProofreadCorrection,
+  RenderPlan,
   ScriptLine,
   Settings,
   SpellDialect,
@@ -136,6 +137,19 @@ export const renderBurnIn = (args: {
 }) => invoke<void>("render_burn_in", args);
 
 export const cancelRender = () => invoke<void>("cancel_render");
+
+/** Writes a PNG into the bake's work dir under `name`; returns the name. */
+export const stageEditImage = (name: string, png: Uint8Array) =>
+  invoke<string>("stage_edit_image", png, { headers: { "x-name": name } });
+
+/** Bakes the Edit tab's plan into `outputPath`. Progress arrives as `bake-progress`. */
+export const bakeEdit = (args: { plan: RenderPlan; outputPath: string; crf?: number }) =>
+  invoke<void>("bake_edit", args);
+
+export const cancelBake = () => invoke<void>("cancel_bake");
+
+/** Sends an earlier bake nothing uses any more to the Recycle Bin. */
+export const trashBake = (path: string) => invoke<void>("trash_bake", { path });
 
 export const mixdownVoiceover = (request: MixdownRequest) =>
   invoke<MixdownResult>("mixdown_voiceover", { request });

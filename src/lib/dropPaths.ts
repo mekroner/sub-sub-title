@@ -4,6 +4,8 @@
  */
 
 export const VIDEO_EXTENSIONS = ["mp4", "m4v", "mov", "webm", "mkv"];
+/** Stills the Edit tab can place: what both ffmpeg and the webview read. */
+export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp"];
 
 export type DropIntent =
   | { kind: "project"; path: string }
@@ -32,4 +34,22 @@ export function classifyDrop(paths: string[]): DropIntent {
   if (srt) return { kind: "srt", path: srt };
 
   return { kind: "none" };
+}
+
+export type EditDropIntent =
+  | { kind: "project"; path: string }
+  | { kind: "media"; videos: string[]; images: string[] }
+  | { kind: "none" };
+
+/**
+ * In the Edit tab, dropped videos and images are sources for the cut — all of
+ * them, in the order dropped. A project file still wins: that is "open this".
+ */
+export function classifyEditDrop(paths: string[]): EditDropIntent {
+  const project = paths.find((p) => hasExtension(p, ["sstproj"]));
+  if (project) return { kind: "project", path: project };
+  const videos = paths.filter((p) => hasExtension(p, VIDEO_EXTENSIONS));
+  const images = paths.filter((p) => hasExtension(p, IMAGE_EXTENSIONS));
+  if (videos.length + images.length === 0) return { kind: "none" };
+  return { kind: "media", videos, images };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyDrop } from "./dropPaths";
+import { classifyDrop, classifyEditDrop } from "./dropPaths";
 
 describe("classifyDrop", () => {
   it("recognises a dropped video", () => {
@@ -49,5 +49,20 @@ describe("classifyDrop", () => {
 
   it("does not match an extension appearing mid-path", () => {
     expect(classifyDrop(["C:\\mp4\\readme.txt"]).kind).toBe("none");
+  });
+});
+
+describe("classifyEditDrop", () => {
+  it("takes every video and image as a source, in order", () => {
+    expect(classifyEditDrop(["/a/one.mov", "/a/logo.PNG", "/a/notes.txt", "/a/two.mp4"])).toEqual({
+      kind: "media",
+      videos: ["/a/one.mov", "/a/two.mp4"],
+      images: ["/a/logo.PNG"],
+    });
+  });
+
+  it("still opens a dropped project, and ignores anything else", () => {
+    expect(classifyEditDrop(["/a/one.mp4", "/a/film.sstproj"])).toEqual({ kind: "project", path: "/a/film.sstproj" });
+    expect(classifyEditDrop(["/a/subs.srt"])).toEqual({ kind: "none" });
   });
 });

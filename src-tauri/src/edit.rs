@@ -486,6 +486,24 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_plan_the_frontend_sends() {
+        // As `buildRenderPlan` writes it: camelCase, `audio` absent when silent.
+        let json = r#"{"width":640,"height":360,"fps":25,"total":16,"layers":[
+            {"kind":"video","path":"/v/a.webm","staged":false,"start":0,"duration":3,"offset":0,
+             "fadeIn":0,"fadeOut":0.5,"opacity":1,"rects":[{"time":0,"x":0,"y":0,"w":640,"h":360}],
+             "audio":{"gainDb":-3}},
+            {"kind":"video","path":"/v/b.webm","staged":false,"start":10,"duration":6,"offset":2,
+             "fadeIn":0.5,"fadeOut":0,"opacity":1,"rects":[{"time":0,"x":0,"y":0,"w":640,"h":360}]}
+        ]}"#;
+        let plan: RenderPlan = serde_json::from_str(json).unwrap();
+        assert_eq!(plan.layers[0].fade_out, 0.5);
+        assert_eq!(plan.layers[0].audio.as_ref().unwrap().gain_db, -3.0);
+        assert!(plan.layers[1].audio.is_none());
+        let (_, graph) = build_graph(&plan).unwrap();
+        assert!(graph.contains("volume=-3dB"));
+    }
+
+    #[test]
     fn formats_numbers_for_ffmpeg() {
         assert_eq!(num(4.0), "4");
         assert_eq!(num(0.1 + 0.2), "0.3");

@@ -72,7 +72,9 @@ import {
   stripSpeakerPrefix,
 } from "./lib/srt";
 import { nextPaletteColor } from "./lib/colors";
-import { classifyDrop, VIDEO_EXTENSIONS } from "./lib/dropPaths";
+import { classifyDrop, classifyEditDrop, VIDEO_EXTENSIONS } from "./lib/dropPaths";
+import { EditWorkspace, type EditHandle } from "./components/edit/EditWorkspace";
+import type { Edit } from "./types";
 import {
   PROJECT_EXTENSION,
   parseProjectFile,
@@ -242,7 +244,12 @@ interface FindState {
 const STORAGE_PREFIX = "sub-sub-title:";
 
 /** localStorage can throw outright (blocked site data), so never let it escape. */
-type Workspace = "subtitles" | "voiceover";
+type Workspace = "subtitles" | "voiceover" | "edit";
+/**
+ * Stored by index. Edit came last, so it takes 2: earlier stored values still
+ * restore the tab they meant, even though Edit is shown first.
+ */
+const WORKSPACES: Workspace[] = ["subtitles", "voiceover", "edit"];
 
 const AUDIO_EXTENSIONS = ["wav", "mp3", "flac", "ogg", "opus", "m4a", "aac"];
 
@@ -313,8 +320,8 @@ export default function App() {
   );
   const [follow, setFollow] = useState(true);
   /** Which tab fills the window below the menu: subtitle editing, or the voiceover mix. */
-  const [workspace, setWorkspace] = useState<Workspace>(() =>
-    readStored("workspace", 0) === 1 ? "voiceover" : "subtitles",
+  const [workspace, setWorkspace] = useState<Workspace>(
+    () => WORKSPACES[readStored("workspace", 0)] ?? "subtitles",
   );
 
   // An open menu suspends the editor shortcuts, so `S` picks a menu item rather
@@ -424,6 +431,8 @@ export default function App() {
     [],
   );
   const voiceoverMode = workspace === "voiceover";
+  const editMode = workspace === "edit";
+  const editRef = useRef<EditHandle>(null);
 
   const [voTab, setVoTab] = useState<VoTab>(
     () => VO_TABS[readStored("voTab", 0)]?.id ?? "cast",
@@ -550,7 +559,7 @@ export default function App() {
   useEffect(() => writeStored("playbackRate", playbackRate), [playbackRate]);
   useEffect(() => writeStored("sideWidth", sideWidth), [sideWidth]);
   useEffect(() => writeStored("chatHeight", chatHeight), [chatHeight]);
-  useEffect(() => writeStored("workspace", workspace === "voiceover" ? 1 : 0), [workspace]);
+  useEffect(() => writeStored("workspace", WORKSPACES.indexOf(workspace)), [workspace]);
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
@@ -621,9 +630,12 @@ export default function App() {
    * Attaches a video to the panes without touching the cue data, so both
    * "open a video" and "open a project" can use it. Returns the derived paths.
    */
+  /** The file the panes show, so a `videoPath` changed by undo can be followed. */
+  const attachedPath = useRef<string | null>(null);
   const attachMedia = useCallback(async (path: string) => {
     const info = await api.probeMedia(path);
     const derived = await api.derivePaths(path);
+    attachedPath.current = path;
 
     setMedia(info);
     setPaths(derived);
@@ -636,6 +648,7 @@ export default function App() {
 
   /** Clears the media panes — a project whose video has gone missing, or New. */
   const detachMedia = useCallback(() => {
+    attachedPath.current = null;
     setMedia(null);
     setPaths(null);
     setVideoUrl(null);
@@ -1002,6 +1015,76 @@ export default function App() {
     },
     [update],
   );
+
+  /** The Edit tab's cut. A drag passes a `drag:` key and folds into one undo step. */
+  const setEdit = useCallback(
+    (fn: (edit: Edit | undefined) => Edit | undefined, mergeKey?: string) => {
+      update((current) => {
+        const next = fn(current.edit);
+        if (next === current.edit) return current;
+        if (next === undefined) {
+          const { edit: _gone, ...rest } = current;
+          return rest;
+        }
+        return { ...current, edit: next };
+      }, mergeKey
+        ? { mergeKey, ...(mergeKey.startsWith("drag:") ? { mergeWindowMs: Infinity } : {}) }
+        : undefined);
+    },
+    [update],
+  );
+
+  /**
+   * A finished bake becomes the project's video, in one undo step with the
+   * record of what was baked. The bake it replaces goes to the Recycle Bin,
+   * unless the edit still uses that file as a source.
+   */
+  const adoptBake = useCallback(
+    async (path: string, planHash: string) => {
+      const previous = project.edit?.baked?.path;
+      await attachMedia(path);
+      update((current) =>
+        current.edit
+          ? {
+              ...current,
+              videoPath: path,
+              edit: { ...current.edit, baked: { path, planHash, at: new Date().toISOString() } },
+            }
+          : current,
+      );
+      notify(`Baked ${path}. Subtitles and Voiceover now work on it.`);
+      const inUse = project.edit?.sources.some((s) => s.path === previous);
+      if (previous && previous !== path && !inUse) {
+        api.trashBake(previous).catch((e) => notify(errorMessage(e), "error"));
+      }
+    },
+    [project.edit, attachMedia, update, notify],
+  );
+
+  // The panes follow `videoPath` when undo or redo moves it — across a bake,
+  // say. Opening a file attaches it directly; a missing file is left to the
+  // message that reported it.
+  useEffect(() => {
+    const path = project.videoPath;
+    if (!path || path === attachedPath.current) return;
+    let cancelled = false;
+    void api.fileExists(path).then(async (exists) => {
+      if (cancelled || !exists || path === attachedPath.current) return;
+      try {
+        await attachMedia(path);
+      } catch (e) {
+        notify(errorMessage(e), "error");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.videoPath, attachMedia, notify]);
+
+  // The Edit tab has its own clock; the Subtitles player stops while it shows.
+  useEffect(() => {
+    if (editMode) videoRef.current?.pause();
+  }, [editMode]);
 
   /**
    * A timeline drag is one undo step however long it is held: its key is unique
@@ -1974,6 +2057,16 @@ export default function App() {
   // --- Drag and drop ------------------------------------------------------
   const openDroppedPaths = useCallback(
     async (paths: string[]) => {
+      // In the Edit tab, videos and images are sources for the cut.
+      if (editMode) {
+        const editIntent = classifyEditDrop(paths);
+        if (editIntent.kind === "media") {
+          return editRef.current?.addFiles([...editIntent.videos, ...editIntent.images]);
+        }
+        if (editIntent.kind === "none") {
+          return notify("Drop videos or images to add them to the edit.", "error");
+        }
+      }
       const intent = classifyDrop(paths);
       if (intent.kind === "project") {
         if (!(await confirmDiscard())) return;
@@ -1997,7 +2090,7 @@ export default function App() {
         "error",
       );
     },
-    [confirmDiscard, openProjectAt, openVideoAt, importSrtFrom, project.videoPath, notify],
+    [confirmDiscard, openProjectAt, openVideoAt, importSrtFrom, project.videoPath, notify, editMode],
   );
 
   useEffect(() => {
@@ -2488,14 +2581,35 @@ export default function App() {
     toggleDuck: toggleDuckOnSelection,
   };
 
+  /**
+   * The Edit tab has its own clock and selection: play, split, delete and the
+   * arrows act on the cut. Keys that edit cues do nothing there.
+   */
+  const editShortcuts: ShortcutActions = {
+    ...voiceoverShortcuts,
+    togglePlay: () => editRef.current?.togglePlay(),
+    splitAtPlayhead: () => editRef.current?.split(),
+    deleteSelected: () => editRef.current?.deleteSelected(),
+    nudge: (_edge, direction) => editRef.current?.nudge(direction),
+    zoom: (direction) => editRef.current?.zoom(direction),
+    selectAll: () => undefined,
+    jumpSection: () => undefined,
+    toggleFollow: () => undefined,
+    toggleDuck: () => undefined,
+    clearSelection: () => {
+      if (contextMenu) setContextMenu(null);
+      else editRef.current?.clearSelection();
+    },
+  };
+
   useShortcuts(
-    voiceoverMode ? voiceoverShortcuts : subtitleShortcuts,
+    editMode ? editShortcuts : voiceoverMode ? voiceoverShortcuts : subtitleShortcuts,
     !modalOpen && !menuOpen && !contextMenu,
   );
 
   usePasteText(
     pasteCueAtPlayhead,
-    !voiceoverMode && !modalOpen && !menuOpen && !contextMenu,
+    !voiceoverMode && !editMode && !modalOpen && !menuOpen && !contextMenu,
   );
 
   // --- Context menu -------------------------------------------------------
@@ -3044,24 +3158,18 @@ export default function App() {
         <MenuBar menus={menus} onOpenChange={setMenuOpen} />
 
         <div className="segmented workspace-tabs" role="tablist" aria-label="Workspace">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={!voiceoverMode}
-            className={voiceoverMode ? "small" : "small on"}
-            onClick={() => setWorkspace("subtitles")}
-          >
-            Subtitles
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={voiceoverMode}
-            className={voiceoverMode ? "small on" : "small"}
-            onClick={() => setWorkspace("voiceover")}
-          >
-            Voiceover
-          </button>
+          {(["edit", "subtitles", "voiceover"] as const).map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={workspace === id}
+              className={workspace === id ? "small on" : "small"}
+              onClick={() => setWorkspace(id)}
+            >
+              {id === "edit" ? "Edit" : id === "subtitles" ? "Subtitles" : "Voiceover"}
+            </button>
+          ))}
         </div>
 
         <div className="toolbar-spacer">
@@ -3075,7 +3183,8 @@ export default function App() {
           </span>
         </div>
 
-        <div className="toolbar-group">
+        {/* The waveform's controls; the Edit tab has its own zoom and clock. */}
+        <div className="toolbar-group" hidden={editMode}>
           <label className="zoom-control" title="Waveform zoom">
             <span>Zoom</span>
             <input
@@ -3097,8 +3206,27 @@ export default function App() {
         </div>
       </header>
 
+      <EditWorkspace
+        ref={editRef}
+        active={editMode}
+        edit={project.edit}
+        videoPath={project.videoPath}
+        media={media}
+        projectPath={projectPath}
+        hasTimedWork={cues.length > 0 || project.voiceover.clips.length > 0}
+        setEdit={setEdit}
+        onBaked={adoptBake}
+        notify={notify}
+        sideWidth={sideWidth}
+        onSideWidth={setSideWidth}
+        keysEnabled={!modalOpen && !menuOpen && !contextMenu}
+      />
+
+      {/* Kept mounted under the Edit tab, so the player, the mix and the chat
+          keep their state. */}
       <main
         className={voiceoverMode ? "layout voiceover" : "layout"}
+        hidden={editMode}
         style={{ "--side-width": `${sideWidth}px` } as CSSProperties}
       >
         <div className="stage-column">

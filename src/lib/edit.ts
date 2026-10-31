@@ -206,9 +206,9 @@ function mapItem(edit: Edit, id: string, fn: (item: EditItem) => EditItem): Edit
   return changed ? { ...edit, items } : edit;
 }
 
-function baseItem(trackId: string, start: number, duration: number) {
+function baseItem(trackId: string, start: number, duration: number, id = makeId()) {
   return {
-    id: makeId(),
+    id,
     trackId,
     start,
     duration,
@@ -228,6 +228,7 @@ export function placeSource(
   sourceId: string,
   trackId: string,
   start: number,
+  newId = makeId(),
 ): { edit: Edit; id: string | null } {
   const source = edit.sources.find((s) => s.id === sourceId);
   if (!source || !edit.tracks.some((t) => t.id === trackId)) return { edit, id: null };
@@ -236,8 +237,8 @@ export function placeSource(
   const at = freeStart(edit, trackId, start, duration);
   const item: EditItem =
     source.kind === "video"
-      ? { ...baseItem(trackId, at, duration), kind: "video", sourceId, offset: 0, gainDb: 0 }
-      : { ...baseItem(trackId, at, duration), kind: "image", sourceId };
+      ? { ...baseItem(trackId, at, duration, newId), kind: "video", sourceId, offset: 0, gainDb: 0 }
+      : { ...baseItem(trackId, at, duration, newId), kind: "image", sourceId };
   return { edit: { ...edit, items: [...edit.items, item] }, id: item.id };
 }
 
@@ -256,11 +257,12 @@ export function placeText(
   trackId: string,
   start: number,
   text = "Text",
+  newId = makeId(),
 ): { edit: Edit; id: string | null } {
   if (!edit.tracks.some((t) => t.id === trackId)) return { edit, id: null };
   const at = freeStart(edit, trackId, start, DEFAULT_STILL_SECONDS);
   const item: TextItem = {
-    ...baseItem(trackId, at, DEFAULT_STILL_SECONDS),
+    ...baseItem(trackId, at, DEFAULT_STILL_SECONDS, newId),
     kind: "text",
     text,
     style: { ...DEFAULT_TEXT_STYLE },
@@ -332,7 +334,12 @@ export function trimItemEnd(edit: Edit, id: string, end: number): Edit {
  * Cuts an item in two at timeline time `t`. Fades stay on the outer ends; the
  * motion carries on across the cut.
  */
-export function splitItem(edit: Edit, id: string, t: number): { edit: Edit; id: string | null } {
+export function splitItem(
+  edit: Edit,
+  id: string,
+  t: number,
+  newId = makeId(),
+): { edit: Edit; id: string | null } {
   const item = edit.items.find((i) => i.id === id);
   if (!item) return { edit, id: null };
   const cut = t - item.start;
@@ -341,7 +348,7 @@ export function splitItem(edit: Edit, id: string, t: number): { edit: Edit; id: 
   const left = clampFades({ ...item, duration: cut, fadeOut: 0, transform: leftKeys } as EditItem);
   const right = clampFades({
     ...item,
-    id: makeId(),
+    id: newId,
     start: t,
     duration: item.duration - cut,
     fadeIn: 0,

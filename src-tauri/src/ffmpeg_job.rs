@@ -131,9 +131,7 @@ impl FfmpegJob {
                 let Ok(mut guard) = child_handle.lock() else {
                     return None;
                 };
-                let Some(child) = guard.as_mut() else {
-                    return None;
-                };
+                let child = guard.as_mut()?;
                 match child.try_wait() {
                     Ok(Some(status)) => return Some(status),
                     Ok(None) => {}

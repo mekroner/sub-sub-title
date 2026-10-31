@@ -35,6 +35,7 @@ import {
   type VoSelection,
 } from "../lib/voSelection";
 import { MAX_ZOOM, MIN_ZOOM, WHEEL_ZOOM_STEP, wheelPixels } from "./WaveformPane";
+import { formatTick, prepareCanvas, tickStep } from "../lib/ruler";
 
 interface Props {
   voiceover: Voiceover;
@@ -126,9 +127,6 @@ const CUE_EDGE_PX = 5;
 const CLICK_SLOP_PX = 3;
 /** Cue blocks this far outside the view are not rendered at all. */
 const WINDOW_PADDING_PX = 400;
-/** Ruler steps, in seconds; the smallest that leaves room for a label wins. */
-const TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800];
-const MIN_TICK_PX = 70;
 
 type DragMode = "move" | "start" | "end";
 
@@ -315,7 +313,7 @@ export function VoiceoverTimeline({
     if (!canvas || view.width === 0) return;
     const g = prepareCanvas(canvas, view.width, RULER_HEIGHT);
     if (!g) return;
-    const step = TICK_STEPS.find((s) => s * zoom >= MIN_TICK_PX) ?? 3600;
+    const step = tickStep(zoom);
     const first = Math.floor(view.left / zoom / step) * step;
     const last = (view.left + view.width) / zoom;
     g.strokeStyle = "#35435a";
@@ -1467,22 +1465,6 @@ function laneUnder(x: number, y: number): string | null {
 }
 
 /** Sizes a canvas for the device pixel ratio and returns a cleared context. */
-function prepareCanvas(
-  canvas: HTMLCanvasElement,
-  width: number,
-  height: number,
-): CanvasRenderingContext2D | null {
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(width * ratio));
-  canvas.height = Math.max(1, Math.round(height * ratio));
-  // CSS size is left to the caller: a clip's canvas stretches to the clip.
-  const g = canvas.getContext("2d");
-  if (!g) return null;
-  g.setTransform(ratio, 0, 0, ratio, 0, 0);
-  g.clearRect(0, 0, width, height);
-  return g;
-}
-
 /** Mirrored bars around the centre line, one per pixel column. */
 function drawPeaks(
   g: CanvasRenderingContext2D,
@@ -1495,13 +1477,6 @@ function drawPeaks(
     const h = Math.max(0.5, Math.min(1, peakAt(x)) * (mid - 2));
     g.fillRect(x, mid - h, 1, h * 2);
   }
-}
-
-function formatTick(seconds: number, step: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds - m * 60;
-  const text = step < 1 ? s.toFixed(1) : String(Math.round(s));
-  return `${m}:${text.padStart(step < 1 ? 4 : 2, "0")}`;
 }
 
 export function formatDb(db: number): string {
