@@ -86,13 +86,17 @@ export function CastPanel({
     <section className="panel cast-panel">
       <header className="panel-header">
         <h2>Cast</h2>
-        {installed && !job && (
+        {installed && (
           <button
             type="button"
             className="small primary"
             disabled={!canGenerate || pending.length === 0}
             onClick={() => onGenerate(pending)}
-            title="Speak every line that is missing or out of date"
+            title={
+              job
+                ? "Add every line that is missing or out of date to this run"
+                : "Speak every line that is missing or out of date"
+            }
           >
             Generate {pending.length || ""}
           </button>
@@ -142,7 +146,6 @@ export function CastPanel({
             row={row}
             voice={voiceFor(voiceover, row.key)}
             voiceover={voiceover}
-            busy={job !== null}
             canGenerate={installed && canGenerate}
             onSetVoice={(patch) => onSetVoice(row.key, patch)}
             onGenerate={() => onGenerate(row.pending)}
@@ -159,7 +162,6 @@ function CastRow({
   row,
   voice,
   voiceover,
-  busy,
   canGenerate,
   onSetVoice,
   onGenerate,
@@ -169,7 +171,6 @@ function CastRow({
   row: Row;
   voice: CastVoice;
   voiceover: Voiceover;
-  busy: boolean;
   canGenerate: boolean;
   onSetVoice: (patch: Partial<CastVoice>) => void;
   onGenerate: () => void;
@@ -190,7 +191,7 @@ function CastRow({
         <button
           type="button"
           className="small"
-          disabled={!canGenerate || busy || todo === 0}
+          disabled={!canGenerate || todo === 0}
           onClick={onGenerate}
           title={`Speak ${row.name}'s ${todo} missing or changed line${todo === 1 ? "" : "s"}`}
         >

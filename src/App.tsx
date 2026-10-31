@@ -1247,9 +1247,7 @@ export default function App() {
         ? "The cue has no text"
         : !paths
           ? "Open a video first"
-          : voices.job
-            ? "Busy speaking other lines"
-            : undefined;
+          : undefined;
       const group = lines.groupOf(cue.id) ?? [cue];
       const size = group.length > 1 ? ` (${group.length} cues)` : "";
 
@@ -3003,7 +3001,7 @@ export default function App() {
                 groupSize={lines.groupOf(editedCue.id)?.length ?? 1}
                 rendered={renderGroup(project.voiceover, lines.groupOf(editedCue.id) ?? [editedCue])}
                 state={lines.stateOf(lines.groupOf(editedCue.id) ?? [editedCue])}
-                canSpeak={Boolean(voices.status?.installed && paths && !voices.job)}
+                canSpeak={Boolean(voices.status?.installed && paths)}
                 onSuggest={apiKeySet ? () => suggestLine(editedCue) : undefined}
                 onChange={(patch) =>
                   setVoiceover(
@@ -3025,7 +3023,7 @@ export default function App() {
               cueText={selectedCueOfClip ? selectedCueOfClip.text : null}
               stale={selectedClip ? clipWarnings.get(selectedClip.id) === "stale" : false}
               overrun={selectedClip ? overrun(selectedClip, cues) : 0}
-              canSpeak={Boolean(voices.status?.installed && paths && !voices.job)}
+              canSpeak={Boolean(voices.status?.installed && paths)}
               onPatch={(patch) => selectedClip && patchClipById(selectedClip.id, patch)}
               onMoveToPlayhead={() =>
                 selectedClip &&

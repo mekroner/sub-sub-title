@@ -267,6 +267,36 @@ export function lineIndex(voiceover: Voiceover, cues: Cue[]): LineIndex {
   };
 }
 
+/**
+ * Which of the queued lines to speak next, by index: one for the model last
+ * used, with its reference if possible, otherwise the earliest. The engine
+ * keeps one model on the GPU and swapping costs a reload, so a run where
+ * speakers on different models take turns speaks each model's lines together.
+ */
+export function nextLine(
+  voiceover: Voiceover,
+  queue: Cue[][],
+  last: Pick<CastVoice, "engine" | "reference"> | null,
+): number {
+  let best = -1;
+  let bestScore = -1;
+  queue.forEach((group, i) => {
+    const voice = voiceFor(voiceover, castKey(group[0]));
+    const score = !last
+      ? 0
+      : voice.engine !== last.engine
+        ? 0
+        : (voice.reference ?? "") === (last.reference ?? "")
+          ? 2
+          : 1;
+    if (score > bestScore || (score === bestScore && group[0].start < queue[best][0].start)) {
+      best = i;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
 /** Seconds the clip runs past the end of its last cue; 0 when it fits. */
 export function overrun(clip: VoiceClip, cues: Cue[]): number {
   if (!clip.source) return 0;

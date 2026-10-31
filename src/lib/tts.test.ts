@@ -8,6 +8,7 @@ import {
   fitCuesToLines,
   lineGroups,
   lineIndex,
+  nextLine,
   overrun,
   placeTake,
   proportionalMarks,
@@ -179,6 +180,24 @@ describe("generated lines", () => {
     expect(stateOf(setVoice(vo, "s1", { reference: "new.wav" }), [line], line)).toBe("stale");
     expect(lineIndex(vo, []).isStale(vo.clips[0])).toBe(true);
     expect(lineIndex(vo, [line]).isStale(vo.clips[0])).toBe(false);
+  });
+
+  it("speaks each model's lines together, earliest first", () => {
+    let vo = setVoice(defaultVoiceover(), "s2", { engine: "standard" });
+    vo = setVoice(vo, "s3", { reference: "r.wav" });
+    const queue = [
+      [cue("a", 0, 1, "One.", "s1")],
+      [cue("b", 2, 3, "Two.", "s2")],
+      [cue("c", 4, 5, "Three.", "s3")],
+      [cue("d", 6, 7, "Four.", "s1")],
+      [cue("e", 8, 9, "Five.", "s2")],
+    ];
+    expect(nextLine(vo, queue, null)).toBe(0);
+    // Turbo with no reference was last: its own line before another reference.
+    expect(nextLine(vo, queue.slice(1), voiceFor(vo, "s1"))).toBe(2);
+    expect(nextLine(vo, [queue[1], queue[2], queue[4]], voiceFor(vo, "s1"))).toBe(1);
+    expect(nextLine(vo, [queue[2], queue[4]], voiceFor(vo, "s2"))).toBe(1);
+    expect(nextLine(vo, [], null)).toBe(-1);
   });
 
   it("lists what needs generating, skipping empty cues", () => {

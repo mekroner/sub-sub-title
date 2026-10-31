@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { ClipTake, Cue, ProjectPaths, TtsEvent, TtsStatus, Voiceover } from "../types";
+import type { CastVoice, ClipTake, Cue, ProjectPaths, TtsEvent, TtsStatus, Voiceover } from "../types";
 import * as api from "../lib/api";
 import { errorMessage } from "../lib/api";
 import { makeId } from "../lib/ids";
 import {
   lineIndex,
   newSeed,
+  nextLine,
   placeTake,
   proportionalMarks,
   renderGroup,
@@ -41,12 +42,20 @@ interface Options {
 /**
  * Speaking cues through the local voice engine, one line at a time: each take
  * is placed as soon as it exists, so a long run can be watched, played and
- * stopped part way.
+ * stopped part way. Lines asked for during a run join it.
  */
 export function useVoiceGeneration({ voiceover, cues, paths, commit, notify }: Options) {
   const [status, setStatus] = useState<TtsStatus | null>(null);
   const [job, setJob] = useState<GenerationJob | null>(null);
   const stopRequested = useRef(false);
+  const running = useRef(false);
+  /**
+   * The first cue of each line still to speak. Lines are looked up again when
+   * their turn comes, so one edited meanwhile is spoken as it reads then.
+   */
+  const queue = useRef<string[]>([]);
+  /** The first cue of the line being spoken now. */
+  const speaking = useRef<string | null>(null);
   // Read when each line is sent, so a voice changed mid-run applies from the
   // next line on.
   const voiceoverRef = useRef(voiceover);
@@ -68,31 +77,68 @@ export function useVoiceGeneration({ voiceover, cues, paths, commit, notify }: O
     };
   }, []);
 
+  /** The queued lines as they read now; any that no longer exist are dropped. */
+  const resolveQueue = (): Cue[][] => {
+    const index = lineIndex(voiceoverRef.current, cuesRef.current);
+    const groups: Cue[][] = [];
+    for (const id of queue.current) {
+      const group = index.groupOf(id);
+      if (group && !groups.includes(group) && group[0].id !== speaking.current) groups.push(group);
+    }
+    queue.current = groups.map((g) => g[0].id);
+    return groups;
+  };
+
   /**
    * Speaks the lines the given cues belong to — the whole line, when a cue is
-   * one part of a sentence spoken across several.
+   * one part of a sentence spoken across several. During a run they are added
+   * to it, and become part of its undo step.
    */
   const generate = useCallback(
     async (requested: Cue[]) => {
-      if (!paths || job) return;
+      if (!paths) return;
       const index = lineIndex(voiceoverRef.current, cuesRef.current);
-      const lines: Cue[][] = [];
+      const added: string[] = [];
       for (const cue of requested) {
-        const group = index.groupOf(cue.id);
-        if (group && !lines.includes(group)) lines.push(group);
+        const first = index.groupOf(cue.id)?.[0].id;
+        if (first && !added.includes(first) && !queue.current.includes(first) && first !== speaking.current) {
+          added.push(first);
+        }
       }
-      if (lines.length === 0) return;
+      if (added.length === 0) return;
+      queue.current = [...queue.current, ...added];
 
+      if (running.current) {
+        setJob((current) => current && { ...current, total: current.total + added.length });
+        return;
+      }
+
+      running.current = true;
       stopRequested.current = false;
       const batch = `tts:${makeId()}`;
       let done = 0;
-      setJob({ done, total: lines.length, current: speechText(lines[0][0]), loading: false });
+      let last: Pick<CastVoice, "engine" | "reference"> | null = null;
+      setJob({ done, total: added.length, current: "", loading: false });
       try {
-        for (const group of lines) {
+        for (;;) {
           if (stopRequested.current) break;
+          const pending = resolveQueue();
+          if (pending.length === 0) break;
+          const group = pending[nextLine(voiceoverRef.current, pending, last)];
+          queue.current = queue.current.filter((id) => id !== group[0].id);
+          speaking.current = group[0].id;
+
           const line = renderGroup(voiceoverRef.current, group);
-          setJob((current) => current && { ...current, current: line.text });
+          setJob(
+            (current) =>
+              current && {
+                ...current,
+                current: line.text || speechText(group[0]),
+                total: done + pending.length,
+              },
+          );
           const { voice } = line;
+          last = voice;
           const seed = newSeed();
           // Each cue's own words, for finding where they fall in the take.
           const parts = group.map((cue) => renderLine(voiceoverRef.current, cue).text);
@@ -122,24 +168,30 @@ export function useVoiceGeneration({ voiceover, cues, paths, commit, notify }: O
           };
           // Records the line as sent, even if its script was edited meanwhile.
           commit((v) => placeTake(v, group, take, line), batch);
+          speaking.current = null;
           done += 1;
           setJob((current) => current && { ...current, done });
         }
-        if (stopRequested.current && done < lines.length) {
-          notify(`Stopped after ${done} of ${lines.length} lines.`);
-        } else if (lines.length > 1) {
+        const total = done + queue.current.length;
+        if (stopRequested.current && done < total) {
+          notify(`Stopped after ${done} of ${total} lines.`);
+        } else if (done > 1) {
           notify(`Spoke ${done} lines.`);
         }
       } catch (e) {
+        const total = done + queue.current.length + 1;
         notify(
-          `${done > 0 ? `Stopped after ${done} of ${lines.length} lines: ` : ""}${errorMessage(e)}`,
+          `${done > 0 ? `Stopped after ${done} of ${total} lines: ` : ""}${errorMessage(e)}`,
           "error",
         );
       } finally {
+        queue.current = [];
+        speaking.current = null;
+        running.current = false;
         setJob(null);
       }
     },
-    [paths, job, commit, notify],
+    [paths, commit, notify],
   );
 
   const stop = useCallback(() => {
