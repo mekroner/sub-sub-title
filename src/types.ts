@@ -267,6 +267,170 @@ export interface Project {
   timedBeats: TimedBeat[];
   /** The Voiceover tab's tracks and clips. */
   voiceover: Voiceover;
+  /**
+   * The Edit tab's cut, baked into the file `videoPath` then points at.
+   * Absent until an edit is started; a project without one never changes.
+   */
+  edit?: Edit;
+}
+
+// --- The Edit tab -------------------------------------------------------------
+
+/** What the edit renders into: pixel size (always even) and frame rate. */
+export interface EditCanvas {
+  width: number;
+  height: number;
+  fps: number;
+}
+
+export interface Edit {
+  canvas: EditCanvas;
+  sources: EditSource[];
+  /** Index 0 is the main track; later tracks draw on top. */
+  tracks: EditTrack[];
+  items: EditItem[];
+  /** The last bake: which file, and the plan it was made from. */
+  baked?: EditBake;
+}
+
+export interface EditBake {
+  path: string;
+  planHash: string;
+  /** ISO timestamp. */
+  at: string;
+}
+
+/** A file the edit draws from. Referenced, never copied — like the video. */
+export interface EditSource {
+  id: string;
+  /** Absolute path. */
+  path: string;
+  kind: "video" | "image";
+  /** Displayed size, after any rotation. */
+  width: number;
+  height: number;
+  /** Seconds; 0 for images. */
+  duration: number;
+  fps?: number;
+  hasAudio: boolean;
+  /** To warn when the preview cannot play it. */
+  videoCodec?: string;
+}
+
+export interface EditTrack {
+  id: string;
+  kind: "main" | "overlay";
+  name: string;
+  hidden: boolean;
+  /** Only the main track has audio in v1. */
+  muted: boolean;
+}
+
+/**
+ * Where an item sits at a moment, relative to its start. A static item has
+ * one key; more are interpolated linearly.
+ */
+export interface TransformKey {
+  time: number;
+  /** Centre, as a fraction of the canvas width (0.5 = centred). */
+  x: number;
+  /** Centre, as a fraction of the canvas height. */
+  y: number;
+  /** 1 = fit inside the canvas (video, image) or the drawn size (text). */
+  scale: number;
+}
+
+export interface EditItemBase {
+  id: string;
+  trackId: string;
+  /** Timeline seconds. */
+  start: number;
+  duration: number;
+  /** Seconds of alpha (and, for main-track video, audio) ramp at each end. */
+  fadeIn: number;
+  fadeOut: number;
+  /** 0..1, the level the fades go to and from. */
+  opacity: number;
+  /** At least one key; times relative to the item's start. */
+  transform: TransformKey[];
+}
+
+export interface VideoItem extends EditItemBase {
+  kind: "video";
+  sourceId: string;
+  /** Seconds into the source where the item begins. */
+  offset: number;
+  gainDb: number;
+}
+
+export interface ImageItem extends EditItemBase {
+  kind: "image";
+  sourceId: string;
+}
+
+export interface TextStyle {
+  fontFamily: string;
+  /** Pixels at canvas resolution. */
+  fontSize: number;
+  color: string;
+  weight: number;
+  align: "left" | "center" | "right";
+  outline?: { color: string; width: number };
+  shadow?: { color: string; blur: number; dx: number; dy: number };
+  background?: { color: string; padding: number };
+}
+
+export interface TextItem extends EditItemBase {
+  kind: "text";
+  text: string;
+  style: TextStyle;
+}
+
+export type EditItem = VideoItem | ImageItem | TextItem;
+
+/** One input of a bake, in output pixels and seconds. */
+export interface PlanLayer {
+  kind: "video" | "image";
+  /** Absolute source path, or the staged PNG's name for text. */
+  path: string;
+  /** Text is staged in the bake's work dir rather than read from a source. */
+  staged: boolean;
+  start: number;
+  duration: number;
+  /** Seconds into the source; 0 for images. */
+  offset: number;
+  fadeIn: number;
+  fadeOut: number;
+  opacity: number;
+  /** Resolved rect per key, in whole canvas pixels; time relative to start. */
+  rects: PlanRect[];
+  /** Present when this layer contributes sound. */
+  audio?: { gainDb: number };
+}
+
+export interface PlanRect {
+  time: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** What the backend needs to bake an edit, with every decision already made. */
+export interface RenderPlan {
+  width: number;
+  height: number;
+  fps: number;
+  /** Seconds. */
+  total: number;
+  /** Bottom first. */
+  layers: PlanLayer[];
+}
+
+export interface BakeProgress {
+  fraction: number;
+  timeSeconds: number;
+  speed: string;
 }
 
 /** The `.sstproj` project file. Versioned so the format can move later. */
@@ -306,6 +470,8 @@ export interface MediaInfo {
   fps: number;
   videoCodec: string;
   audioCodec: string;
+  /** Degrees clockwise the picture is displayed at; width/height already allow for it. */
+  rotation?: number;
 }
 
 export interface Peaks {

@@ -38,6 +38,7 @@ import {
 } from "./voiceover";
 import { sortSections } from "./sections";
 import { sortBeats } from "./timedBeats";
+import { coerceEdit } from "./edit";
 
 export const PROJECT_EXTENSION = "sstproj";
 
@@ -427,6 +428,8 @@ export function parseProjectFile(raw: string): Project {
     ? sortBeats(file.timedBeats.map(coerceTimedBeat).filter((b): b is TimedBeat => b !== null))
     : [];
 
+  const edit = coerceEdit(file.edit);
+
   return {
     videoPath: typeof file.videoPath === "string" ? file.videoPath : "",
     cues: sortCues(cues),
@@ -439,5 +442,7 @@ export function parseProjectFile(raw: string): Project {
     // Written only since the Voiceover tab existed; older files get the
     // original track alone.
     voiceover: coerceVoiceover(file.voiceover),
+    // Written only by projects that use the Edit tab; absent stays absent.
+    ...(edit ? { edit } : {}),
   };
 }

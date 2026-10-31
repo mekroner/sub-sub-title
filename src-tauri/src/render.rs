@@ -2,21 +2,17 @@
 //! own soundtrack or the Voiceover tab's mix in its place.
 
 use crate::error::{AppError, AppResult};
+use crate::ffmpeg_job::FfmpegJob;
 use crate::media::{ffmpeg_bin, quiet_command};
 use crate::mixdown::{levelling, mix_to_file, MixdownRequest};
 use serde::Serialize;
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Holds the running ffmpeg process so it can be cancelled mid-encode.
 #[derive(Default)]
 pub struct RenderState {
-    child: Arc<Mutex<Option<Child>>>,
-    cancelled: Arc<AtomicBool>,
+    job: FfmpegJob,
 }
 
 #[derive(Clone, Serialize)]
@@ -36,16 +32,7 @@ const MIX_AUDIO: [&str; 4] = ["-c:a", "aac", "-b:a", "192k"];
 
 #[tauri::command]
 pub fn cancel_render(state: tauri::State<'_, RenderState>) -> AppResult<()> {
-    state.cancelled.store(true, Ordering::SeqCst);
-    let mut guard = state
-        .child
-        .lock()
-        .map_err(|_| AppError::msg("Render lock poisoned."))?;
-    if let Some(child) = guard.as_mut() {
-        let _ = child.kill();
-    }
-    // The child is left in place so the wait loop can reap it.
-    Ok(())
+    state.job.cancel("render")
 }
 
 /// Escaping a Windows path inside ffmpeg's `subtitles=` filter is famously
@@ -87,7 +74,7 @@ pub async fn render_burn_in(
 
     let work_dir = stage_subtitles(&app, &ass_path)?;
     let crf = crf.unwrap_or(18).clamp(0, 51);
-    state.cancelled.store(false, Ordering::SeqCst);
+    state.job.reset();
 
     // The mix is rendered first, whole, so the encode below reads it like any
     // other input. It is removed whatever happens.
@@ -96,7 +83,7 @@ pub async fn render_burn_in(
     // The gain that brings the mix to its loudness target, if it has one.
     let mut mix_gain_db = 0.0;
     if let Some(request) = audio {
-        let cancelled = state.cancelled.clone();
+        let cancelled = state.job.cancelled.clone();
         let mix_path = mix.clone();
         let mix_app = app.clone();
         let mixed = tauri::async_runtime::spawn_blocking(move || {
@@ -123,7 +110,7 @@ pub async fn render_burn_in(
             Ok(gain) => mix_gain_db = gain,
             Err(e) => {
                 let _ = std::fs::remove_file(&mix);
-                return Err(if state.cancelled.swap(false, Ordering::SeqCst) {
+                return Err(if state.job.take_cancelled() {
                     AppError::msg("The render was cancelled.")
                 } else {
                     e
@@ -157,127 +144,25 @@ pub async fn render_burn_in(
     } else {
         command.args(["-c:a", "copy"]);
     }
-    let spawned = command
+    command
         .args(["-movflags", "+faststart"])
         .args(["-nostats", "-progress", "pipe:1"])
-        .arg(&output_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| AppError::msg(format!("Could not start ffmpeg: {e}")));
-    let mut child = match spawned {
-        Ok(child) => child,
-        Err(e) => {
-            let _ = std::fs::remove_file(&mix);
-            return Err(e);
-        }
-    };
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AppError::msg("ffmpeg produced no progress stream."))?;
-    let stderr = child.stderr.take();
-
-    {
-        let mut guard = state
-            .child
-            .lock()
-            .map_err(|_| AppError::msg("Render lock poisoned."))?;
-        *guard = Some(child);
-    }
-
-    // ffmpeg writes `key=value` lines to stdout under -progress.
+        .arg(&output_path);
     let progress_app = app.clone();
-    let progress_thread = std::thread::spawn(move || {
-        let mut speed = String::from("?");
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            match key.trim() {
-                "speed" => speed = value.trim().to_string(),
-                // Despite the name, out_time_ms carries microseconds.
-                "out_time_us" | "out_time_ms" => {
-                    if let Ok(us) = value.trim().parse::<f64>() {
-                        let seconds = us / 1_000_000.0;
-                        let fraction = if duration > 0.0 {
-                            (seconds / duration).clamp(0.0, 1.0)
-                        } else {
-                            -1.0
-                        };
-                        let _ = progress_app.emit(
-                            "render-progress",
-                            RenderProgress {
-                                phase: "encoding",
-                                fraction,
-                                time_seconds: seconds,
-                                speed: speed.clone(),
-                            },
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-    });
-
-    // Drain stderr concurrently so a chatty ffmpeg cannot fill the pipe buffer
-    // and deadlock. Keep the tail for the error message.
-    let stderr_thread = std::thread::spawn(move || {
-        let mut tail: Vec<String> = Vec::new();
-        if let Some(stderr) = stderr {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                tail.push(line);
-                if tail.len() > 20 {
-                    tail.remove(0);
-                }
-            }
-        }
-        tail.join("\n")
-    });
-
-    // Poll rather than block on wait(), so the lock stays free for cancel_render.
-    let child_handle = state.child.clone();
-    let status: Option<ExitStatus> = tauri::async_runtime::spawn_blocking(move || loop {
-        {
-            let Ok(mut guard) = child_handle.lock() else {
-                return None;
-            };
-            let Some(child) = guard.as_mut() else {
-                return None;
-            };
-            match child.try_wait() {
-                Ok(Some(status)) => return Some(status),
-                Ok(None) => {}
-                Err(_) => return None,
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    })
-    .await
-    .map_err(|e| AppError::msg(format!("Render task failed: {e}")))?;
-
-    let _ = progress_thread.join();
-    let stderr_tail = stderr_thread.join().unwrap_or_default();
+    let result = state
+        .job
+        .run(command, duration, "render", move |p| {
+            let _ = progress_app.emit(
+                "render-progress",
+                RenderProgress {
+                    phase: "encoding",
+                    fraction: p.fraction,
+                    time_seconds: p.time_seconds,
+                    speed: p.speed,
+                },
+            );
+        })
+        .await;
     let _ = std::fs::remove_file(&mix);
-
-    if let Ok(mut guard) = state.child.lock() {
-        *guard = None;
-    }
-
-    if state.cancelled.swap(false, Ordering::SeqCst) {
-        return Err(AppError::msg("The render was cancelled."));
-    }
-
-    match status {
-        Some(s) if s.success() => Ok(()),
-        Some(s) => Err(AppError::msg(format!(
-            "ffmpeg exited with {s}.\n{stderr_tail}"
-        ))),
-        None => Err(AppError::msg(format!(
-            "The render stopped unexpectedly.\n{stderr_tail}"
-        ))),
-    }
+    result
 }

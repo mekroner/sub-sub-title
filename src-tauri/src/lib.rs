@@ -4,8 +4,10 @@ mod beats;
 mod chat;
 mod dictionary;
 mod direct;
+mod edit;
 mod engine;
 mod error;
+mod ffmpeg_job;
 mod files;
 mod fill;
 mod ghost;
@@ -26,6 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(render::RenderState::default())
+        .manage(edit::BakeState::default())
         .manage(mixdown::MixdownState::default())
         .manage(tts::TtsState::default())
         .manage(spelling::SpellState::default())
@@ -77,6 +80,10 @@ pub fn run() {
             chat::cancel_chat,
             render::render_burn_in,
             render::cancel_render,
+            edit::stage_edit_image,
+            edit::bake_edit,
+            edit::cancel_bake,
+            edit::trash_bake,
             mixdown::mixdown_voiceover,
             mixdown::cancel_mixdown,
             tts::tts_status,

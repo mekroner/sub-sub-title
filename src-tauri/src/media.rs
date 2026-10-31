@@ -62,6 +62,9 @@ pub struct MediaInfo {
     pub fps: f64,
     pub video_codec: String,
     pub audio_codec: String,
+    /// Degrees clockwise the picture is shown at. Width and height are the
+    /// displayed size, so they are already swapped for 90 and 270.
+    pub rotation: i32,
 }
 
 #[derive(Deserialize)]
@@ -83,6 +86,37 @@ struct ProbeStream {
     height: Option<u32>,
     r_frame_rate: Option<String>,
     duration: Option<String>,
+    tags: Option<ProbeTags>,
+    side_data_list: Option<Vec<ProbeSideData>>,
+}
+
+#[derive(Deserialize)]
+struct ProbeTags {
+    rotate: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProbeSideData {
+    rotation: Option<f64>,
+}
+
+/// Clockwise display rotation, normalised to 0, 90, 180 or 270. The display
+/// matrix states it counter-clockwise; the older `rotate` tag clockwise.
+fn stream_rotation(stream: &ProbeStream) -> i32 {
+    let from_matrix = stream
+        .side_data_list
+        .iter()
+        .flatten()
+        .find_map(|d| d.rotation)
+        .map(|r| -r);
+    let from_tag = stream
+        .tags
+        .as_ref()
+        .and_then(|t| t.rotate.as_deref())
+        .and_then(|r| r.trim().parse::<f64>().ok());
+    let degrees = from_matrix.or(from_tag).unwrap_or(0.0);
+    let quarter = ((degrees / 90.0).round() as i32).rem_euclid(4);
+    quarter * 90
 }
 
 /// Parse the "30000/1001" rational frame-rate notation ffprobe reports.
@@ -156,12 +190,22 @@ pub fn probe_media(app: AppHandle, path: String) -> AppResult<MediaInfo> {
         })
         .unwrap_or(0.0);
 
+    let rotation = video.map(stream_rotation).unwrap_or(0);
+    let (mut width, mut height) = (
+        video.and_then(|v| v.width).unwrap_or(0),
+        video.and_then(|v| v.height).unwrap_or(0),
+    );
+    if rotation % 180 != 0 {
+        std::mem::swap(&mut width, &mut height);
+    }
+
     Ok(MediaInfo {
         duration,
         has_audio: audio.is_some(),
         has_video: video.is_some(),
-        width: video.and_then(|v| v.width).unwrap_or(0),
-        height: video.and_then(|v| v.height).unwrap_or(0),
+        width,
+        height,
+        rotation,
         fps: video
             .and_then(|v| v.r_frame_rate.as_deref())
             .and_then(parse_rational)
@@ -415,6 +459,15 @@ mod tests {
         // Silence is left alone rather than amplified into noise.
         let silent = Loudness { integrated: f64::NEG_INFINITY, true_peak: f64::NEG_INFINITY };
         assert_eq!(silent.gain_to(-27.0, -1.0), 0.0);
+    }
+
+    #[test]
+    fn reads_rotation_from_the_display_matrix_or_the_tag() {
+        let stream = |json: &str| serde_json::from_str::<ProbeStream>(json).unwrap();
+        assert_eq!(stream_rotation(&stream(r#"{"side_data_list":[{"rotation":-90}]}"#)), 90);
+        assert_eq!(stream_rotation(&stream(r#"{"side_data_list":[{"rotation":90}]}"#)), 270);
+        assert_eq!(stream_rotation(&stream(r#"{"tags":{"rotate":"180"}}"#)), 180);
+        assert_eq!(stream_rotation(&stream(r#"{"side_data_list":[{}]}"#)), 0);
     }
 
     #[test]
