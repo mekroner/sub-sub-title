@@ -46,6 +46,46 @@ pub fn ffmpeg_bin() -> String {
     std::env::var("SUBSUBTITLE_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string())
 }
 
+/// How to hand ffmpeg a filter graph kept in a file. ffmpeg 7 added
+/// `-/filter_complex <file>` and ffmpeg 8 removed `-filter_complex_script`,
+/// which is all ffmpeg 6 and older understand; so ask which this one is.
+pub fn filter_script_args(file: &str) -> [String; 2] {
+    static MODERN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let modern = *MODERN.get_or_init(|| {
+        quiet_command(&ffmpeg_bin())
+            .args(["-hide_banner", "-version"])
+            .stdin(Stdio::null())
+            .output()
+            .ok()
+            .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+            .is_none_or(|text| loads_options_from_files(&text))
+    });
+    let option = if modern { "-/filter_complex" } else { "-filter_complex_script" };
+    [option.to_string(), file.to_string()]
+}
+
+/// True when `ffmpeg -version` says 7 or later, where `-/option file` works.
+/// Builds that do not say a release — git snapshots, dated builds — are
+/// recent, so they count as new; so does anything unreadable.
+fn loads_options_from_files(version_output: &str) -> bool {
+    let Some(rest) = version_output
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("ffmpeg version "))
+    else {
+        return true;
+    };
+    let rest = rest.strip_prefix('n').unwrap_or(rest);
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    match digits.parse::<u32>() {
+        // A year: a dated snapshot.
+        Ok(n) if n >= 2000 => true,
+        Ok(major) => major >= 7,
+        // "N-118000-g…": a build from the development branch.
+        Err(_) => true,
+    }
+}
+
 pub fn ffprobe_bin() -> String {
     std::env::var("SUBSUBTITLE_FFPROBE").unwrap_or_else(|_| "ffprobe".to_string())
 }
@@ -468,6 +508,20 @@ mod tests {
         assert_eq!(stream_rotation(&stream(r#"{"side_data_list":[{"rotation":90}]}"#)), 270);
         assert_eq!(stream_rotation(&stream(r#"{"tags":{"rotate":"180"}}"#)), 180);
         assert_eq!(stream_rotation(&stream(r#"{"side_data_list":[{}]}"#)), 0);
+    }
+
+    #[test]
+    fn knows_which_ffmpeg_reads_a_filter_graph_from_a_file_how() {
+        let says = |v: &str| loads_options_from_files(&format!("ffmpeg version {v} Copyright (c) 2000-2025\nbuilt with gcc"));
+        assert!(!says("6.1.1-3ubuntu5"));
+        assert!(!says("4.4.2-0ubuntu0.22.04.1"));
+        assert!(!says("n6.0"));
+        assert!(says("7.0.2-static https://johnvansickle.com/ffmpeg/"));
+        assert!(says("8.0-full_build-www.gyan.dev"));
+        assert!(says("n7.1"));
+        assert!(says("N-118000-g1234abcd"));
+        assert!(says("2025-10-01-git-abc1234-full_build-www.gyan.dev"));
+        assert!(loads_options_from_files(""));
     }
 
     #[test]

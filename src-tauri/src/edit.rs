@@ -10,7 +10,7 @@
 
 use crate::error::{AppError, AppResult};
 use crate::ffmpeg_job::FfmpegJob;
-use crate::media::{ffmpeg_bin, quiet_command};
+use crate::media::{ffmpeg_bin, filter_script_args, quiet_command};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -436,9 +436,9 @@ pub async fn bake_edit(
 
     let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-y"].map(String::from).to_vec();
     args.extend(inputs);
+    args.extend(filter_script_args("graph.txt"));
     args.extend(
         [
-            "-filter_complex_script", "graph.txt",
             "-map", "[vout]", "-map", "[aout]",
             "-c:v", "libx264", "-crf", &crf.to_string(), "-preset", "medium",
             "-pix_fmt", "yuv420p", "-r", &rate(plan.fps),

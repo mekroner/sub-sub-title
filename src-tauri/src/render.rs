@@ -5,7 +5,7 @@ use crate::error::{AppError, AppResult};
 use crate::edit::{build_graph_with, num, rate, work_dir as edit_work_dir, RenderPlan};
 use crate::ffmpeg_job::FfmpegJob;
 use std::fmt::Write as _;
-use crate::media::{ffmpeg_bin, quiet_command};
+use crate::media::{ffmpeg_bin, filter_script_args, quiet_command};
 use crate::mixdown::{levelling, mix_to_file, MixdownRequest};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -313,7 +313,8 @@ pub async fn render_teaser(
     }
     command
         .args(&post_inputs)
-        .args(["-filter_complex_script", "teaser.txt", "-map", "[vout]", "-map", "[aout]"])
+        .args(filter_script_args("teaser.txt"))
+        .args(["-map", "[vout]", "-map", "[aout]"])
         .args(["-c:v", "libx264", "-crf", &crf.to_string(), "-preset", "medium"])
         .args(["-pix_fmt", "yuv420p", "-r", &rate(post.fps)])
         .args(MIX_AUDIO)
