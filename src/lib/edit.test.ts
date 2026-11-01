@@ -5,6 +5,9 @@ import {
   MAIN_TRACK_ID,
   addKey,
   addOverlayTrack,
+  clearTeaser,
+  patchTeaser,
+  setTeaserAt,
   addSource,
   clearMotion,
   keyIndexAt,
@@ -352,6 +355,13 @@ describe("overlays", () => {
     expect(moveTrack(e2, MAIN_TRACK_ID, 1)).toBe(e2);
   });
 
+  it("sizes new text for the canvas", () => {
+    const small = setCanvas(startEditFromVideo("/v/a.mp4", info()), { width: 640, height: 360, fps: 25 });
+    const { edit: e1, id: track } = addOverlayTrack(small);
+    const text = placeText(e1, track, 0).edit.items.find((i) => i.kind === "text")!;
+    expect(text.kind === "text" && text.style.fontSize).toBe(24);
+  });
+
   it("keeps text off the main track", () => {
     const { edit: e0 } = twoSources();
     expect(placeText(e0, MAIN_TRACK_ID, 0).id).toBeNull();
@@ -486,5 +496,20 @@ describe("keys", () => {
     const rect = placeAt({ ...still, transform: moving }, natural, 5, canvas);
     expect(rect.w).toBeCloseTo(2016);
     expect(rect.x).toBeCloseTo(0.4 * 1920 - 1008);
+  });
+});
+
+describe("teaser", () => {
+  it("sets, adjusts and clears the cutoff, keeping its settings", () => {
+    const { edit: e0 } = twoSources();
+    let edit = setTeaserAt(e0, 6);
+    expect(edit.teaser).toEqual({ at: 6, screen: 4, fade: 0.5 });
+    edit = patchTeaser(edit, { templatePath: "/t/outro.sstoverlay", screen: 99, fade: -1 });
+    expect(edit.teaser).toEqual({ at: 6, screen: 60, fade: 0, templatePath: "/t/outro.sstoverlay" });
+    edit = setTeaserAt(edit, 3);
+    expect(edit.teaser).toMatchObject({ at: 3, templatePath: "/t/outro.sstoverlay" });
+    expect(patchTeaser(edit, { templatePath: "" }).teaser).not.toHaveProperty("templatePath");
+    expect(clearTeaser(edit).teaser).toBeUndefined();
+    expect(coerceEdit(JSON.parse(JSON.stringify(edit)))!.teaser).toEqual(edit.teaser);
   });
 });

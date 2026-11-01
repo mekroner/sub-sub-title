@@ -13,6 +13,7 @@ import type {
   EditItem,
   EditSource,
   EditTrack,
+  EditTeaser,
   MediaInfo,
   RecutKind,
   RecutRef,
@@ -270,7 +271,8 @@ export function placeText(
     ...baseItem(trackId, at, DEFAULT_STILL_SECONDS, newId),
     kind: "text",
     text,
-    style: { ...DEFAULT_TEXT_STYLE },
+    // The default suits 1080 lines; scaled so new text looks the same on any canvas.
+    style: edit.canvas.height === 1080 ? { ...DEFAULT_TEXT_STYLE } : scaleStyle(DEFAULT_TEXT_STYLE, edit.canvas.height / 1080),
   };
   return { edit: { ...edit, items: [...edit.items, item] }, id: item.id };
 }
@@ -619,6 +621,37 @@ export function shiftKeys(keys: TransformKey[], shift: number): TransformKey[] {
   if (kept.length === moved.length) return moved;
   const head = { ...transformAt(keys, shift), time: 0 };
   return kept.length > 0 && kept[0].time < KEY_GAP ? kept : [head, ...kept];
+}
+
+// --- Teaser ---------------------------------------------------------------------
+
+export const DEFAULT_TEASER_SCREEN = 4;
+export const DEFAULT_TEASER_FADE = 0.5;
+
+/** Puts the teaser cutoff at `at`, keeping the rest of its settings. */
+export function setTeaserAt(edit: Edit, at: number): Edit {
+  const time = Math.max(0, at);
+  if (edit.teaser?.at === time) return edit;
+  return {
+    ...edit,
+    teaser: { screen: DEFAULT_TEASER_SCREEN, fade: DEFAULT_TEASER_FADE, ...edit.teaser, at: time },
+  };
+}
+
+export function patchTeaser(edit: Edit, patch: Partial<EditTeaser>): Edit {
+  if (!edit.teaser) return edit;
+  const next: EditTeaser = { ...edit.teaser, ...patch };
+  next.at = Math.max(0, next.at);
+  next.screen = Math.min(60, Math.max(0, next.screen));
+  next.fade = Math.min(next.at, Math.max(0, next.fade));
+  if (!next.templatePath) delete next.templatePath;
+  return { ...edit, teaser: next };
+}
+
+export function clearTeaser(edit: Edit): Edit {
+  if (!edit.teaser) return edit;
+  const { teaser: _gone, ...rest } = edit;
+  return rest;
 }
 
 /** Changes a text item's words. */
@@ -1015,8 +1048,25 @@ export function coerceEdit(raw: unknown): Edit | undefined {
         }
       : undefined;
   const recut = coerceRecut(e.recut);
+  const teaserRaw = record(e.teaser);
+  const teaser: EditTeaser | undefined = teaserRaw
+    ? {
+        at: Math.max(0, finite(teaserRaw.at, 0)),
+        screen: Math.min(60, Math.max(0, finite(teaserRaw.screen, DEFAULT_TEASER_SCREEN))),
+        fade: Math.max(0, finite(teaserRaw.fade, DEFAULT_TEASER_FADE)),
+        ...(str(teaserRaw.templatePath) ? { templatePath: str(teaserRaw.templatePath) } : {}),
+      }
+    : undefined;
 
-  return { canvas, sources, tracks, items, ...(baked ? { baked } : {}), ...(recut ? { recut } : {}) };
+  return {
+    canvas,
+    sources,
+    tracks,
+    items,
+    ...(baked ? { baked } : {}),
+    ...(recut ? { recut } : {}),
+    ...(teaser ? { teaser } : {}),
+  };
 }
 
 function coerceSegments(raw: unknown[]): CutSegment[] {

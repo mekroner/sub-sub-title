@@ -75,6 +75,8 @@ import {
 import { nextPaletteColor } from "./lib/colors";
 import { classifyDrop, classifyEditDrop, VIDEO_EXTENSIONS } from "./lib/dropPaths";
 import { EditWorkspace, type EditHandle } from "./components/edit/EditWorkspace";
+import { TeaserDialog } from "./components/TeaserDialog";
+import { cuesForTeaser, teaserOutputPath } from "./lib/teaser";
 import type { Edit, RecutKind, RecutRef } from "./types";
 import { editEnd } from "./lib/edit";
 import {
@@ -348,6 +350,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showRender, setShowRender] = useState(false);
+  const [showTeaser, setShowTeaser] = useState(false);
   const [showExportAudio, setShowExportAudio] = useState(false);
   const [showProofread, setShowProofread] = useState(false);
   const [showTranscribe, setShowTranscribe] = useState(false);
@@ -2220,6 +2223,24 @@ export default function App() {
     [cues, speakers, settings, media],
   );
 
+  // A teaser's subtitles: only what it shows, ended at the cutoff.
+  const teaserAt = project.edit?.teaser?.at;
+  const teaserAssText = useMemo(
+    () =>
+      teaserAt === undefined
+        ? ""
+        : buildAss(cuesForTeaser(cues, teaserAt), speakers, {
+            settings,
+            width: media?.width ?? 0,
+            height: media?.height ?? 0,
+          }),
+    [teaserAt, cues, speakers, settings, media],
+  );
+  /** A teaser is cut from the edit's own bake, which must be the project's video. */
+  const canExportTeaser = Boolean(
+    project.edit?.teaser && project.edit.baked && project.edit.baked.path === project.videoPath && tools?.ffmpeg,
+  );
+
   const exportAss = useCallback(async () => {
     if (cues.length === 0) return notify("Nothing to export.", "error");
     const target = await saveDialog({
@@ -2544,6 +2565,7 @@ export default function App() {
     showSettings ||
     showHelp ||
     showRender ||
+    showTeaser ||
     showExportAudio ||
     showTtsInstall ||
     showProofread ||
@@ -3051,6 +3073,12 @@ export default function App() {
         },
         {
           kind: "item",
+          label: "Export Teaser…",
+          disabled: !canExportTeaser,
+          onSelect: () => setShowTeaser(true),
+        },
+        {
+          kind: "item",
           label: "Export voiceover audio…",
           disabled: !canExportAudio,
           onSelect: () => setShowExportAudio(true),
@@ -3308,6 +3336,7 @@ export default function App() {
         project={project}
         onRevealTimed={revealTimed}
         onDeleteLost={deleteLost}
+        onExportTeaser={() => setShowTeaser(true)}
         notify={notify}
         sideWidth={sideWidth}
         onSideWidth={setSideWidth}
@@ -3799,6 +3828,20 @@ export default function App() {
           mix={mixdownRequest}
           onTargetLufs={setTargetLufs}
           onClose={() => setShowRender(false)}
+        />
+      )}
+
+      {showTeaser && paths && project.edit?.teaser && (
+        <TeaserDialog
+          videoPath={project.videoPath}
+          hasAudio={Boolean(media?.hasAudio)}
+          canvas={project.edit.canvas}
+          teaser={project.edit.teaser}
+          defaultOutput={teaserOutputPath(paths.burned)}
+          assPath={paths.ass.replace(/\.ass$/i, ".teaser.ass")}
+          assText={teaserAssText}
+          mix={{ ...mixdownRequest, duration: project.edit.teaser.at }}
+          onClose={() => setShowTeaser(false)}
         />
       )}
 

@@ -139,6 +139,23 @@ export const renderBurnIn = (args: {
 
 export const cancelRender = () => invoke<void>("cancel_render");
 
+/**
+ * Renders a teaser: the video up to `at` with subtitles and the mix (or its
+ * own sound), faded over `fade`, then the post-teaser screen `post`. Progress
+ * arrives as `render-progress`; `cancelRender` stops it.
+ */
+export const renderTeaser = (args: {
+  videoPath: string;
+  assPath: string;
+  outputPath: string;
+  at: number;
+  fade: number;
+  crf?: number;
+  audio?: Omit<MixdownRequest, "outputPath"> | null;
+  hasAudio: boolean;
+  post: RenderPlan;
+}) => invoke<void>("render_teaser", args);
+
 /** Writes a PNG into the bake's work dir under `name`; returns the name. */
 export const stageEditImage = (name: string, png: Uint8Array) =>
   invoke<string>("stage_edit_image", png, { headers: { "x-name": name } });

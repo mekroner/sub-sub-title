@@ -293,6 +293,23 @@ export interface Edit {
   baked?: EditBake;
   /** What the last re-cut could not move cleanly, until it is cleared. */
   recut?: RecutReport;
+  /** Where a teaser export stops, and what it shows after. */
+  teaser?: EditTeaser;
+}
+
+/**
+ * A teaser: the finished video up to a cutoff, then a short screen made from
+ * an overlay template over black.
+ */
+export interface EditTeaser {
+  /** Edit-timeline seconds, which are the baked video's. */
+  at: number;
+  /** The post-teaser screen's template; none for plain black. */
+  templatePath?: string;
+  /** Seconds the post-teaser screen shows. */
+  screen: number;
+  /** Seconds of fade to black (and silence) up to the cutoff; 0 cuts hard. */
+  fade: number;
 }
 
 /**

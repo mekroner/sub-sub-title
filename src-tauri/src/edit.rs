@@ -77,7 +77,7 @@ pub struct BakeProgress {
 }
 
 /// A number for ffmpeg: up to microseconds, without trailing zeros.
-fn num(value: f64) -> String {
+pub(crate) fn num(value: f64) -> String {
     let fixed = format!("{value:.6}");
     let trimmed = fixed.trim_end_matches('0').trim_end_matches('.');
     if trimmed.is_empty() || trimmed == "-0" {
@@ -88,7 +88,7 @@ fn num(value: f64) -> String {
 }
 
 /// The NTSC rates as exact rationals, so 29.97 does not drift a frame an hour.
-fn rate(fps: f64) -> String {
+pub(crate) fn rate(fps: f64) -> String {
     for (num_, den) in [(24000, 1001), (30000, 1001), (60000, 1001)] {
         if (fps - num_ as f64 / den as f64).abs() < 0.005 {
             return format!("{num_}/{den}");
@@ -110,7 +110,15 @@ fn valid_staged_name(name: &str) -> bool {
 }
 
 /// The input arguments and filter graph for a plan. Pure, for the tests.
+/// The picture comes out as `[vout]`, the sound as `[aout]`.
 pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
+    build_graph_with(plan, 0, "")
+}
+
+/// The same graph, for grafting into a larger one: its inputs are numbered
+/// from `first_input`, and every label it makes starts with `p` — so it comes
+/// out as `[{p}vout]` and `[{p}aout]`.
+pub fn build_graph_with(plan: &RenderPlan, first_input: usize, p: &str) -> AppResult<(Vec<String>, String)> {
     if plan.width == 0 || plan.height == 0 || !plan.width.is_multiple_of(2) || !plan.height.is_multiple_of(2) {
         return Err(AppError::msg("The canvas size must be even and not zero."));
     }
@@ -129,7 +137,7 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
     // anything at an odd position a pixel away from where the preview draws it.
     let _ = writeln!(
         graph,
-        "color=c=black:s={}x{}:r={fps}:d={},format=gbrp[b0];",
+        "color=c=black:s={}x{}:r={fps}:d={},format=gbrp[{p}b0];",
         plan.width,
         plan.height,
         num(plan.total)
@@ -137,6 +145,7 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
 
     let mut base = 0usize;
     for (index, layer) in plan.layers.iter().enumerate() {
+        let inp = first_input + index;
         if !positive(layer.duration) {
             return Err(AppError::msg("A layer in the plan has no length."));
         }
@@ -191,24 +200,24 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
         let end = layer.start + layer.duration;
         let enable = format!("enable='between(t,{},{})'", num(layer.start), num(end));
         if layer.rects.len() > 1 {
-            let chain = moving_chain(index, layer, &fps, plan.width, plan.height, &alpha);
+            let chain = moving_chain(index, inp, p, layer, &fps, plan.width, plan.height, &alpha);
             graph.push_str(&chain);
             let _ = writeln!(
                 graph,
-                "[b{base}][v{index}]overlay=x=0:y=0:eof_action=pass:format=gbrp:{enable}[b{}];",
+                "[{p}b{base}][{p}v{index}]overlay=x=0:y=0:eof_action=pass:format=gbrp:{enable}[{p}b{}];",
                 base + 1
             );
         } else {
             let _ = writeln!(
                 graph,
-                "[{index}:v]setpts=PTS-STARTPTS,fps={fps},scale={}:{},format=rgba{alpha},setpts=PTS+{}/TB[v{index}];",
+                "[{inp}:v]setpts=PTS-STARTPTS,fps={fps},scale={}:{},format=rgba{alpha},setpts=PTS+{}/TB[{p}v{index}];",
                 rect.w.max(1.0).round(),
                 rect.h.max(1.0).round(),
                 num(layer.start)
             );
             let _ = writeln!(
                 graph,
-                "[b{base}][v{index}]overlay=x={}:y={}:eof_action=pass:format=gbrp:{enable}[b{}];",
+                "[{p}b{base}][{p}v{index}]overlay=x={}:y={}:eof_action=pass:format=gbrp:{enable}[{p}b{}];",
                 rect.x.round(),
                 rect.y.round(),
                 base + 1
@@ -219,7 +228,7 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
         // Sound, for main-track video that has it.
         if let Some(audio) = &layer.audio {
             let mut chain = format!(
-                "[{index}:a]asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+                "[{inp}:a]asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
             );
             if layer.fade_in > 0.0 {
                 let _ = write!(chain, ",afade=t=in:st=0:d={}", num(layer.fade_in));
@@ -236,26 +245,26 @@ pub fn build_graph(plan: &RenderPlan) -> AppResult<(Vec<String>, String)> {
                 let _ = write!(chain, ",volume={}dB", num(audio.gain_db));
             }
             let delay_ms = (layer.start * 1000.0).round().max(0.0) as u64;
-            let _ = writeln!(chain, ",adelay={delay_ms}:all=1[a{index}];");
+            let _ = writeln!(chain, ",adelay={delay_ms}:all=1[{p}a{index}];");
             graph.push_str(&chain);
-            audio_labels.push(format!("[a{index}]"));
+            audio_labels.push(format!("[{p}a{index}]"));
         }
     }
 
-    let _ = writeln!(graph, "[b{base}]format=yuv420p[vout];");
+    let _ = writeln!(graph, "[{p}b{base}]format=yuv420p[{p}vout];");
     // A silent bed the length of the edit, so gaps are silence and the
     // soundtrack runs exactly as long as the picture.
     let _ = write!(
         graph,
-        "anullsrc=r=48000:cl=stereo,atrim=0:{}[bed];",
+        "anullsrc=r=48000:cl=stereo,atrim=0:{}[{p}bed];",
         num(plan.total)
     );
     if audio_labels.is_empty() {
-        graph.push_str("\n[bed]anull[aout]\n");
+        let _ = write!(graph, "\n[{p}bed]anull[{p}aout]\n");
     } else {
         let _ = writeln!(
             graph,
-            "\n[bed]{}amix=inputs={}:normalize=0:duration=first[aout]",
+            "\n[{p}bed]{}amix=inputs={}:normalize=0:duration=first[{p}aout]",
             audio_labels.concat(),
             audio_labels.len() + 1
         );
@@ -305,8 +314,11 @@ pub fn piecewise(points: &[(f64, f64)], var: &str) -> String {
 /// back to straight alpha for an ordinary overlay: `overlay`'s own
 /// premultiplied mode takes 16 off every channel of an RGB frame, so white
 /// would come out grey.
+#[allow(clippy::too_many_arguments)]
 fn moving_chain(
     index: usize,
+    input: usize,
+    p: &str,
     layer: &PlanLayer,
     fps: &str,
     width: u32,
@@ -336,11 +348,11 @@ fn moving_chain(
     let bottom = format!("({y})+{k}*{}", num(ph - m));
 
     format!(
-        "[{index}:v]setpts=PTS-STARTPTS,fps={fps},scale={}:{},format=rgba{alpha},format=gbrap,premultiply=inplace=1,\
+        "[{input}:v]setpts=PTS-STARTPTS,fps={fps},scale={}:{},format=rgba{alpha},format=gbrap,premultiply=inplace=1,\
 pad=w={}:h={}:x={}:y={}:color=black@0,\
 perspective=sense=destination:eval=frame:interpolation=linear:\
 x0='{left}':y0='{top}':x1='{right}':y1='{top}':x2='{left}':y2='{bottom}':x3='{right}':y3='{bottom}',\
-unpremultiply=inplace=1,setpts=PTS+{}/TB[v{index}];\n",
+unpremultiply=inplace=1,setpts=PTS+{}/TB[{p}v{index}];\n",
         num(sw),
         num(sh),
         num(pw),
@@ -351,7 +363,7 @@ unpremultiply=inplace=1,setpts=PTS+{}/TB[v{index}];\n",
     )
 }
 
-fn work_dir(app: &AppHandle) -> AppResult<PathBuf> {
+pub(crate) fn work_dir(app: &AppHandle) -> AppResult<PathBuf> {
     let dir = app
         .path()
         .app_cache_dir()
@@ -650,6 +662,18 @@ mod tests {
         assert!(graph.contains("x0='(if(lt((in/(25)),0),0,if(lt((in/(25)),4),0+-8*((in/(25))-0),-32)))-((if(lt((in/(25)),0),640,if(lt((in/(25)),4),640+16*((in/(25))-0),704)))/704)*2'"));
         assert!(graph.contains(",unpremultiply=inplace=1,setpts=PTS+1/TB[v0];"));
         assert!(graph.contains("[b0][v0]overlay=x=0:y=0:eof_action=pass:format=gbrp:enable='between(t,1,5)'[b1];"));
+    }
+
+    #[test]
+    fn grafts_into_a_larger_graph_under_its_own_labels() {
+        let (inputs, graph) = build_graph_with(&plan(vec![video(0.0, 2.0, 0.0, true)], 2.0), 2, "p_").unwrap();
+        assert_eq!(inputs[4..], ["-i".to_string(), "/v/a.mp4".to_string()]);
+        assert!(graph.contains("[2:v]setpts"));
+        assert!(graph.contains("[2:a]asetpts"));
+        assert!(graph.contains("format=gbrp[p_b0];"));
+        assert!(graph.contains("[p_b1]format=yuv420p[p_vout];"));
+        assert!(graph.contains("[p_bed][p_a0]amix=inputs=2:normalize=0:duration=first[p_aout]"));
+        assert!(!graph.contains("[vout]") && !graph.contains("[0:v]"));
     }
 
     #[test]

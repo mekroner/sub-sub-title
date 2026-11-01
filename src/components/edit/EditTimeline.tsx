@@ -45,6 +45,10 @@ interface Props {
   onRenameTrack?: (id: string, name: string) => void;
   /** +1 draws the track above the next one up; -1 below. */
   onMoveTrack?: (id: string, direction: number) => void;
+  /** Where a teaser export stops, if one is set. */
+  teaserAt?: number;
+  onMoveTeaser?: (t: number, drag: string) => void;
+  onClearTeaser?: () => void;
   /** Moves an item's key to `t` seconds into the item. */
   onMoveKey?: (id: string, index: number, t: number, drag: string) => void;
 }
@@ -97,6 +101,9 @@ export function EditTimeline({
   onRenameTrack,
   onMoveTrack,
   onMoveKey,
+  teaserAt,
+  onMoveTeaser,
+  onClearTeaser,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLCanvasElement>(null);
@@ -295,6 +302,22 @@ export function EditTimeline({
     drag.current = null;
     // A click (no drag) on one of several selected items picks it alone.
     if (d && !d.moved && (selectedIds?.size ?? 0) > 1) onSelect(d.item.id);
+  };
+
+  // --- The teaser cutoff: drag the flag, right-click it to remove ----------------
+  const teaserDrag = useRef<{ key: string; snaps: number[] } | null>(null);
+  const startTeaser = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const snaps = [time, 0];
+    for (const item of edit.items) snaps.push(item.start, itemEnd(item));
+    teaserDrag.current = { key: `teaser:${e.timeStamp}`, snaps };
+  };
+  const moveTeaser = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = teaserDrag.current;
+    if (!d || !onMoveTeaser) return;
+    onMoveTeaser(snapTime(timeAt(e.clientX), d.snaps, SNAP_PX / zoom), d.key);
   };
 
   // --- Key diamonds: drag to retime, click to go there -------------------------
@@ -523,6 +546,24 @@ export function EditTimeline({
               </div>
             ))}
             <div className="vo-playhead" style={{ left: time * zoom }} />
+            {teaserAt !== undefined && (
+              <div className="edit-teaser-line" style={{ left: teaserAt * zoom }}>
+                <div
+                  className="edit-teaser-flag"
+                  title={`Teaser ends at ${formatShort(teaserAt)}. Drag to move; right-click to remove.`}
+                  onPointerDown={startTeaser}
+                  onPointerMove={moveTeaser}
+                  onPointerUp={() => (teaserDrag.current = null)}
+                  onPointerCancel={() => (teaserDrag.current = null)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    onClearTeaser?.();
+                  }}
+                >
+                  Teaser
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

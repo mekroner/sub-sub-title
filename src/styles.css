@@ -3399,3 +3399,31 @@ button.fill-alt.on {
   cursor: default;
   align-items: center;
 }
+
+/* The teaser cutoff: a line through the lanes, a flag on the ruler. */
+.edit-teaser-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px dashed #ffb347;
+  margin-left: -1px;
+  z-index: 3;
+  pointer-events: none;
+}
+.edit-teaser-flag {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  padding: 1px 6px;
+  border-radius: 0 4px 4px 0;
+  background: #ffb347;
+  color: #2a1c05;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+  white-space: nowrap;
+}

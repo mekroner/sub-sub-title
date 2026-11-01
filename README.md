@@ -153,6 +153,7 @@ project/cue-count label, the zoom slider, and the Follow toggle.
 | `Ctrl+Shift+S` | Save the project as… |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `+` / `-` | Zoom the waveform |
+| `Z` | Zoom to fit the whole timeline |
 | `F` | Toggle follow-playhead scrolling |
 | `Alt` + scroll | Zoom the waveform, anchored at the pointer |
 | scroll on waveform | Pan through time |
@@ -233,8 +234,11 @@ Two dictionaries hold the words neither checker should touch:
 
 Scroll over the waveform to pan through time; hold `Alt` and scroll to zoom,
 anchored at the pointer so the moment under the cursor stays put. `+` / `-` zoom
-from the keyboard, and the toolbar has a zoom slider. Zoom ranges from 5 to 600
-pixels per second.
+from the keyboard, and the toolbar has a zoom slider (on a log scale). Zoom
+ranges from 600 pixels per second down to 0.01 — hours on one screen — and
+**Fit** (or `Z`) zooms until the whole timeline fits. The Voiceover and Edit
+timelines zoom the same way, and their rulers count in hours once that is
+what fits.
 
 `F` toggles follow-playhead. With it on, playback drags the waveform and the cue
 list along; with it off, a pan stays where you put it while the video plays.
@@ -503,9 +507,23 @@ behaves as before.
   and optional outline, shadow and box. It is drawn to a PNG in the app, and
   the bake overlays that same image, so the preview shows exactly what is
   baked and ffmpeg never needs the font.
+- **Templates** keep overlay text and stills to reuse. Select items on overlay
+  tracks (Ctrl/Shift+click picks several) and press *Save as template…*: the
+  `.sstoverlay` file keeps their layering, places, styles, fades and timing,
+  and carries its images inside, so it works anywhere. Templates live in a
+  library listed under *Media*; *Insert* drops one at the playhead on free
+  overlay tracks (its images written to the project's `<name> assets` folder),
+  and *Import…* copies a template file into the library.
+- **Teasers:** *Set teaser end* puts a cutoff marker at the playhead (drag
+  its flag; right-click removes it). The *Teaser* tab picks a post-teaser
+  screen — any template, or black — how long it shows, and a fade at the
+  cut. *Export Teaser…* (also in the File menu) renders the finished look up
+  to the marker — subtitles burned in, the voiceover mix as sound, as *Burn
+  in* makes them — then the screen, in silence. It needs a current bake: the
+  marker is in the edit's time, the subtitles in the baked video's.
 - **Keys:** `Space` plays, `S` splits at the playhead, `Delete` removes the
-  selected clip, and `←` `→` (or `[` `]`) move it by a frame. Every change undoes
-  like any other.
+  selected items, `←` `→` (or `[` `]`) move one by a frame, and `Z` fits the
+  timeline. Every change undoes like any other.
 - **Bake…** writes `<project>.cut.mp4` beside the project file (beside the first
   source if the project is unsaved). Re-baking takes the next free name
   (`.cut-2.mp4`, …), switches the project to it, and sends the previous bake to

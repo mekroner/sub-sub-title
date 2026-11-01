@@ -26,6 +26,9 @@ import {
   setFade,
   addKey,
   clearMotion,
+  clearTeaser,
+  patchTeaser,
+  setTeaserAt,
   moveKey,
   removeKey,
   setTransformAt,
@@ -88,6 +91,8 @@ interface Props {
   onRevealTimed: (ref: RecutRef) => void;
   /** Deletes everything the last re-cut parked. */
   onDeleteLost: () => void;
+  /** Opens the teaser export. */
+  onExportTeaser: () => void;
   notify: (message: string, kind?: "info" | "error") => void;
   sideWidth: number;
   onSideWidth: (width: number) => void;
@@ -113,6 +118,7 @@ export function EditWorkspace({
   project,
   onRevealTimed,
   onDeleteLost,
+  onExportTeaser,
   notify,
   sideWidth,
   onSideWidth,
@@ -413,7 +419,8 @@ export function EditWorkspace({
   }, [recutAt]);
   useEffect(() => {
     if (tab === "recut" && !hasFlags(edit?.recut)) setTab("media");
-  }, [tab, edit?.recut]);
+    if (tab === "teaser" && !edit?.teaser) setTab("media");
+  }, [tab, edit?.recut, edit?.teaser]);
 
   // Pause while the bake dialog is open.
   useEffect(() => {
@@ -530,6 +537,17 @@ export function EditWorkspace({
           <button
             type="button"
             className="small"
+            onClick={() => {
+              setDefined((e) => setTeaserAt(e, state.time));
+              setTab("teaser");
+            }}
+            title="Put the teaser's end at the playhead"
+          >
+            Set teaser end
+          </button>
+          <button
+            type="button"
+            className="small"
             disabled={!canSaveTemplate}
             onClick={() => void saveTemplate()}
             title="Save the selected overlay items as a template (Ctrl+click to select several)"
@@ -620,6 +638,10 @@ export function EditWorkspace({
           project={project}
           onRevealTimed={onRevealTimed}
           onDeleteLost={onDeleteLost}
+          onTeaser={(patch) => setDefined((e) => patchTeaser(e, patch), `teaser:${Object.keys(patch).join()}`)}
+          onClearTeaser={() => setDefined((e) => clearTeaser(e))}
+          bakeCurrent={bakeState === "current"}
+          onExportTeaser={onExportTeaser}
           onClearRecut={() =>
             setDefined((e) => {
               if (!e.recut) return e;
@@ -655,6 +677,9 @@ export function EditWorkspace({
           onRenameTrack={(id, name) => setDefined((e) => patchTrack(e, id, { name }), `track:${id}:name`)}
           onMoveTrack={(id, direction) => setDefined((e) => moveTrack(e, id, direction))}
           onMoveKey={(id, index, t, drag) => setDefined((e) => moveKey(e, id, index, t), `drag:${drag}`)}
+          teaserAt={edit.teaser?.at}
+          onMoveTeaser={(t, drag) => setDefined((e) => setTeaserAt(e, t), `drag:${drag}`)}
+          onClearTeaser={() => setDefined((e) => clearTeaser(e))}
         />
       </section>
 

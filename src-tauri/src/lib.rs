@@ -84,6 +84,7 @@ pub fn run() {
             chat::cancel_chat,
             render::render_burn_in,
             render::cancel_render,
+            render::render_teaser,
             edit::stage_edit_image,
             edit::bake_edit,
             edit::cancel_bake,

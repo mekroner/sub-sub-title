@@ -4,6 +4,7 @@ import type {
   Edit,
   EditCanvas,
   EditItem,
+  EditTeaser,
   Project,
   RecutKind,
   RecutRef,
@@ -31,13 +32,14 @@ import { hasFlags, recutFlag } from "../../lib/recut";
 import { MAX_DB, MIN_DB } from "../../lib/voiceover";
 import { formatDuration, formatShort } from "../../lib/time";
 
-export type EditSideTab = "media" | "item" | "canvas" | "recut";
+export type EditSideTab = "media" | "item" | "canvas" | "recut" | "teaser";
 
 const TABS: Array<{ id: EditSideTab; label: string; title: string }> = [
   { id: "media", label: "Media", title: "The files this edit draws from" },
   { id: "item", label: "Item", title: "The selected item: place, size, fades, text" },
   { id: "canvas", label: "Canvas", title: "The bake's size and frame rate" },
   { id: "recut", label: "Re-cut", title: "What the last re-cut could not move cleanly" },
+  { id: "teaser", label: "Teaser", title: "Where the teaser stops, and what it shows after" },
 ];
 
 interface Props {
@@ -78,6 +80,11 @@ interface Props {
   onRevealTimed: (ref: RecutRef) => void;
   onDeleteLost: () => void;
   onClearRecut: () => void;
+  onTeaser: (patch: Partial<EditTeaser>) => void;
+  onClearTeaser: () => void;
+  /** Exporting a teaser needs a bake that matches the edit. */
+  bakeCurrent: boolean;
+  onExportTeaser: () => void;
 }
 
 /** A change to a text style; `null` takes an effect away. */
@@ -104,7 +111,9 @@ const FONT_SUGGESTIONS = [
 export function EditSidePanel(props: Props) {
   const { tab, onTab } = props;
   // The Re-cut tab is there while a re-cut has left something to check.
-  const tabs = TABS.filter((t) => t.id !== "recut" || hasFlags(props.edit.recut));
+  const tabs = TABS.filter(
+    (t) => (t.id !== "recut" || hasFlags(props.edit.recut)) && (t.id !== "teaser" || props.edit.teaser),
+  );
   return (
     <>
       <div className="segmented wide side-tabs" role="tablist" aria-label="Edit side panel">
@@ -131,6 +140,11 @@ export function EditSidePanel(props: Props) {
       <div className="side-tab-body" hidden={tab !== "canvas"}>
         <CanvasPanel {...props} />
       </div>
+      {props.edit.teaser && (
+        <div className="side-tab-body" hidden={tab !== "teaser"}>
+          <TeaserPanel {...props} />
+        </div>
+      )}
       {hasFlags(props.edit.recut) && (
         <div className="side-tab-body" hidden={tab !== "recut"}>
           <RecutPanel {...props} />
@@ -758,6 +772,60 @@ function RecutPanel({ edit, project, onRevealTimed, onDeleteLost, onClearRecut }
             Clear report
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Where the teaser stops, what it shows after, and the export. */
+function TeaserPanel({ edit, templates, onTeaser, onClearTeaser, onSeek, bakeCurrent, onExportTeaser }: Props) {
+  const teaser = edit.teaser!;
+  const known = templates.some((t) => t.path === teaser.templatePath);
+  return (
+    <div className="panel clip-inspector">
+      <div className="clip-inspector-body">
+        <p className="hint">
+          <em>Export Teaser</em> renders the finished video — subtitles and voiceover, as Burn in makes
+          them — up to the marker, then shows the post-teaser screen over black.
+        </p>
+        <NumberField label="Ends at" value={teaser.at} min={0} max={36000} step={0.1} unit="s" onChange={(at) => onTeaser({ at })} />
+        <div className="clip-actions">
+          <button type="button" className="small" onClick={() => onSeek(teaser.at)}>
+            Go to the marker
+          </button>
+          <button type="button" className="small" onClick={onClearTeaser}>
+            Remove marker
+          </button>
+        </div>
+        <NumberField label="Fade" value={teaser.fade} min={0} max={10} step={0.1} unit="s" onChange={(fade) => onTeaser({ fade })} />
+
+        <h3 className="edit-section">Post-teaser screen</h3>
+        <label className="clip-field">
+          <span>Shows</span>
+          <select
+            value={teaser.templatePath ?? ""}
+            onChange={(e) => onTeaser({ templatePath: e.target.value || undefined })}
+          >
+            <option value="">Black</option>
+            {templates.map((t) => (
+              <option key={t.path} value={t.path}>
+                {t.name}
+              </option>
+            ))}
+            {teaser.templatePath && !known && <option value={teaser.templatePath}>{teaser.templatePath}</option>}
+          </select>
+        </label>
+        <NumberField label="For" value={teaser.screen} min={0} max={60} step={0.5} unit="s" onChange={(screen) => onTeaser({ screen })} />
+        <p className="hint">Any overlay template will do: save one from the timeline, or import one under Media.</p>
+
+        <div className="clip-actions">
+          <button type="button" className="primary" disabled={!bakeCurrent} onClick={onExportTeaser}>
+            Export Teaser…
+          </button>
+        </div>
+        {!bakeCurrent && (
+          <p className="hint">Bake first: the teaser is cut from the baked video, which must match the edit.</p>
+        )}
       </div>
     </div>
   );
