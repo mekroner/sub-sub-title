@@ -78,16 +78,6 @@ describe("voices", () => {
     expect(voiceKey({ ...standard, exaggeration: 1.5 })).not.toBe(voiceKey(standard));
   });
 
-  it("clones the built-in voice until a speaker has a reference of their own", () => {
-    expect(DEFAULT_VOICE.preset).toBe("female");
-    const male = { ...DEFAULT_VOICE, preset: "male" as const };
-    expect(voiceKey(male)).not.toBe(voiceKey(DEFAULT_VOICE));
-    // With a reference, the preset is not what is cloned, so it changes nothing.
-    expect(voiceKey({ ...male, reference: "a.wav" })).toBe(
-      voiceKey({ ...DEFAULT_VOICE, reference: "a.wav" }),
-    );
-  });
-
   it("speaks a cue's lines as one sentence", () => {
     expect(speechText({ text: "  Two\nlines  here " })).toBe("Two lines here");
   });

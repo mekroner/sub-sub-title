@@ -72,7 +72,6 @@ const project: Project = {
     unduckedCueIds: ["b"],
     cast: {
       s1: {
-        preset: "male",
         engine: "standard",
         exaggeration: 0.9,
         cfgWeight: 0.3,
@@ -82,7 +81,7 @@ const project: Project = {
         referenceCueIds: ["a"],
         takesPerLine: 3,
       },
-      "": { preset: "female", engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
+      "": { engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
     },
     voicing: {
       a: { spoken: "[sigh] Hello.", direction: "tired" },
@@ -128,24 +127,6 @@ describe("serializeProjectFile / parseProjectFile", () => {
       timedBeats: [],
       voiceover: defaultVoiceover(),
     });
-  });
-
-  it("gives a voice from before the built-in voices the female one", () => {
-    const raw = JSON.stringify({
-      videoPath: "v.mp4",
-      cues: [],
-      voiceover: {
-        cast: {
-          old: { engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
-          odd: { preset: "robot", engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
-          him: { preset: "male", engine: "turbo", exaggeration: 0.5, cfgWeight: 0.5, temperature: 0.8 },
-        },
-      },
-    });
-    const { cast } = parseProjectFile(raw).voiceover;
-    expect(cast.old.preset).toBe("female");
-    expect(cast.odd.preset).toBe("female");
-    expect(cast.him.preset).toBe("male");
   });
 
   it("keeps only pronunciations with both a word and how it is said", () => {

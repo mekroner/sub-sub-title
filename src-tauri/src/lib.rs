@@ -96,7 +96,6 @@ pub fn run() {
             tts::cancel_tts_install,
             tts::tts_generate,
             tts::tts_unload,
-            tts::tts_preset_voices,
             tts::tts_extract_reference,
             tts::tts_stretch,
             spelling::check_cues,

@@ -34,7 +34,6 @@ export const GROUP_MAX_SPAN = 20;
 export const GROUP_MAX_CHARS = 300;
 
 export const DEFAULT_VOICE: CastVoice = {
-  preset: "female",
   engine: "turbo",
   exaggeration: 0.5,
   cfgWeight: 0.5,
@@ -64,17 +63,12 @@ export function setVoice(
   return { ...voiceover, cast: { ...voiceover.cast, [key]: next } };
 }
 
-/** Who a voice is cloned from: its own reference, or else its built-in voice. */
-export function voiceSource(voice: Pick<CastVoice, "reference" | "preset">): string {
-  return voice.reference ?? `preset:${voice.preset}`;
-}
-
 /**
  * Everything about a voice that changes what it says. A clip spoken with a
  * different key is stale; the track it lands on is not part of it.
  */
 export function voiceKey(voice: CastVoice): string {
-  const parts: Array<string | number> = [voice.engine, voiceSource(voice), voice.temperature];
+  const parts: Array<string | number> = [voice.engine, voice.reference ?? "", voice.temperature];
   if (voice.engine === "standard") parts.push(voice.exaggeration, voice.cfgWeight);
   return parts.join("|");
 }
@@ -307,7 +301,7 @@ export function lineIndex(voiceover: Voiceover, cues: Cue[]): LineIndex {
 export function nextLine(
   voiceover: Voiceover,
   queue: Cue[][],
-  last: Pick<CastVoice, "engine" | "reference" | "preset"> | null,
+  last: Pick<CastVoice, "engine" | "reference"> | null,
 ): number {
   let best = -1;
   let bestScore = -1;
@@ -317,7 +311,7 @@ export function nextLine(
       ? 0
       : voice.engine !== last.engine
         ? 0
-        : voiceSource(voice) === voiceSource(last)
+        : (voice.reference ?? "") === (last.reference ?? "")
           ? 2
           : 1;
     if (score > bestScore || (score === bestScore && group[0].start < queue[best][0].start)) {

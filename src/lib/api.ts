@@ -28,7 +28,6 @@ import type {
   TtsResult,
   ReferenceResult,
   TtsStatus,
-  VoicePreset,
   UnusedFile,
 } from "../types";
 
@@ -212,9 +211,6 @@ export const ttsGenerate = (request: TtsRequest) =>
   invoke<TtsResult>("tts_generate", { request });
 /** Stops the voice engine, freeing the GPU memory its model holds. */
 export const ttsUnload = () => invoke<void>("tts_unload");
-/** The built-in voices' reference clips on disk, by preset. */
-export const ttsPresetVoices = () =>
-  invoke<Partial<Record<VoicePreset, string>>>("tts_preset_voices");
 export const ttsExtractReference = (
   videoPath: string,
   segments: Array<[number, number]>,
