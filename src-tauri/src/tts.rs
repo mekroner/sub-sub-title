@@ -23,7 +23,8 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Emitter, Manager};
 
 const UV_VERSION: &str = "0.13.6";
 const UV_URL: &str =
@@ -56,6 +57,10 @@ const REQUIRED_FREE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// install in a way that looks like a missing file.
 const MAX_ROOT_CHARS: usize = 100;
 /// The sidecar's scripts, written out beside the venv; the first is run.
+/// The built-in voices, bundled under `voices/` as `<preset>.wav`: cloned
+/// when a speaker has no reference clip of their own. Synthetic, made by
+/// `voices/synthesize.py`.
+const PRESET_VOICES: [&str; 2] = ["female", "male"];
 const SIDECAR_SOURCES: [(&str, &str); 2] = [
     ("server.py", include_str!("../tts/server.py")),
     ("common.py", include_str!("../tts/common.py")),
@@ -126,8 +131,12 @@ pub struct TtsRequest {
     /// "turbo" or "standard".
     pub engine: String,
     pub text: String,
-    /// A clip of the voice to clone; none means the model's own default voice.
+    /// A clip of the voice to clone; none means the built-in `preset` voice.
     pub reference: Option<String>,
+    /// The built-in voice cloned when there is no reference. Absent, or
+    /// unknown, falls back to the model's own voice.
+    #[serde(default)]
+    pub preset: Option<String>,
     pub seed: u64,
     pub exaggeration: f64,
     pub cfg_weight: f64,
@@ -576,6 +585,12 @@ pub async fn tts_generate(
     let python = installed_python(&app)
         .ok_or_else(|| AppError::msg("The voice engine is not installed yet."))?;
     let root = root(&app)?;
+    let mut request = request;
+    if request.reference.is_none() {
+        if let Some(preset) = request.preset.as_deref() {
+            request.reference = Some(preset_voice(&app, preset)?.to_string_lossy().into_owned());
+        }
+    }
     if let Some(dir) = Path::new(&request.output_path).parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -588,6 +603,37 @@ pub async fn tts_generate(
     })
     .await
         .map_err(|e| AppError::msg(format!("Generating speech failed: {e}")))?
+}
+
+/// Where a built-in voice's reference clip is.
+fn preset_voice(app: &AppHandle, preset: &str) -> AppResult<PathBuf> {
+    if !PRESET_VOICES.contains(&preset) {
+        return Err(AppError::msg(format!("There is no built-in voice called \"{preset}\".")));
+    }
+    let path = app
+        .path()
+        .resolve(format!("voices/{preset}.wav"), BaseDirectory::Resource)
+        .map_err(|e| AppError::msg(format!("Could not find the built-in voices: {e}")))?;
+    if !path.is_file() {
+        return Err(AppError::msg(format!(
+            "The built-in {preset} voice is missing from the install ({}).",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
+/// The built-in voices' reference clips, by preset, for previewing. A voice
+/// whose file is missing is left out.
+#[tauri::command]
+pub fn tts_preset_voices(app: AppHandle) -> std::collections::HashMap<String, String> {
+    PRESET_VOICES
+        .iter()
+        .filter_map(|&preset| {
+            let path = preset_voice(&app, preset).ok()?;
+            Some((preset.to_string(), path.to_string_lossy().into_owned()))
+        })
+        .collect()
 }
 
 /// Stops the sidecar, freeing the GPU memory the model holds.
@@ -1191,6 +1237,7 @@ mod tests {
             engine: "turbo".into(),
             text: text.into(),
             reference,
+            preset: None,
             seed: 5,
             exaggeration: 0.5,
             cfg_weight: 0.5,

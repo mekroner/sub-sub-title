@@ -152,7 +152,7 @@ export function useVoiceGeneration({ voiceover, cues, paths, commit, notify }: O
       stopRequested.current = false;
       const batch = `tts:${makeId()}`;
       let done = 0;
-      let last: Pick<CastVoice, "engine" | "reference"> | null = null;
+      let last: Pick<CastVoice, "engine" | "reference" | "preset"> | null = null;
       setJob({ done, total: added.length, current: "", loading: false });
       try {
         for (;;) {
@@ -187,6 +187,7 @@ export function useVoiceGeneration({ voiceover, cues, paths, commit, notify }: O
                 engine: voice.engine,
                 text: line.text,
                 reference: voice.reference ?? null,
+                preset: voice.preset,
                 seed,
                 exaggeration: line.exaggeration,
                 cfgWeight: voice.cfgWeight,

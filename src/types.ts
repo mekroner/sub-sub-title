@@ -169,10 +169,18 @@ export interface TakeCheck {
 /** "turbo" takes inline tags like [laugh]; "standard" has an emotion setting. */
 export type TtsEngine = "turbo" | "standard";
 
+/**
+ * A voice that ships with the app, cloned when a speaker has no reference
+ * clip of their own. Both are synthetic, so no real person's voice is copied.
+ */
+export type VoicePreset = "female" | "male";
+
 /** How one speaker is voiced. */
 export interface CastVoice {
-  /** A clip of the voice to clone. Absent means the model's default voice. */
+  /** A clip of the voice to clone. Absent means the built-in `preset` voice. */
   reference?: string;
+  /** The built-in voice used while there is no `reference`. */
+  preset: VoicePreset;
   engine: TtsEngine;
   /** Standard engine only: 0.25 (flat) .. 2 (theatrical); 0.5 is neutral. */
   exaggeration: number;
@@ -710,6 +718,8 @@ export interface TtsRequest {
   engine: TtsEngine;
   text: string;
   reference: string | null;
+  /** The built-in voice to clone when there is no `reference`. */
+  preset: VoicePreset;
   seed: number;
   exaggeration: number;
   cfgWeight: number;

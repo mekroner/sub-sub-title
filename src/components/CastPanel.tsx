@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CastVoice, Cue, Speaker, TtsStatus, Voiceover } from "../types";
+import type { CastVoice, Cue, Speaker, TtsStatus, VoicePreset, Voiceover } from "../types";
+import * as api from "../lib/api";
 import type { GenerationJob } from "../hooks/useVoiceGeneration";
 import { MAX_TAKES_PER_LINE, NO_SPEAKER, castKey, voiceFor, type LineIndex } from "../lib/tts";
 import { basename, voiceTracks } from "../lib/voiceover";
@@ -57,6 +58,7 @@ export function CastPanel({
   onReferenceFromVideo,
   onDirect,
 }: Props) {
+  const presetFiles = usePresetFiles();
   const rows = useMemo<Row[]>(() => {
     // Counted in lines, not cues: a sentence spoken across two cues is one
     // line to generate.
@@ -178,6 +180,7 @@ export function CastPanel({
             row={row}
             voice={voiceFor(voiceover, row.key)}
             voiceover={voiceover}
+            presetFiles={presetFiles}
             canGenerate={installed && canGenerate}
             onSetVoice={(patch) => onSetVoice(row.key, patch)}
             onGenerate={() => onGenerate(row.pending)}
@@ -278,6 +281,7 @@ function CastRow({
   row,
   voice,
   voiceover,
+  presetFiles,
   canGenerate,
   onSetVoice,
   onGenerate,
@@ -287,6 +291,7 @@ function CastRow({
   row: Row;
   voice: CastVoice;
   voiceover: Voiceover;
+  presetFiles: Partial<Record<VoicePreset, string>>;
   canGenerate: boolean;
   onSetVoice: (patch: Partial<CastVoice>) => void;
   onGenerate: () => void;
@@ -295,6 +300,7 @@ function CastRow({
 }) {
   const todo = row.missing + row.stale;
   const tracks = voiceTracks(voiceover);
+  const preview = voice.reference ?? presetFiles[voice.preset];
   return (
     <div className="cast-row">
       <div className="cast-row-head">
@@ -317,10 +323,22 @@ function CastRow({
 
       <div className="cast-field">
         <span>Voice</span>
-        <span className="cast-reference" title={voice.reference ?? "The model's built-in voice"}>
-          {voice.reference ? basename(voice.reference) : "Default voice"}
-        </span>
-        {voice.reference && <PreviewButton file={voice.reference} />}
+        <select
+          value={voice.reference ? REFERENCE : voice.preset}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value !== REFERENCE) onSetVoice({ preset: value as VoicePreset, reference: undefined });
+          }}
+          title={voice.reference ?? "A built-in voice, used until this speaker has a clip of their own"}
+        >
+          {(Object.keys(PRESET_LABELS) as VoicePreset[]).map((preset) => (
+            <option key={preset} value={preset}>
+              {PRESET_LABELS[preset]}
+            </option>
+          ))}
+          {voice.reference && <option value={REFERENCE}>{basename(voice.reference)}</option>}
+        </select>
+        {preview && <PreviewButton file={preview} />}
       </div>
       <div className="cast-actions">
         <button
@@ -335,16 +353,6 @@ function CastRow({
         <button type="button" className="small" onClick={onReferenceFromFile} title="Clone a voice from an audio file">
           File…
         </button>
-        {voice.reference && (
-          <button
-            type="button"
-            className="small"
-            onClick={() => onSetVoice({ reference: undefined })}
-            title="Use the model's built-in voice"
-          >
-            Default
-          </button>
-        )}
       </div>
 
       <div className="cast-field">
@@ -406,6 +414,30 @@ function CastRow({
       </div>
     </div>
   );
+}
+
+/** The select's value for a speaker's own reference clip. */
+const REFERENCE = "reference";
+
+const PRESET_LABELS: Record<VoicePreset, string> = {
+  female: "Female — built-in",
+  male: "Male — built-in",
+};
+
+/** Where the built-in voices are on disk, for previewing; empty until known. */
+function usePresetFiles(): Partial<Record<VoicePreset, string>> {
+  const [files, setFiles] = useState<Partial<Record<VoicePreset, string>>>({});
+  useEffect(() => {
+    let live = true;
+    api
+      .ttsPresetVoices()
+      .then((found) => live && setFiles(found))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return files;
 }
 
 /** Plays a reference clip; one at a time across every row. */

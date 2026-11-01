@@ -615,3 +615,11 @@ sub-sub-title.exe "D:\footage\scene.mp4"
   characters.
 - **The video is served over Tauri's asset protocol**, and each opened file is
   granted to the scope at runtime rather than globbing the whole filesystem.
+- **The built-in voices are synthetic.** A speaker with no reference clip of
+  their own is cloned from `src-tauri/voices/female.wav` or `male.wav` (picked
+  in the Cast panel's *Voice* menu; Female by default). Both were spoken by
+  [Kokoro-82M](https://github.com/hexgrad/kokoro) (Apache-2.0) — voices
+  `af_heart` and `am_michael` — so no real person's voice is copied.
+  `src-tauri/voices/synthesize.py` regenerates them; they ship as Tauri
+  resources and the backend resolves a preset to its file, so a project stores
+  only the preset's name.

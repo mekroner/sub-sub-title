@@ -13,6 +13,7 @@ import type {
   CueVoicing,
   DuckSettings,
   TtsEngine,
+  VoicePreset,
   GainPoint,
   Project,
   ProjectFile,
@@ -285,6 +286,7 @@ function coerceVoicing(raw: unknown): Record<string, CueVoicing> {
 }
 
 const ENGINES: TtsEngine[] = ["turbo", "standard"];
+const PRESETS: VoicePreset[] = ["female", "male"];
 
 /** Absent for one take, the default; otherwise a whole number within the cap. */
 function takesPerLine(raw: unknown): { takesPerLine?: number } {
@@ -299,6 +301,7 @@ function coerceCast(raw: unknown): Record<string, CastVoice> {
     if (typeof value !== "object" || value === null) continue;
     const v = value as Partial<CastVoice>;
     cast[key] = {
+      preset: PRESETS.includes(v.preset as VoicePreset) ? (v.preset as VoicePreset) : DEFAULT_VOICE.preset,
       engine: ENGINES.includes(v.engine as TtsEngine) ? (v.engine as TtsEngine) : DEFAULT_VOICE.engine,
       exaggeration: Math.min(2, Math.max(0.25, finite(v.exaggeration, DEFAULT_VOICE.exaggeration))),
       cfgWeight: Math.min(1, Math.max(0, finite(v.cfgWeight, DEFAULT_VOICE.cfgWeight))),
