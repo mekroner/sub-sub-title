@@ -3334,3 +3334,59 @@ button.fill-alt.on {
 .edit-key-actions {
   flex-wrap: wrap;
 }
+
+/* Re-cut flags in the cue list, beside the spelling badge. */
+.cue-issues {
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.issue-badge.recut-lost {
+  background: #3b2a45;
+  color: #e3b8ff;
+  border-color: #6b4a7d;
+}
+.issue-badge.recut-cut {
+  background: #2a3b45;
+  color: #b8e6ff;
+  border-color: #4a6b7d;
+}
+
+/* The Edit tab's re-cut report. */
+.edit-recut-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.edit-recut-entry {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: baseline;
+  padding: 4px 6px;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+}
+.edit-recut-entry:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border);
+}
+.edit-recut-kind {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.edit-recut-label {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.edit-recut-time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}

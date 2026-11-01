@@ -285,7 +285,19 @@ describe("project file", () => {
     const { edit: e1, id: track } = addOverlayTrack(placeSource(e0, b, MAIN_TRACK_ID, 12).edit);
     const edit: Edit = {
       ...placeText(e1, track, 2, "Hello").edit,
-      baked: { path: "/v/a.cut.mp4", planHash: "abc", at: "2026-10-31T00:00:00.000Z" },
+      baked: {
+        path: "/v/a.cut.mp4",
+        planHash: "abc",
+        at: "2026-10-31T00:00:00.000Z",
+        segments: [{ start: 0, duration: 10, source: "/v/a.mp4", offset: 0 }],
+      },
+      recut: {
+        at: "2026-10-31T00:00:00.000Z",
+        moved: 3,
+        cut: [{ kind: "cue", id: "c1", at: 2 }],
+        lost: [{ kind: "clip", id: "v1", at: 11 }],
+        droppedPoints: 1,
+      },
     };
     const parsed = parseProjectFile(serializeProjectFile({ ...base, edit }));
     expect(parsed.edit).toEqual(edit);

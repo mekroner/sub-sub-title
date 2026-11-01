@@ -23,6 +23,8 @@ interface Props {
   maxLines: number;
   /** Spelling and grammar issues for a cue; empty while it is being re-checked. */
   issuesFor: (cue: Cue) => CueIssue[];
+  /** Set when the last re-cut parked this cue, or a cut runs through it. */
+  recutFlag?: (cue: Cue) => "lost" | "cut" | undefined;
   onSelect: (id: string, mode: SelectMode) => void;
   onContextMenu: (id: string, x: number, y: number) => void;
   onSeek: (time: number) => void;
@@ -45,6 +47,7 @@ export function CueList({
   maxCharsPerLine,
   maxLines,
   issuesFor,
+  recutFlag,
   onSelect,
   onContextMenu,
   onSeek,
@@ -235,6 +238,18 @@ export function CueList({
               </div>
 
               <div className="cue-issues">
+                {recutFlag?.(cue) && (
+                  <span
+                    className={`issue-badge recut-${recutFlag(cue)}`}
+                    title={
+                      recutFlag(cue) === "lost"
+                        ? "Lost in the last re-cut: its footage was cut, so it was parked after the end. Move or delete it."
+                        : "A cut in the last re-cut runs through this cue: it moved with its larger part. Check its timing."
+                    }
+                  >
+                    {recutFlag(cue) === "lost" ? "✂" : "⋯"}
+                  </span>
+                )}
                 {issues.length > 0 && (
                   <button
                     type="button"

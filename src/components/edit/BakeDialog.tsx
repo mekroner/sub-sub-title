@@ -14,6 +14,11 @@ interface Props {
   sources: string[];
   /** Cues or voice clips exist, timed against the current video. */
   rebakeWarning: boolean;
+  /**
+   * What the bake will do to cues, clips, sections and beats, when it can
+   * trace them through the cut; null when it cannot, and the warning stands.
+   */
+  recutPreview?: string | null;
   /** Run before the encode: writes the drawn text where the bake reads it. */
   prepare?: () => Promise<void>;
   /** Called once the file is written; the dialog closes after. */
@@ -28,6 +33,7 @@ export function BakeDialog({
   defaultOutput,
   sources,
   rebakeWarning,
+  recutPreview,
   prepare,
   onBaked,
   onClose,
@@ -124,7 +130,9 @@ export function BakeDialog({
             libx264 and AAC. The baked file becomes the project's video: Subtitles and Voiceover
             work on it from then on.
           </p>
-          {rebakeWarning && (
+          {recutPreview ? (
+            <p className="hint">Timing follows the cut: {recutPreview}.</p>
+          ) : rebakeWarning && (
             <p className="error">
               Cues or voice clips are timed against the current video. If this cut moves things,
               their timing will no longer line up.

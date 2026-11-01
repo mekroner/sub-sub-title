@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import type { Edit, EditCanvas, EditItem, TextItem, TextStyle, TransformKey } from "../../types";
+import type {
+  Edit,
+  EditCanvas,
+  EditItem,
+  Project,
+  RecutKind,
+  RecutRef,
+  TextItem,
+  TextStyle,
+  TransformKey,
+} from "../../types";
 import {
   MAX_FPS,
   MIN_FPS,
@@ -16,15 +26,17 @@ import {
   type ItemPatch,
 } from "../../lib/edit";
 import { ColorPicker } from "../ColorPicker";
+import { hasFlags, recutFlag } from "../../lib/recut";
 import { MAX_DB, MIN_DB } from "../../lib/voiceover";
 import { formatDuration, formatShort } from "../../lib/time";
 
-export type EditSideTab = "media" | "item" | "canvas";
+export type EditSideTab = "media" | "item" | "canvas" | "recut";
 
 const TABS: Array<{ id: EditSideTab; label: string; title: string }> = [
   { id: "media", label: "Media", title: "The files this edit draws from" },
   { id: "item", label: "Item", title: "The selected item: place, size, fades, text" },
   { id: "canvas", label: "Canvas", title: "The bake's size and frame rate" },
+  { id: "recut", label: "Re-cut", title: "What the last re-cut could not move cleanly" },
 ];
 
 interface Props {
@@ -56,6 +68,11 @@ interface Props {
   onText: (id: string, text: string) => void;
   onTextStyle: (id: string, patch: TextStylePatch, field: string) => void;
   onCanvas: (canvas: EditCanvas) => void;
+  /** The project, to name and place what the last re-cut flagged. */
+  project: Project;
+  onRevealTimed: (ref: RecutRef) => void;
+  onDeleteLost: () => void;
+  onClearRecut: () => void;
 }
 
 /** A change to a text style; `null` takes an effect away. */
@@ -81,10 +98,12 @@ const FONT_SUGGESTIONS = [
 
 export function EditSidePanel(props: Props) {
   const { tab, onTab } = props;
+  // The Re-cut tab is there while a re-cut has left something to check.
+  const tabs = TABS.filter((t) => t.id !== "recut" || hasFlags(props.edit.recut));
   return (
     <>
       <div className="segmented wide side-tabs" role="tablist" aria-label="Edit side panel">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -107,6 +126,11 @@ export function EditSidePanel(props: Props) {
       <div className="side-tab-body" hidden={tab !== "canvas"}>
         <CanvasPanel {...props} />
       </div>
+      {hasFlags(props.edit.recut) && (
+        <div className="side-tab-body" hidden={tab !== "recut"}>
+          <RecutPanel {...props} />
+        </div>
+      )}
     </>
   );
 }
@@ -578,6 +602,116 @@ function CanvasPanel({ edit, onCanvas }: Props) {
           Sizes are rounded to even numbers. Positions keep their place on a new size, and text
           scales with the height.
         </p>
+      </div>
+    </div>
+  );
+}
+
+const KIND_LABEL: Record<RecutKind, string> = {
+  cue: "Cue",
+  clip: "Voice clip",
+  section: "Section",
+  beat: "Beat",
+};
+
+/** What a flagged item is called, and where it is now; null once it is gone. */
+function describeRef(project: Project, ref: RecutRef): { label: string; start: number } | null {
+  switch (ref.kind) {
+    case "cue": {
+      const c = project.cues.find((x) => x.id === ref.id);
+      return c ? { label: c.text.trim() || "(empty cue)", start: c.start } : null;
+    }
+    case "clip": {
+      const c = project.voiceover.clips.find((x) => x.id === ref.id);
+      return c ? { label: c.name, start: c.start } : null;
+    }
+    case "section": {
+      const x = project.sections.find((s) => s.id === ref.id);
+      return x ? { label: x.label || "(untitled section)", start: x.start } : null;
+    }
+    case "beat": {
+      const b = project.timedBeats.find((x) => x.id === ref.id);
+      return b ? { label: b.text.trim() || "(empty beat)", start: b.time } : null;
+    }
+  }
+}
+
+/**
+ * What the last re-cut could not move cleanly. An entry drops off once the
+ * writer moves or deletes it: the flag is only for what is still unchecked.
+ */
+function RecutPanel({ edit, project, onRevealTimed, onDeleteLost, onClearRecut }: Props) {
+  const report = edit.recut!;
+  const live = (refs: RecutRef[], flag: "lost" | "cut") =>
+    refs.flatMap((ref) => {
+      const found = describeRef(project, ref);
+      if (!found || recutFlag(report, ref.kind, ref.id, found.start) !== flag) return [];
+      return [{ ref, ...found }];
+    });
+  const lost = live(report.lost, "lost");
+  const cut = live(report.cut, "cut");
+
+  const list = (entries: ReturnType<typeof live>) => (
+    <ul className="edit-recut-list">
+      {entries.map(({ ref, label, start }) => (
+        <li key={`${ref.kind}:${ref.id}`}>
+          <button
+            type="button"
+            className="edit-recut-entry"
+            title={ref.kind === "clip" ? "Show it in Voiceover" : "Show it in Subtitles"}
+            onClick={() => onRevealTimed({ ...ref, at: start })}
+          >
+            <span className="edit-recut-kind">{KIND_LABEL[ref.kind]}</span>
+            <span className="edit-recut-label">{label}</span>
+            <span className="edit-recut-time">{formatShort(start)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+
+  return (
+    <div className="panel clip-inspector">
+      <div className="clip-inspector-body">
+        <p className="hint">
+          The last bake moved {report.moved} item{report.moved === 1 ? "" : "s"} with the cut.
+          {report.droppedPoints > 0 &&
+            ` ${report.droppedPoints} gain point${report.droppedPoints === 1 ? " was" : "s were"} in removed footage and went.`}
+        </p>
+
+        <h3 className="edit-section">Lost in re-cut ({lost.length})</h3>
+        {lost.length === 0 ? (
+          <p className="hint">Nothing left here.</p>
+        ) : (
+          <>
+            <p className="hint">
+              Their footage is no longer in the cut, so they were parked after the end of the video.
+              Move each where it belongs, or delete them.
+            </p>
+            {list(lost)}
+            <div className="clip-actions">
+              <button type="button" className="small danger" onClick={onDeleteLost}>
+                Delete all lost
+              </button>
+            </div>
+          </>
+        )}
+
+        <h3 className="edit-section">Cut through ({cut.length})</h3>
+        {cut.length === 0 ? (
+          <p className="hint">Nothing left here.</p>
+        ) : (
+          <>
+            <p className="hint">A cut runs through these: each moved with its larger part. Check their timing.</p>
+            {list(cut)}
+          </>
+        )}
+
+        <div className="clip-actions">
+          <button type="button" className="small" onClick={onClearRecut}>
+            Clear report
+          </button>
+        </div>
       </div>
     </div>
   );

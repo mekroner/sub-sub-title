@@ -74,7 +74,22 @@ import {
 import { nextPaletteColor } from "./lib/colors";
 import { classifyDrop, classifyEditDrop, VIDEO_EXTENSIONS } from "./lib/dropPaths";
 import { EditWorkspace, type EditHandle } from "./components/edit/EditWorkspace";
-import type { Edit } from "./types";
+import type { Edit, RecutKind, RecutRef } from "./types";
+import { editEnd } from "./lib/edit";
+import {
+  cutSegments,
+  describeRecut,
+  hasFlags,
+  previousSegments,
+  recutFlag,
+  recutProject,
+} from "./lib/recut";
+
+/** An edit without its re-cut report. */
+function withoutRecut(edit: Edit): Edit {
+  const { recut: _gone, ...rest } = edit;
+  return rest;
+}
 import {
   PROJECT_EXTENSION,
   parseProjectFile,
@@ -1042,24 +1057,86 @@ export default function App() {
   const adoptBake = useCallback(
     async (path: string, planHash: string) => {
       const previous = project.edit?.baked?.path;
+      // Everything timed against the old video moves with the cut, in the same
+      // undo step: one undo brings back the old video and the old timing.
+      const rebase = (current: Project) => {
+        if (!current.edit) return null;
+        const oldSegs = previousSegments(current.edit, current.videoPath);
+        const newSegs = cutSegments(current.edit);
+        return { newSegs, result: oldSegs ? recutProject(current, oldSegs, newSegs, editEnd(current.edit)) : null };
+      };
+      // The dialog is modal, so the project is the same one the update sees.
+      const preview = rebase(project);
       await attachMedia(path);
-      update((current) =>
-        current.edit
-          ? {
-              ...current,
-              videoPath: path,
-              edit: { ...current.edit, baked: { path, planHash, at: new Date().toISOString() } },
-            }
-          : current,
+      update((current) => {
+        const step = rebase(current);
+        if (!current.edit || !step) return current;
+        const moved = step.result?.project ?? current;
+        const report = step.result?.report;
+        const { recut: _old, ...edit } = current.edit;
+        return {
+          ...moved,
+          videoPath: path,
+          edit: {
+            ...edit,
+            baked: { path, planHash, at: new Date().toISOString(), segments: step.newSegs },
+            ...(hasFlags(report) ? { recut: report } : {}),
+          },
+        };
+      });
+      const report = preview?.result?.report;
+      const timed =
+        project.cues.length + project.voiceover.clips.length + project.sections.length + project.timedBeats.length;
+      notify(
+        report && timed > 0
+          ? `Baked ${path}. ${describeRecut(report)}.${hasFlags(report) ? " See Re-cut in the Edit tab." : ""}`
+          : `Baked ${path}. Subtitles and Voiceover now work on it.`,
       );
-      notify(`Baked ${path}. Subtitles and Voiceover now work on it.`);
       const inUse = project.edit?.sources.some((s) => s.path === previous);
       if (previous && previous !== path && !inUse) {
         api.trashBake(previous).catch((e) => notify(errorMessage(e), "error"));
       }
     },
-    [project.edit, attachMedia, update, notify],
+    [project, attachMedia, update, notify],
   );
+
+  /** Shows a re-cut item where it lives: a cue, section or beat in Subtitles, a clip in Voiceover. */
+  const revealTimed = useCallback(
+    (ref: RecutRef) => {
+      seek(ref.at);
+      if (ref.kind === "clip") {
+        setWorkspace("voiceover");
+        selectVo({ items: [{ kind: "clip", id: ref.id }], mode: "replace" });
+        return;
+      }
+      setWorkspace("subtitles");
+      if (ref.kind === "cue") selectOnly(ref.id);
+      if (ref.kind === "section") setSelectedSectionId(ref.id);
+    },
+    [seek, selectVo, selectOnly],
+  );
+
+  /** Deletes everything the last re-cut parked, in one undo step. */
+  const deleteLost = useCallback(() => {
+    update((current) => {
+      const lost = current.edit?.recut?.lost;
+      if (!current.edit || !lost || lost.length === 0) return current;
+      const gone = (kind: RecutKind, id: string, start: number) =>
+        recutFlag(current.edit!.recut, kind, id, start) === "lost";
+      const recut = { ...current.edit.recut!, lost: [] };
+      return {
+        ...current,
+        cues: current.cues.filter((c) => !gone("cue", c.id, c.start)),
+        sections: current.sections.filter((x) => !gone("section", x.id, x.start)),
+        timedBeats: current.timedBeats.filter((b) => !gone("beat", b.id, b.time)),
+        voiceover: {
+          ...current.voiceover,
+          clips: current.voiceover.clips.filter((c) => !gone("clip", c.id, c.start)),
+        },
+        edit: hasFlags(recut) ? { ...current.edit, recut } : withoutRecut(current.edit),
+      };
+    });
+  }, [update]);
 
   // The panes follow `videoPath` when undo or redo moves it — across a bake,
   // say. Opening a file attaches it directly; a missing file is left to the
@@ -3216,6 +3293,9 @@ export default function App() {
         hasTimedWork={cues.length > 0 || project.voiceover.clips.length > 0}
         setEdit={setEdit}
         onBaked={adoptBake}
+        project={project}
+        onRevealTimed={revealTimed}
+        onDeleteLost={deleteLost}
         notify={notify}
         sideWidth={sideWidth}
         onSideWidth={setSideWidth}
@@ -3591,6 +3671,7 @@ export default function App() {
             maxCharsPerLine={settings.maxCharsPerLine}
             maxLines={settings.maxLines}
             issuesFor={spellcheck.issuesFor}
+            recutFlag={(cue) => recutFlag(project.edit?.recut, "cue", cue.id, cue.start)}
             onSelect={select}
             onContextMenu={openCueContextMenu}
             onSeek={seek}

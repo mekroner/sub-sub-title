@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, Ref } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { Edit, EditSource, MediaInfo } from "../../types";
+import type { Edit, EditSource, MediaInfo, Project, RecutRef } from "../../types";
+import { cutSegments, describeRecut, hasFlags, previousSegments, recutProject } from "../../lib/recut";
 import * as api from "../../lib/api";
 import { errorMessage } from "../../lib/api";
 import {
@@ -70,6 +71,12 @@ interface Props {
   setEdit: (fn: (edit: Edit | undefined) => Edit | undefined, mergeKey?: string) => void;
   /** Makes a finished bake the project's video. */
   onBaked: (path: string, planHash: string) => Promise<void>;
+  /** The whole project: what a re-cut would move, for the bake dialog and the report. */
+  project: Project;
+  /** Shows a flagged item where it lives, in Subtitles or Voiceover. */
+  onRevealTimed: (ref: RecutRef) => void;
+  /** Deletes everything the last re-cut parked. */
+  onDeleteLost: () => void;
   notify: (message: string, kind?: "info" | "error") => void;
   sideWidth: number;
   onSideWidth: (width: number) => void;
@@ -92,6 +99,9 @@ export function EditWorkspace({
   hasTimedWork,
   setEdit,
   onBaked,
+  project,
+  onRevealTimed,
+  onDeleteLost,
   notify,
   sideWidth,
   onSideWidth,
@@ -261,6 +271,27 @@ export function EditWorkspace({
       staged.add(drawn.name);
     }
   }, [rasters.byItem]);
+
+  // What a bake would do to the timed work, worked out while its dialog is open.
+  const recutPreview = useMemo(() => {
+    if (!bake || !edit || !plan) return null;
+    const timed =
+      project.cues.length + project.voiceover.clips.length + project.sections.length + project.timedBeats.length;
+    const oldSegs = previousSegments(edit, project.videoPath);
+    if (timed === 0 || !oldSegs) return null;
+    return describeRecut(recutProject(project, oldSegs, cutSegments(edit), plan.total).report, "move");
+  }, [bake, edit, plan, project]);
+
+  // A re-cut that left something to check opens its report; one that did not
+  // leaves the panel where it was. A tab that has gone falls back to Media.
+  const recutAt = edit?.recut?.at;
+  useEffect(() => {
+    if (recutAt && hasFlags(edit?.recut)) setTab("recut");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recutAt]);
+  useEffect(() => {
+    if (tab === "recut" && !hasFlags(edit?.recut)) setTab("media");
+  }, [tab, edit?.recut]);
 
   // Pause while the bake dialog is open.
   useEffect(() => {
@@ -444,6 +475,16 @@ export function EditWorkspace({
             setDefined((e) => patchTextStyle(e, id, patch), `item:${id}:style:${field}`)
           }
           onCanvas={(canvas) => setDefined((e) => setCanvas(e, canvas))}
+          project={project}
+          onRevealTimed={onRevealTimed}
+          onDeleteLost={onDeleteLost}
+          onClearRecut={() =>
+            setDefined((e) => {
+              if (!e.recut) return e;
+              const { recut: _gone, ...rest } = e;
+              return rest;
+            })
+          }
         />
       </aside>
 
@@ -486,6 +527,7 @@ export function EditWorkspace({
           defaultOutput={bake.output}
           sources={edit.sources.map((s) => s.path)}
           rebakeWarning={hasTimedWork}
+          recutPreview={recutPreview}
           prepare={stageText}
           onBaked={onBaked}
           onClose={() => setBake(null)}

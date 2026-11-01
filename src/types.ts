@@ -291,6 +291,45 @@ export interface Edit {
   items: EditItem[];
   /** The last bake: which file, and the plan it was made from. */
   baked?: EditBake;
+  /** What the last re-cut could not move cleanly, until it is cleared. */
+  recut?: RecutReport;
+}
+
+/**
+ * One stretch of a baked video and where it came from: the map that lets a
+ * re-cut move cues and clips with the footage they were timed against.
+ */
+export interface CutSegment {
+  /** Output seconds. */
+  start: number;
+  duration: number;
+  /** A source file's path for video; `item:<id>` for a main-track image. */
+  source: string;
+  /** Seconds into the source (0 for images). */
+  offset: number;
+}
+
+export type RecutKind = "cue" | "clip" | "section" | "beat";
+
+/** Something a re-cut flagged, and where it put it (timeline seconds). */
+export interface RecutRef {
+  kind: RecutKind;
+  id: string;
+  /** Its start after the re-cut: a flag lapses once the item is moved. */
+  at: number;
+}
+
+export interface RecutReport {
+  /** ISO timestamp. */
+  at: string;
+  /** How many items moved cleanly with the cut. */
+  moved: number;
+  /** Partly in removed footage: moved with the larger kept part. */
+  cut: RecutRef[];
+  /** Only in removed footage: parked after the end of the video. */
+  lost: RecutRef[];
+  /** Gain-curve points that were in removed footage, and were dropped. */
+  droppedPoints: number;
 }
 
 export interface EditBake {
@@ -298,6 +337,8 @@ export interface EditBake {
   planHash: string;
   /** ISO timestamp. */
   at: string;
+  /** What the baked video is made of, for the next re-cut. */
+  segments?: CutSegment[];
 }
 
 /** A file the edit draws from. Referenced, never copied — like the video. */

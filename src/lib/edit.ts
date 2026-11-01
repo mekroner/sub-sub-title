@@ -6,12 +6,17 @@
  */
 
 import type {
+  CutSegment,
   Edit,
+  EditBake,
   EditCanvas,
   EditItem,
   EditSource,
   EditTrack,
   MediaInfo,
+  RecutKind,
+  RecutRef,
+  RecutReport,
   TextItem,
   TextStyle,
   TransformKey,
@@ -999,10 +1004,52 @@ export function coerceEdit(raw: unknown): Edit | undefined {
 
   const bakedRaw = record(e.baked);
   const bakedPath = bakedRaw ? str(bakedRaw.path) : undefined;
-  const baked =
+  const segments = bakedRaw && Array.isArray(bakedRaw.segments) ? coerceSegments(bakedRaw.segments) : [];
+  const baked: EditBake | undefined =
     bakedRaw && bakedPath
-      ? { path: bakedPath, planHash: str(bakedRaw.planHash) ?? "", at: str(bakedRaw.at) ?? "" }
+      ? {
+          path: bakedPath,
+          planHash: str(bakedRaw.planHash) ?? "",
+          at: str(bakedRaw.at) ?? "",
+          ...(segments.length > 0 ? { segments } : {}),
+        }
       : undefined;
+  const recut = coerceRecut(e.recut);
 
-  return { canvas, sources, tracks, items, ...(baked ? { baked } : {}) };
+  return { canvas, sources, tracks, items, ...(baked ? { baked } : {}), ...(recut ? { recut } : {}) };
+}
+
+function coerceSegments(raw: unknown[]): CutSegment[] {
+  return raw.flatMap((r) => {
+    const s = record(r);
+    const source = s ? str(s.source) : undefined;
+    const duration = s ? finite(s.duration, 0) : 0;
+    if (!s || !source || !(duration > 0)) return [];
+    return [{ start: Math.max(0, finite(s.start, 0)), duration, source, offset: Math.max(0, finite(s.offset, 0)) }];
+  });
+}
+
+const RECUT_KINDS: RecutKind[] = ["cue", "clip", "section", "beat"];
+
+function coerceRecut(raw: unknown): RecutReport | undefined {
+  const r = record(raw);
+  if (!r) return undefined;
+  const refs = (list: unknown): RecutRef[] =>
+    (Array.isArray(list) ? list : []).flatMap((x) => {
+      const ref = record(x);
+      const kind = ref?.kind as RecutKind;
+      const id = ref ? str(ref.id) : undefined;
+      if (!ref || !id || !RECUT_KINDS.includes(kind)) return [];
+      return [{ kind, id, at: finite(ref.at, 0) }];
+    });
+  const cut = refs(r.cut);
+  const lost = refs(r.lost);
+  if (cut.length + lost.length === 0) return undefined;
+  return {
+    at: str(r.at) ?? "",
+    moved: Math.max(0, Math.round(finite(r.moved, 0))),
+    cut,
+    lost,
+    droppedPoints: Math.max(0, Math.round(finite(r.droppedPoints, 0))),
+  };
 }

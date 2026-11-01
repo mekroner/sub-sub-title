@@ -510,9 +510,18 @@ behaves as before.
   source if the project is unsaved). Re-baking takes the next free name
   (`.cut-2.mp4`, …), switches the project to it, and sends the previous bake to
   the Recycle Bin. The chip beside the button says whether the last bake still
-  matches the cut. Cues and voice clips keep their times when you re-bake, so a
-  re-cut that moves things leaves them out of step; the dialog warns when there
-  are any.
+  matches the cut.
+- **Re-cutting moves the timing with it.** Each bake records which stretch of
+  which source every part of the video came from, so a bake traces cues,
+  sections, timed beats, voice clips and gain points back to their footage and
+  on to wherever the new cut shows it — subtitles written on the raw video
+  follow it into the first cut, too. The bake dialog says beforehand what will
+  move. Anything whose footage was cut is not deleted: it is parked after the
+  end of the new video, in order, flagged ✂ in the cue list and listed in the
+  Edit tab's **Re-cut** panel (click an entry to go to it; *Delete all lost*
+  clears them). A cue a cut runs through moves with its larger part and is
+  flagged ⋯. A flag goes once the item is moved, and one undo puts back both
+  the old video and the old timing.
 
 The preview has its own clock, with a small pool of `<video>` elements slaved to
 it; the next clip is loaded and seeked a couple of seconds before its cut. It
