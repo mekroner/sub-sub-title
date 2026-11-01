@@ -1012,7 +1012,7 @@ fn stretch_filter(ratio: f64, rubberband: bool) -> String {
 }
 
 /// A file's length in seconds, as ffprobe reads it.
-fn probe_seconds(path: &str) -> AppResult<f64> {
+pub(crate) fn probe_seconds(path: &str) -> AppResult<f64> {
     let out = quiet_command(&ffprobe_bin())
         .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
         .arg(path)

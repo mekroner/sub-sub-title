@@ -615,3 +615,11 @@ sub-sub-title.exe "D:\footage\scene.mp4"
   characters.
 - **The video is served over Tauri's asset protocol**, and each opened file is
   granted to the scope at runtime rather than globbing the whole filesystem.
+- **Voice templates live beside the app, not a project.** A voice built in the
+  Cast panel — *From video…* from the project's own cues, or *File…* from
+  stretches marked on the waveform of any other video or audio file — can be
+  kept as a template: a copy of the reference clip in the app's local data
+  folder (`voice-templates/`, indexed by `templates.json`). Both routes run the
+  same isolation (Demucs, trimming, cleanest lines first). A speaker using a
+  template references its file directly, so switching templates marks their
+  lines as changed; deleting one sends its clip to the Recycle Bin.

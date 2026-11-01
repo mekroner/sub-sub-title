@@ -710,11 +710,21 @@ export function suggestedReferenceCues(cues: Cue[], key: string): Cue[] {
   return sortCues(picked);
 }
 
-/** The stretches of video to cut a reference from, capped in total length. */
-export function referenceSegments(chosen: Cue[]): Array<[number, number]> {
+/** Turbo refuses a reference this short; the Expressive model copes, barely. */
+export const REFERENCE_MIN_SECONDS = 5;
+/** Where a reference starts to clone well. */
+export const REFERENCE_GOOD_SECONDS = 10;
+
+/**
+ * The stretches of a recording to cut a reference from — a speaker's cues,
+ * or spans marked by hand — in time order and capped in total length.
+ */
+export function referenceSegments(
+  chosen: ReadonlyArray<Pick<Cue, "start" | "end">>,
+): Array<[number, number]> {
   const segments: Array<[number, number]> = [];
   let total = 0;
-  for (const cue of sortCues(chosen)) {
+  for (const cue of [...chosen].sort((a, b) => a.start - b.start || a.end - b.end)) {
     const length = Math.min(cue.end - cue.start, REFERENCE_MAX_SECONDS - total);
     if (length <= 0) break;
     segments.push([cue.start, cue.start + length]);

@@ -3,9 +3,12 @@ import type { Cue } from "../types";
 import { errorMessage } from "../lib/api";
 import { formatShort } from "../lib/time";
 import { REFERENCE_MAX_SECONDS, speechText } from "../lib/tts";
+import { ReferenceAmount, TemplateOption, templateName, type TemplateChoice } from "./ReferenceParts";
 
 interface Props {
   speakerName: string;
+  /** What a template made from this voice is called unless renamed. */
+  templateDefault: string;
   /** Every cue of the speaker, in time order. */
   cues: Cue[];
   /** Ticked when the dialog opens: the last choice, or a suggestion. */
@@ -14,13 +17,10 @@ interface Props {
   playingId: string | null;
   onPlay: (cue: Cue) => void;
   onStop: () => void;
-  onBuild: (chosen: Cue[]) => Promise<void>;
+  /** `template` names the voice template to keep it as, if any. */
+  onBuild: (chosen: Cue[], template: string | null) => Promise<void>;
   onClose: () => void;
 }
-
-/** Turbo refuses a reference this short; the Expressive model copes, barely. */
-const MIN_SECONDS = 5;
-const GOOD_SECONDS = 10;
 
 /**
  * Choosing which of a speaker's cues to clone their voice from. A cue is only
@@ -29,6 +29,7 @@ const GOOD_SECONDS = 10;
  */
 export function ReferenceDialog({
   speakerName,
+  templateDefault,
   cues,
   initial,
   playingId,
@@ -40,6 +41,7 @@ export function ReferenceDialog({
   const [chosen, setChosen] = useState<Set<string>>(() => new Set(initial));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [template, setTemplate] = useState<TemplateChoice>({ save: false, name: templateDefault });
 
   const picked = useMemo(() => cues.filter((c) => chosen.has(c.id)), [cues, chosen]);
   const total = picked.reduce((sum, c) => sum + (c.end - c.start), 0);
@@ -57,7 +59,7 @@ export function ReferenceDialog({
     setError(null);
     onStop();
     try {
-      await onBuild(picked);
+      await onBuild(picked, templateName(template));
       onClose();
     } catch (e) {
       setError(errorMessage(e));
@@ -134,15 +136,8 @@ export function ReferenceDialog({
             ))}
           </div>
 
-          <p className={total < MIN_SECONDS ? "error" : total < GOOD_SECONDS ? "hint" : "status"}>
-            {picked.length} cue{picked.length === 1 ? "" : "s"}, {total.toFixed(1)} s
-            {total > REFERENCE_MAX_SECONDS && ` — the first ${REFERENCE_MAX_SECONDS} s are used`}.{" "}
-            {total < MIN_SECONDS
-              ? `Turbo needs more than ${MIN_SECONDS} s.`
-              : total < GOOD_SECONDS
-                ? `Enough to work; ${GOOD_SECONDS}–20 s clones better.`
-                : "A good amount."}
-          </p>
+          <ReferenceAmount count={picked.length} noun="cue" total={total} />
+          <TemplateOption choice={template} disabled={busy} onChange={setTemplate} />
           {error && <p className="error">{error}</p>}
         </div>
 

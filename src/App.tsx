@@ -22,6 +22,7 @@ import { TtsInstallDialog } from "./components/TtsInstallDialog";
 import { CastPanel } from "./components/CastPanel";
 import { LineEditor } from "./components/LineEditor";
 import { ReferenceDialog } from "./components/ReferenceDialog";
+import { VoiceFileDialog } from "./components/VoiceFileDialog";
 import {
   DEFAULT_SIDE_WIDTH,
   MAX_SIDE_WIDTH,
@@ -211,6 +212,7 @@ import type {
   TimedBeat,
   ToolStatus,
   VoiceClip,
+  VoiceTemplate,
   Voiceover,
 } from "./types";
 
@@ -1242,19 +1244,118 @@ export default function App() {
   });
   const [showTtsInstall, setShowTtsInstall] = useState(false);
 
-  const referenceFromFile = useCallback(
-    async (key: string) => {
-      const picked = await openDialog({
-        multiple: false,
-        filters: [{ name: "Audio", extensions: AUDIO_EXTENSIONS }],
-      });
-      if (typeof picked === "string") setVoiceover((v) => setVoice(v, key, { reference: picked }));
-    },
-    [setVoiceover],
-  );
-
   /** The speaker whose reference cues are being chosen, while the picker is open. */
   const [referenceKey, setReferenceKey] = useState<string | null>(null);
+  /** The speaker being cloned from a file of the user's choosing, while that dialog is open. */
+  const [fileReferenceKey, setFileReferenceKey] = useState<string | null>(null);
+
+  /** A speaker's name as the voice dialogs put it. */
+  const speakerLabel = (key: string) =>
+    key === NO_SPEAKER
+      ? "the unassigned"
+      : speakers.find((s) => s.id === key)?.name ?? "this speaker";
+
+  /** What a voice template built for a speaker is called unless renamed. */
+  const templateDefault = (key: string) =>
+    key === NO_SPEAKER ? "Narrator" : speakers.find((s) => s.id === key)?.name ?? "";
+
+  /** Saved voices, kept beside the app for every project. */
+  const [voiceTemplates, setVoiceTemplates] = useState<VoiceTemplate[]>([]);
+  const refreshVoiceTemplates = useCallback(
+    () =>
+      api.listVoiceTemplates().then(setVoiceTemplates, (e) =>
+        notify(`Could not read the voice templates: ${errorMessage(e)}`, "error"),
+      ),
+    [notify],
+  );
+  useEffect(() => {
+    void refreshVoiceTemplates();
+  }, [refreshVoiceTemplates]);
+
+  /** Keeps `source` as a voice template named `name`. */
+  const keepVoiceTemplate = useCallback(
+    async (name: string, source: string) => {
+      const template = await api.saveVoiceTemplate(name, source);
+      setVoiceTemplates((list) => [template, ...list.filter((t) => t.id !== template.id)]);
+      return template;
+    },
+    [],
+  );
+
+  /** A speaker's present reference, kept as a template they then use. */
+  const saveSpeakerTemplate = useCallback(
+    async (key: string, name: string) => {
+      const reference = voiceFor(project.voiceover, key).reference;
+      if (!reference) throw new Error("This speaker has no voice clip to keep.");
+      // The speaker keeps referencing their own clip, which the template
+      // remembers as its source: same voice, so no line goes stale.
+      const template = await keepVoiceTemplate(name, reference);
+      notify(`Kept the voice as the “${template.name}” template.`);
+    },
+    [project.voiceover, keepVoiceTemplate, notify],
+  );
+
+  const renameVoiceTemplate = useCallback(async (id: string, name: string) => {
+    const renamed = await api.renameVoiceTemplate(id, name);
+    setVoiceTemplates((list) => list.map((t) => (t.id === id ? renamed : t)));
+  }, []);
+
+  const deleteVoiceTemplate = useCallback(
+    async (template: VoiceTemplate) => {
+      const ok = await ask(
+        `Delete the “${template.name}” voice template? Its clip goes to the Recycle Bin. ` +
+          "Speakers here using it go back to the model's own voice; in other projects, " +
+          "speakers using it will need a new voice.",
+        { title: "Delete voice template", kind: "warning" },
+      );
+      if (!ok) return;
+      await api.deleteVoiceTemplate(template.id);
+      setVoiceTemplates((list) => list.filter((t) => t.id !== template.id));
+      const users = Object.entries(project.voiceover.cast)
+        .filter(([, voice]) => voice.reference === template.file)
+        .map(([key]) => key);
+      if (users.length > 0) {
+        setVoiceover((v) => users.reduce((next, key) => setVoice(next, key, { reference: undefined }), v));
+      }
+    },
+    [project.voiceover.cast, setVoiceover],
+  );
+
+  /**
+   * Builds a reference from `segments` of `source` — the project's video or
+   * any other recording — and gives it to the speaker; kept as a template too
+   * when `template` names one, in which case the speaker uses the template.
+   */
+  const buildVoice = useCallback(
+    async (
+      key: string,
+      source: string,
+      segments: Array<[number, number]>,
+      template: string | null,
+      referenceCueIds?: string[],
+    ) => {
+      if (!paths) throw new Error("Open the video first: built voices are kept beside it.");
+      const out = referencePath(paths.dir, paths.stem, key);
+      const built = await api.ttsExtractReference(source, segments, out);
+      const kept = template ? await keepVoiceTemplate(template, out) : null;
+      setVoiceover((v) =>
+        setVoice(v, key, {
+          reference: kept?.file ?? out,
+          referenceCueIds: kept ? undefined : referenceCueIds,
+        }),
+      );
+      const from =
+        built.kept < built.lines
+          ? `${built.kept} of ${built.lines} ${referenceCueIds ? "lines" : "segments"}`
+          : `${built.lines} ${referenceCueIds ? "line" : "segment"}${built.lines === 1 ? "" : "s"}`;
+      notify(
+        `Cloning the voice from ${from} (${built.seconds.toFixed(1)} s of ` +
+          `${built.isolated ? "clean speech" : "unseparated sound"})` +
+          (kept ? `, kept as the “${kept.name}” template.` : "."),
+      );
+    },
+    [paths, keepVoiceTemplate, setVoiceover, notify],
+  );
 
   /**
    * Plays one cue's stretch of the video, for judging it as a reference. The
@@ -1297,24 +1398,17 @@ export default function App() {
 
   /** Clones a speaker's voice from the cues chosen in the reference picker. */
   const buildReference = useCallback(
-    async (key: string, chosen: Cue[]) => {
-      if (!paths || !project.videoPath) return;
-      const segments = referenceSegments(chosen);
-      const out = referencePath(paths.dir, paths.stem, key);
-      const built = await api.ttsExtractReference(project.videoPath, segments, out);
-      setVoiceover((v) =>
-        setVoice(v, key, { reference: out, referenceCueIds: chosen.map((c) => c.id) }),
-      );
-      const from =
-        built.kept < built.lines
-          ? `${built.kept} of ${built.lines} lines`
-          : `${built.lines} line${built.lines === 1 ? "" : "s"}`;
-      notify(
-        `Cloning the voice from ${from} (${built.seconds.toFixed(1)} s of ` +
-          `${built.isolated ? "clean speech" : "the film's sound"}).`,
+    async (key: string, chosen: Cue[], template: string | null) => {
+      if (!project.videoPath) return;
+      await buildVoice(
+        key,
+        project.videoPath,
+        referenceSegments(chosen),
+        template,
+        chosen.map((c) => c.id),
       );
     },
-    [paths, project.videoPath, setVoiceover, notify],
+    [project.videoPath, buildVoice],
   );
 
   /** Lines, their cues and their state: worked out once per change. */
@@ -3454,8 +3548,12 @@ export default function App() {
               onSetPronunciation={(word, spoken) =>
                 setVoiceover((v) => setPronunciation(v, word, spoken))
               }
-              onReferenceFromFile={(key) => void referenceFromFile(key)}
+              onReferenceFromFile={setFileReferenceKey}
               onReferenceFromVideo={setReferenceKey}
+              templates={voiceTemplates}
+              onSaveTemplate={saveSpeakerTemplate}
+              onRenameTemplate={renameVoiceTemplate}
+              onDeleteTemplate={deleteVoiceTemplate}
               onDirect={
                 apiKeySet
                   ? () => {
@@ -3847,11 +3945,8 @@ export default function App() {
 
       {referenceKey !== null && (
         <ReferenceDialog
-          speakerName={
-            referenceKey === NO_SPEAKER
-              ? "the unassigned"
-              : speakers.find((s) => s.id === referenceKey)?.name ?? "this speaker"
-          }
+          speakerName={speakerLabel(referenceKey)}
+          templateDefault={templateDefault(referenceKey)}
           cues={cues.filter((c) => castKey(c) === referenceKey)}
           initial={
             new Set(
@@ -3862,8 +3957,24 @@ export default function App() {
           playingId={previewCueId}
           onPlay={previewCue}
           onStop={stopPreview}
-          onBuild={(chosen) => buildReference(referenceKey, chosen)}
+          onBuild={(chosen, template) => buildReference(referenceKey, chosen, template)}
           onClose={() => setReferenceKey(null)}
+        />
+      )}
+
+      {fileReferenceKey !== null && (
+        <VoiceFileDialog
+          speakerName={speakerLabel(fileReferenceKey)}
+          templateDefault={templateDefault(fileReferenceKey)}
+          onBuild={(file, segments, template) =>
+            buildVoice(
+              fileReferenceKey,
+              file,
+              referenceSegments(segments.map(([start, end]) => ({ start, end }))),
+              template,
+            )
+          }
+          onClose={() => setFileReferenceKey(null)}
         />
       )}
 

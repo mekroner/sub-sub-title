@@ -21,6 +21,7 @@ mod spelling;
 mod transcribe;
 mod tts;
 mod vision;
+mod voice_templates;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -98,6 +99,10 @@ pub fn run() {
             tts::tts_unload,
             tts::tts_extract_reference,
             tts::tts_stretch,
+            voice_templates::list_voice_templates,
+            voice_templates::save_voice_template,
+            voice_templates::rename_voice_template,
+            voice_templates::delete_voice_template,
             spelling::check_cues,
             proofread::ai_proofread,
             proofread::cancel_proofread,

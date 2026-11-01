@@ -29,6 +29,7 @@ import type {
   ReferenceResult,
   TtsStatus,
   UnusedFile,
+  VoiceTemplate,
 } from "../types";
 
 export const readTextFile = (path: string) =>
@@ -211,6 +212,15 @@ export const ttsGenerate = (request: TtsRequest) =>
   invoke<TtsResult>("tts_generate", { request });
 /** Stops the voice engine, freeing the GPU memory its model holds. */
 export const ttsUnload = () => invoke<void>("tts_unload");
+/** Voice templates, newest first. */
+export const listVoiceTemplates = () => invoke<VoiceTemplate[]>("list_voice_templates");
+/** Keeps a copy of a reference clip as a new voice template. */
+export const saveVoiceTemplate = (name: string, source: string) =>
+  invoke<VoiceTemplate>("save_voice_template", { name, source });
+export const renameVoiceTemplate = (id: string, name: string) =>
+  invoke<VoiceTemplate>("rename_voice_template", { id, name });
+/** Its clip goes to the Recycle Bin. */
+export const deleteVoiceTemplate = (id: string) => invoke<void>("delete_voice_template", { id });
 export const ttsExtractReference = (
   videoPath: string,
   segments: Array<[number, number]>,

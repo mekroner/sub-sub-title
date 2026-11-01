@@ -2734,6 +2734,17 @@ button.fill-alt.on {
   flex: none;
   color: var(--text-dim);
 }
+.voice-template {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.voice-template-name,
+.cast-template-name {
+  flex: 1;
+  min-width: 0;
+}
 
 
 .clip-line {
@@ -2970,6 +2981,72 @@ button.fill-alt.on {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reference-template {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.reference-template label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.reference-template input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+.modal.voice-file-dialog {
+  width: min(900px, 100%);
+}
+.voice-file-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.voice-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.voice-file-video {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  margin: 0 auto 8px;
+  background: #000;
+  cursor: pointer;
+}
+.voice-file-wave {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.voice-file-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 8px;
+  font-size: 12px;
+}
+.voice-file-zoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
+.voice-file-segments {
+  max-height: 180px;
+}
+.voice-file-segments .reference-time {
   white-space: nowrap;
 }
 .reference-thought {

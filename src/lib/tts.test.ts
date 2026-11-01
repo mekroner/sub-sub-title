@@ -454,6 +454,18 @@ describe("references", () => {
     expect(referenceSegments([cue("a", 0, 40, "a very long monologue")])).toEqual([[0, 30]]);
   });
 
+  it("cuts spans marked by hand the same way", () => {
+    expect(
+      referenceSegments([
+        { start: 50, end: 70 },
+        { start: 5, end: 20 },
+      ]),
+    ).toEqual([
+      [5, 20],
+      [50, 65],
+    ]);
+  });
+
   it("writes takes beside the video", () => {
     expect(takePath("D:\\clips", "film", "abcdef123456", 42)).toBe(
       "D:\\clips\\film.voiceover\\abcdef12-42.wav",

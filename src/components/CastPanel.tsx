@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CastVoice, Cue, Speaker, TtsStatus, Voiceover } from "../types";
+import type { CastVoice, Cue, Speaker, TtsStatus, VoiceTemplate, Voiceover } from "../types";
 import type { GenerationJob } from "../hooks/useVoiceGeneration";
 import { MAX_TAKES_PER_LINE, NO_SPEAKER, castKey, voiceFor, type LineIndex } from "../lib/tts";
 import { basename, voiceTracks } from "../lib/voiceover";
+import { errorMessage } from "../lib/api";
 
 interface Props {
   voiceover: Voiceover;
@@ -22,6 +23,12 @@ interface Props {
   onSetPronunciation: (word: string, spoken: string) => void;
   onReferenceFromFile: (key: string) => void;
   onReferenceFromVideo: (key: string) => void;
+  /** Saved voices, usable by any speaker in any project. */
+  templates: VoiceTemplate[];
+  /** Keeps a speaker's reference as a template, and has them use it. */
+  onSaveTemplate: (key: string, name: string) => Promise<void>;
+  onRenameTemplate: (id: string, name: string) => Promise<void>;
+  onDeleteTemplate: (template: VoiceTemplate) => Promise<void>;
   /** Starts a direction run: puts `/direct` into the chat. Absent without an API key. */
   onDirect?: () => void;
 }
@@ -55,6 +62,10 @@ export function CastPanel({
   onSetPronunciation,
   onReferenceFromFile,
   onReferenceFromVideo,
+  templates,
+  onSaveTemplate,
+  onRenameTemplate,
+  onDeleteTemplate,
   onDirect,
 }: Props) {
   const rows = useMemo<Row[]>(() => {
@@ -178,13 +189,16 @@ export function CastPanel({
             row={row}
             voice={voiceFor(voiceover, row.key)}
             voiceover={voiceover}
+            templates={templates}
             canGenerate={installed && canGenerate}
             onSetVoice={(patch) => onSetVoice(row.key, patch)}
             onGenerate={() => onGenerate(row.pending)}
             onReferenceFromFile={() => onReferenceFromFile(row.key)}
             onReferenceFromVideo={() => onReferenceFromVideo(row.key)}
+            onSaveTemplate={(name) => onSaveTemplate(row.key, name)}
           />
         ))}
+        <VoiceTemplates templates={templates} onRename={onRenameTemplate} onDelete={onDeleteTemplate} />
         <Pronunciations
           pronunciations={voiceover.pronunciations ?? {}}
           onSet={onSetPronunciation}
@@ -278,23 +292,41 @@ function CastRow({
   row,
   voice,
   voiceover,
+  templates,
   canGenerate,
   onSetVoice,
   onGenerate,
   onReferenceFromFile,
   onReferenceFromVideo,
+  onSaveTemplate,
 }: {
   row: Row;
   voice: CastVoice;
   voiceover: Voiceover;
+  templates: VoiceTemplate[];
   canGenerate: boolean;
   onSetVoice: (patch: Partial<CastVoice>) => void;
   onGenerate: () => void;
   onReferenceFromFile: () => void;
   onReferenceFromVideo: () => void;
+  onSaveTemplate: (name: string) => Promise<void>;
 }) {
   const todo = row.missing + row.stale;
   const tracks = voiceTracks(voiceover);
+  const template = templateOf(templates, voice.reference);
+  /** The name being typed to save this speaker's voice as a template; null when not saving. */
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const save = async () => {
+    if (!saving?.trim()) return;
+    try {
+      await onSaveTemplate(saving);
+      setSaving(null);
+      setSaveError(null);
+    } catch (e) {
+      setSaveError(errorMessage(e));
+    }
+  };
   return (
     <div className="cast-row">
       <div className="cast-row-head">
@@ -317,11 +349,76 @@ function CastRow({
 
       <div className="cast-field">
         <span>Voice</span>
-        <span className="cast-reference" title={voice.reference ?? "The model's built-in voice"}>
-          {voice.reference ? basename(voice.reference) : "Default voice"}
-        </span>
+        <select
+          className="cast-voice"
+          value={!voice.reference ? "" : template ? `t:${template.id}` : OWN}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value === OWN) return;
+            const picked = templates.find((t) => `t:${t.id}` === value);
+            onSetVoice(
+              picked
+                ? { reference: picked.file, referenceCueIds: undefined }
+                : { reference: undefined },
+            );
+          }}
+          title={voice.reference ?? "The model's built-in voice"}
+        >
+          <option value="">Model's own voice</option>
+          {templates.length > 0 && (
+            <optgroup label="Voice templates">
+              {templates.map((t) => (
+                <option key={t.id} value={`t:${t.id}`}>
+                  {t.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {voice.reference && !template && (
+            <option value={OWN}>Own clip: {basename(voice.reference)}</option>
+          )}
+        </select>
         {voice.reference && <PreviewButton file={voice.reference} />}
       </div>
+      {saving !== null && (
+        <form
+          className="cast-field"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <span>Name</span>
+          <input
+            type="text"
+            className="cast-template-name"
+            value={saving}
+            autoFocus
+            onChange={(e) => setSaving(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setSaving(null);
+                setSaveError(null);
+              }
+            }}
+          />
+          <button type="submit" className="small" disabled={!saving.trim()}>
+            Save
+          </button>
+          <button
+            type="button"
+            className="small"
+            onClick={() => {
+              setSaving(null);
+              setSaveError(null);
+            }}
+          >
+            Cancel
+          </button>
+        </form>
+      )}
+      {saveError && <p className="error">{saveError}</p>}
       <div className="cast-actions">
         <button
           type="button"
@@ -332,17 +429,22 @@ function CastRow({
         >
           From video…
         </button>
-        <button type="button" className="small" onClick={onReferenceFromFile} title="Clone a voice from an audio file">
+        <button
+          type="button"
+          className="small"
+          onClick={onReferenceFromFile}
+          title="Clone the voice from marked stretches of any video or audio file"
+        >
           File…
         </button>
-        {voice.reference && (
+        {voice.reference && !template && saving === null && (
           <button
             type="button"
             className="small"
-            onClick={() => onSetVoice({ reference: undefined })}
-            title="Use the model's built-in voice"
+            onClick={() => setSaving(row.name)}
+            title="Keep this voice as a template, to use for speakers in any project"
           >
-            Default
+            Save as template…
           </button>
         )}
       </div>
@@ -404,6 +506,80 @@ function CastRow({
           ))}
         </select>
       </div>
+    </div>
+  );
+}
+
+/** The template a reference is, or was saved as. */
+function templateOf(templates: VoiceTemplate[], reference: string | undefined) {
+  if (!reference) return undefined;
+  return templates.find((t) => t.file === reference) ?? templates.find((t) => t.source === reference);
+}
+
+/** The voice menu's value for a reference clip of the speaker's own. */
+const OWN = "own";
+
+/** The saved voices: listening to, renaming and deleting them. */
+function VoiceTemplates({
+  templates,
+  onRename,
+  onDelete,
+}: {
+  templates: VoiceTemplate[];
+  onRename: (id: string, name: string) => Promise<void>;
+  onDelete: (template: VoiceTemplate) => Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const attempt = (work: Promise<void>) =>
+    work.then(
+      () => setError(null),
+      (e) => setError(errorMessage(e)),
+    );
+  return (
+    <div className="cast-row voice-templates">
+      <div className="cast-row-head">
+        <span className="cast-name">Voice templates</span>
+        <span className="cast-count">{templates.length || ""}</span>
+      </div>
+      <p className="hint">
+        Voices kept for any project. Build one with <em>From video…</em> or <em>File…</em> and
+        tick <em>Save as a voice template</em>, then pick it in a speaker's Voice menu.
+      </p>
+      {templates.map((t) => (
+        <div key={t.id} className="voice-template">
+          <PreviewButton file={t.file} />
+          <input
+            className="voice-template-name"
+            defaultValue={t.name}
+            aria-label="Template name"
+            onBlur={(e) => {
+              const name = e.target.value.trim();
+              if (!name) e.target.value = t.name;
+              else if (name !== t.name) void attempt(onRename(t.id, name));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                e.currentTarget.value = t.name;
+                e.currentTarget.blur();
+              }
+            }}
+          />
+          <span className="cast-value" title="Length of the clip">
+            {t.seconds > 0 ? `${t.seconds.toFixed(0)} s` : ""}
+          </span>
+          <button
+            type="button"
+            className="icon-button"
+            title={`Delete the “${t.name}” template`}
+            onClick={() => void attempt(onDelete(t))}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      {error && <p className="error">{error}</p>}
     </div>
   );
 }

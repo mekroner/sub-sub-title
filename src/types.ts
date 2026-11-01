@@ -169,6 +169,26 @@ export interface TakeCheck {
 /** "turbo" takes inline tags like [laugh]; "standard" has an emotion setting. */
 export type TtsEngine = "turbo" | "standard";
 
+/**
+ * A reference clip kept beside the app, not a project, so a voice built once
+ * can be given to speakers in any project. A speaker using one references
+ * `file` directly.
+ */
+export interface VoiceTemplate {
+  id: string;
+  name: string;
+  file: string;
+  /**
+   * The clip it was copied from. A speaker still referencing it is using
+   * this template too, without their lines going stale.
+   */
+  source: string;
+  /** 0 when it could not be measured. */
+  seconds: number;
+  /** Milliseconds since the Unix epoch. */
+  createdAt: number;
+}
+
 /** How one speaker is voiced. */
 export interface CastVoice {
   /** A clip of the voice to clone. Absent means the model's default voice. */
