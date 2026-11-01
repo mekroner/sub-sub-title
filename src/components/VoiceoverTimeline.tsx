@@ -34,7 +34,8 @@ import {
   type VoItem,
   type VoSelection,
 } from "../lib/voSelection";
-import { MAX_ZOOM, MIN_ZOOM, WHEEL_ZOOM_STEP, wheelPixels } from "./WaveformPane";
+import { wheelPixels } from "./WaveformPane";
+import { WHEEL_ZOOM_STEP, fitZoom, stepZoom } from "../lib/zoom";
 import { formatTick, prepareCanvas, tickStep } from "../lib/ruler";
 
 interface Props {
@@ -57,6 +58,8 @@ interface Props {
   decodeVersion: number;
   onSeek: (time: number) => void;
   onZoomChange: (zoom: number) => void;
+  /** Bumped to zoom until the whole timeline fits, from the start. */
+  fitRequest?: number;
   onSelect: (change: SelectionChange) => void;
   /** Every selected cue and clip moved by `delta` seconds; `drag` identifies the gesture. */
   onMoveSelection: (delta: number, drag: string) => void;
@@ -146,6 +149,7 @@ export function VoiceoverTimeline({
   decodeVersion,
   onSeek,
   onZoomChange,
+  fitRequest = 0,
   onSelect,
   onMoveSelection,
   onPatchTrack,
@@ -222,6 +226,23 @@ export function VoiceoverTimeline({
   const laneOf = new Map(lanes.map((lane) => [lane.track.id, lane]));
   const originalHeight = original ? heightOf(original) : ORIGINAL_LANE_HEIGHT;
   const contentWidth = Math.ceil((Math.max(duration, 1) + TAIL_SECONDS) * zoom);
+
+  // Fit: the whole timeline in view, from the start. Only a new request
+  // fits; zooming afterwards must not re-fit.
+  useEffect(() => {
+    if (!fitRequest) return;
+    const el = scrollerRef.current;
+    const next = fitZoom(Math.max(duration, ...voiceover.clips.map(clipEnd)), el?.clientWidth ?? 0);
+    if (next === null || !el) return;
+    if (next !== zoom) {
+      pendingScroll.current = 0;
+      onZoomChange(next);
+    } else {
+      el.scrollLeft = 0;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitRequest]);
+
   const speakerById = useMemo(() => new Map(speakers.map((s) => [s.id, s])), [speakers]);
 
   // --- Viewport -----------------------------------------------------------
@@ -292,11 +313,7 @@ export function VoiceoverTimeline({
       const rect = el.getBoundingClientRect();
       const pointer = e.clientX - rect.left;
       const time = (el.scrollLeft + pointer) / zoom;
-      const next = clamp(
-        Math.round(delta < 0 ? zoom * WHEEL_ZOOM_STEP : zoom / WHEEL_ZOOM_STEP),
-        MIN_ZOOM,
-        MAX_ZOOM,
-      );
+      const next = stepZoom(zoom, delta < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP);
       if (next === zoom) return;
       pendingScroll.current = Math.max(0, time * next - pointer);
       onZoomChange(next);

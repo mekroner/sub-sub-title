@@ -3,9 +3,10 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import type { Edit, EditItem, EditTrack } from "../../types";
 import { itemEnd, previewUnsupported, sourceName, sourceOf } from "../../lib/edit";
 import { snapTime } from "../../lib/voiceover";
-import { clamp, formatShort } from "../../lib/time";
+import { formatShort } from "../../lib/time";
 import { formatTick, prepareCanvas, tickStep } from "../../lib/ruler";
-import { MAX_ZOOM, MIN_ZOOM, WHEEL_ZOOM_STEP, wheelPixels } from "../WaveformPane";
+import { wheelPixels } from "../WaveformPane";
+import { WHEEL_ZOOM_STEP, fitZoom, stepZoom } from "../../lib/zoom";
 
 const RULER_HEIGHT = 24;
 const MAIN_HEIGHT = 58;
@@ -28,6 +29,8 @@ interface Props {
   selectedId: string | null;
   onSeek: (t: number) => void;
   onZoomChange: (zoom: number) => void;
+  /** Bumped to zoom until the whole timeline fits, from the start. */
+  fitRequest?: number;
   onSelect: (id: string | null) => void;
   onMove: (id: string, start: number, trackId: string | undefined, drag: string) => void;
   onTrimStart: (id: string, t: number, drag: string) => void;
@@ -78,6 +81,7 @@ export function EditTimeline({
   selectedId,
   onSeek,
   onZoomChange,
+  fitRequest = 0,
   onSelect,
   onMove,
   onTrimStart,
@@ -100,6 +104,23 @@ export function EditTimeline({
   const lanes = useMemo(() => [...edit.tracks].reverse(), [edit.tracks]);
   const end = edit.items.reduce((e, i) => Math.max(e, itemEnd(i)), 0);
   const contentWidth = Math.max(view.width, (end + TAIL_SECONDS) * zoom);
+
+  // Fit: the whole timeline in view, from the start. Only a new request
+  // fits; zooming afterwards must not re-fit.
+  useEffect(() => {
+    if (!fitRequest) return;
+    const el = scrollerRef.current;
+    const next = fitZoom(end, el?.clientWidth ?? 0);
+    if (next === null || !el) return;
+    if (next !== zoom) {
+      pendingScroll.current = 0;
+      onZoomChange(next);
+    } else {
+      el.scrollLeft = 0;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitRequest]);
+
 
   useLayoutEffect(() => {
     const el = scrollerRef.current;
@@ -144,11 +165,7 @@ export function EditTimeline({
       const rect = el.getBoundingClientRect();
       const pointer = e.clientX - rect.left;
       const at = (el.scrollLeft + pointer) / zoom;
-      const next = clamp(
-        Math.round(delta < 0 ? zoom * WHEEL_ZOOM_STEP : zoom / WHEEL_ZOOM_STEP),
-        MIN_ZOOM,
-        MAX_ZOOM,
-      );
+      const next = stepZoom(zoom, delta < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP);
       if (next === zoom) return;
       pendingScroll.current = Math.max(0, at * next - pointer);
       onZoomChange(next);

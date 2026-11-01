@@ -15,7 +15,7 @@ import {
 } from "../lib/edit";
 import { clamp } from "../lib/time";
 import { makeId } from "../lib/ids";
-import { MAX_ZOOM, MIN_ZOOM, WHEEL_ZOOM_STEP } from "../components/WaveformPane";
+import { WHEEL_ZOOM_STEP, stepZoom } from "../lib/zoom";
 
 /** Longest the clock waits for the preview to catch up, in milliseconds. */
 const MAX_STALL_MS = 1500;
@@ -143,9 +143,7 @@ export function useEdit(edit: Edit | undefined, setEdit: SetEdit, active: boolea
   );
 
   const zoomBy = useCallback((direction: number) => {
-    setZoom((z) =>
-      clamp(Math.round(direction > 0 ? z * WHEEL_ZOOM_STEP : z / WHEEL_ZOOM_STEP), MIN_ZOOM, MAX_ZOOM),
-    );
+    setZoom((z) => stepZoom(z, direction > 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP));
   }, []);
 
   const actions = useMemo(

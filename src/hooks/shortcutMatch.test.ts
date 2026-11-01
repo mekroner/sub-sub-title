@@ -9,6 +9,9 @@ describe("matchShortcut", () => {
     expect(matchShortcut({ code: "ArrowUp" })).toEqual({ type: "selectPrevious" });
     expect(matchShortcut({ code: "ArrowDown" })).toEqual({ type: "selectNext" });
     expect(matchShortcut({ code: "Enter" })).toEqual({ type: "jumpToSelected" });
+    expect(matchShortcut({ code: "KeyZ" })).toEqual({ type: "zoomFit" });
+    // Ctrl+Z is still undo.
+    expect(matchShortcut({ code: "KeyZ", ctrlKey: true })).toEqual({ type: "undo" });
   });
 
   it("assigns speakers from the digit row", () => {

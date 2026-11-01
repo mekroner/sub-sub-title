@@ -33,6 +33,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ["Ctrl + Shift + S", "Save the project as…"],
   ["Ctrl + Z / Ctrl + Y", "Undo / redo"],
   ["+ / −", "Zoom the waveform or the voiceover timeline in / out"],
+  ["Z", "Zoom to fit the whole timeline"],
   ["Alt + scroll", "Zoom the waveform or the voiceover timeline, anchored at the pointer"],
   ["D", "Voiceover: duck or un-duck the selected cues"],
   ["Scroll on waveform", "Pan through time"],

@@ -5,19 +5,24 @@
  */
 
 /** Ruler steps, in seconds; the smallest that leaves room for a label wins. */
-export const TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800];
+export const TICK_STEPS = [
+  0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 28800,
+];
 export const MIN_TICK_PX = 70;
 
 /** Seconds between ticks at `zoom` pixels per second. */
 export function tickStep(zoom: number): number {
-  return TICK_STEPS.find((s) => s * zoom >= MIN_TICK_PX) ?? 3600;
+  return TICK_STEPS.find((s) => s * zoom >= MIN_TICK_PX) ?? 86400;
 }
 
+/** `m:ss` (with tenths when ticks are that close), or `h:mm:ss` from an hour on. */
 export function formatTick(seconds: number, step: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds - m * 60;
-  const text = step < 1 ? s.toFixed(1) : String(Math.round(s));
-  return `${m}:${text.padStart(step < 1 ? 4 : 2, "0")}`;
+  const total = step < 1 ? Math.round(seconds * 10) / 10 : Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total - h * 3600) / 60);
+  const s = total - h * 3600 - m * 60;
+  const sec = step < 1 ? s.toFixed(1).padStart(4, "0") : String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 }
 
 /** Sizes the canvas's backing store for the screen and returns a cleared context. */

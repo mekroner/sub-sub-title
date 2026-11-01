@@ -3,9 +3,9 @@ import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.esm.js";
 import type { Cue, Section, Speaker } from "../types";
 import { contrastText, thoughtColor, withAlpha } from "../lib/colors";
-import { clamp } from "../lib/time";
 import { selectModeOf, type SelectMode } from "../hooks/useCueSelection";
 import { SectionLane } from "./SectionLane";
+import { WHEEL_ZOOM_STEP, fitZoom, stepZoom } from "../lib/zoom";
 
 interface Props {
   videoEl: HTMLVideoElement | null;
@@ -27,6 +27,8 @@ interface Props {
   onContextMenuCue: (id: string, x: number, y: number) => void;
   onSeek: (time: number) => void;
   onZoomChange: (zoom: number) => void;
+  /** Bumped to zoom until the whole video fits, from the start. */
+  fitRequest?: number;
   /** Timeline flags, drawn in their own lane under the waveform. */
   sections: Section[];
   selectedSectionId: string | null;
@@ -41,11 +43,8 @@ interface Props {
 /** Regions outside the viewport are not created at all; this is the margin. */
 const WINDOW_PADDING_SECONDS = 20;
 
-/** Waveform zoom bounds, in pixels per second. */
-export const MIN_ZOOM = 5;
-export const MAX_ZOOM = 600;
-/** Multiplier per wheel notch; gentler than the keyboard's 1.4x. */
-export const WHEEL_ZOOM_STEP = 1.15;
+// Zoom bounds and steps live in lib/zoom; re-exported for the timelines.
+export { MAX_ZOOM, MIN_ZOOM, WHEEL_ZOOM_STEP } from "../lib/zoom";
 
 /**
  * Wheel deltas arrive in pixels, lines or pages depending on the device.
@@ -67,6 +66,7 @@ export function WaveformPane({
   speakers,
   selectedIds,
   zoom,
+  fitRequest = 0,
   follow,
   onSelectCue,
   onRetimeCue,
@@ -259,6 +259,18 @@ export function WaveformPane({
     }
   }, [follow, ready]);
 
+  // --- Fit: the whole video in the pane, from the start ---------------------
+  useEffect(() => {
+    if (!fitRequest) return;
+    const next = fitZoom(duration, containerRef.current?.clientWidth ?? 0);
+    if (next === null) return;
+    pendingScroll.current = 0;
+    if (next !== zoom) onZoomChange(next);
+    else wsRef.current?.setScroll(0);
+    // Only a new request fits; zooming afterwards must not re-fit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitRequest]);
+
   // --- Wheel: Alt to zoom, otherwise pan through time ----------------------
   useEffect(() => {
     // The whole pane, not just the canvas: the section lane is a sibling below
@@ -279,7 +291,7 @@ export function WaveformPane({
 
       if (event.altKey) {
         const factor = delta < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP;
-        const next = clamp(Math.round(zoom * factor), MIN_ZOOM, MAX_ZOOM);
+        const next = stepZoom(zoom, factor);
         if (next === zoom) return;
 
         // Keep the instant under the pointer fixed while the scale changes.

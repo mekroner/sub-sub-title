@@ -7,7 +7,8 @@ import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-
 
 import { TransportBar } from "./components/TransportBar";
 import { VideoPane } from "./components/VideoPane";
-import { MAX_ZOOM, MIN_ZOOM, WaveformPane } from "./components/WaveformPane";
+import { WaveformPane } from "./components/WaveformPane";
+import { KEY_ZOOM_STEP, SLIDER_STEPS, sliderToZoom, stepZoom, zoomToSlider } from "./lib/zoom";
 import { CueList } from "./components/CueList";
 import { SpeakerPanel } from "./components/SpeakerPanel";
 import { StoryPanel } from "./components/StoryPanel";
@@ -320,6 +321,8 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [zoom, setZoom] = useState(50);
+  /** Bumped to fit the whole timeline in the waveform or the voiceover timeline. */
+  const [fitRequest, setFitRequest] = useState(0);
   const [dropActive, setDropActive] = useState(false);
   // Transport preferences are per-machine UI state, so they live in
   // localStorage rather than the project or the app config file.
@@ -2510,9 +2513,7 @@ export default function App() {
   }, [find, matches, setCues, notify]);
 
   const zoomBy = useCallback((direction: number) => {
-    setZoom((z) =>
-      clamp(Math.round(z * (direction > 0 ? 1.4 : 1 / 1.4)), MIN_ZOOM, MAX_ZOOM),
-    );
+    setZoom((z) => stepZoom(z, direction > 0 ? KEY_ZOOM_STEP : 1 / KEY_ZOOM_STEP));
   }, []);
 
   // --- Window title and close guard ---------------------------------------
@@ -2612,6 +2613,7 @@ export default function App() {
       undo,
       redo,
       zoom: zoomBy,
+      zoomFit: () => setFitRequest((n) => n + 1),
       toggleFollow: () => setFollow((f) => !f),
       toggleGhost,
       toggleDuck: () => undefined,
@@ -2669,6 +2671,7 @@ export default function App() {
     deleteSelected: () => editRef.current?.deleteSelected(),
     nudge: (_edge, direction) => editRef.current?.nudge(direction),
     zoom: (direction) => editRef.current?.zoom(direction),
+    zoomFit: () => editRef.current?.zoomFit(),
     selectAll: () => undefined,
     jumpSection: () => undefined,
     toggleFollow: () => undefined,
@@ -3264,14 +3267,23 @@ export default function App() {
         <div className="toolbar-group" hidden={editMode}>
           <label className="zoom-control" title="Waveform zoom">
             <span>Zoom</span>
+            {/* Log scale: every decade of zoom gets the same room. */}
             <input
               type="range"
-              min={MIN_ZOOM}
-              max={MAX_ZOOM}
-              value={zoom}
-              onChange={(e) => setZoom(Number(e.target.value))}
+              min={0}
+              max={SLIDER_STEPS}
+              value={zoomToSlider(zoom)}
+              onChange={(e) => setZoom(sliderToZoom(Number(e.target.value)))}
             />
           </label>
+          <button
+            type="button"
+            className="small"
+            title="Zoom to fit the whole timeline (Z)"
+            onClick={() => setFitRequest((n) => n + 1)}
+          >
+            Fit
+          </button>
           <button
             type="button"
             className={follow ? "toggle on" : "toggle"}
@@ -3361,6 +3373,7 @@ export default function App() {
             // Clicking a region must move the video, not just the app's clock.
             onSeek={seek}
             onZoomChange={setZoom}
+            fitRequest={fitRequest}
             sections={sections}
             selectedSectionId={selectedSectionId}
             onSelectSection={setSelectedSectionId}
@@ -3602,6 +3615,7 @@ export default function App() {
               decodeVersion={decodeVersion}
               onSeek={seek}
               onZoomChange={setZoom}
+            fitRequest={fitRequest}
               onSelect={selectVo}
               onMoveSelection={moveSelection}
               onPatchTrack={patchTrackById}

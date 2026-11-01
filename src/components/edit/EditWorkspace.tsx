@@ -54,6 +54,7 @@ export interface EditHandle {
   deleteSelected: () => void;
   nudge: (direction: number) => void;
   zoom: (direction: number) => void;
+  zoomFit: () => void;
   clearSelection: () => void;
   addFiles: (paths: string[]) => Promise<void>;
 }
@@ -116,6 +117,8 @@ export function EditWorkspace({
   const stateRef = useRef(state);
   stateRef.current = state;
   const [tab, setTab] = useState<EditSideTab>("media");
+  /** Bumped to fit the whole timeline in view. */
+  const [fitRequest, setFitRequest] = useState(0);
   const [bake, setBake] = useState<{ output: string } | null>(null);
   const [binDrag, setBinDrag] = useState<{ sourceId: string; x: number; y: number } | null>(null);
 
@@ -186,6 +189,7 @@ export function EditWorkspace({
       deleteSelected: state.deleteSelected,
       nudge: state.nudge,
       zoom: state.zoomBy,
+      zoomFit: () => setFitRequest((n) => n + 1),
       clearSelection: () => state.setSelectedId(null),
       addFiles,
     }),
@@ -405,6 +409,14 @@ export function EditWorkspace({
           <button type="button" className="small" onClick={addText} title="Add a text item at the playhead">
             + Text
           </button>
+          <button
+            type="button"
+            className="small"
+            onClick={() => setFitRequest((n) => n + 1)}
+            title="Zoom to fit the whole timeline (Z)"
+          >
+            Fit
+          </button>
           <span className="toolbar-spacer" />
           <span
             className={`edit-bake-state ${bakeState}`}
@@ -497,6 +509,7 @@ export function EditWorkspace({
           selectedId={state.selectedId}
           onSeek={state.seek}
           onZoomChange={state.setZoom}
+          fitRequest={fitRequest}
           onSelect={(id) => {
             state.setSelectedId(id);
             if (id) setTab("item");

@@ -31,6 +31,8 @@ export interface ShortcutActions {
   undo: () => void;
   redo: () => void;
   zoom: (direction: number) => void;
+  /** Zooms out (or in) until the whole timeline fits. */
+  zoomFit: () => void;
   toggleFollow: () => void;
   toggleGhost: () => void;
   /** The Voiceover tab's D: ducks or un-ducks the selected cues. */
@@ -146,6 +148,9 @@ export function useShortcuts(actions: ShortcutActions, enabled: boolean) {
           break;
         case "zoom":
           a.zoom(command.direction);
+          break;
+        case "zoomFit":
+          a.zoomFit();
           break;
         case "toggleFollow":
           a.toggleFollow();

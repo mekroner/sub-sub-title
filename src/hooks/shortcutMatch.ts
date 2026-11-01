@@ -37,6 +37,7 @@ export type ShortcutCommand =
   | { type: "undo" }
   | { type: "redo" }
   | { type: "zoom"; direction: number }
+  | { type: "zoomFit" }
   | { type: "toggleFollow" }
   | { type: "toggleGhost" }
   | { type: "toggleDuck" }
@@ -177,6 +178,8 @@ export function matchShortcut(event: KeyLike): ShortcutCommand | null {
     case "Minus":
     case "NumpadSubtract":
       return { type: "zoom", direction: -1 };
+    case "KeyZ":
+      return { type: "zoomFit" };
     default:
       return null;
   }
