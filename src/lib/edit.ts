@@ -878,7 +878,7 @@ function coerceTrack(raw: unknown): EditTrack | null {
   };
 }
 
-function coerceKey(raw: unknown): TransformKey | null {
+export function coerceKey(raw: unknown): TransformKey | null {
   const k = record(raw);
   if (!k) return null;
   const scale = finite(k.scale, 1);
@@ -890,7 +890,7 @@ function coerceKey(raw: unknown): TransformKey | null {
   };
 }
 
-function coerceStyle(raw: unknown): TextStyle {
+export function coerceStyle(raw: unknown): TextStyle {
   const s = record(raw) ?? {};
   const outline = record(s.outline);
   const shadow = record(s.shadow);

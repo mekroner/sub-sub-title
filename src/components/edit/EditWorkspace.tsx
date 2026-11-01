@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, Ref } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { Edit, EditSource, MediaInfo, Project, RecutRef } from "../../types";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import type { Edit, EditSource, MediaInfo, Project, RecutRef, TemplateFile } from "../../types";
 import { cutSegments, describeRecut, hasFlags, previousSegments, recutProject } from "../../lib/recut";
 import * as api from "../../lib/api";
 import { errorMessage } from "../../lib/api";
@@ -35,6 +35,16 @@ import {
   type ItemPatch,
 } from "../../lib/edit";
 import { makeId } from "../../lib/ids";
+import {
+  TEMPLATE_EXTENSION,
+  instantiateTemplate,
+  parseTemplate,
+  serializeTemplate,
+  templateCandidates,
+  templateFrom,
+} from "../../lib/template";
+import { assetsFolder, encodeImagePng, writeTemplateImages } from "../../lib/templateIO";
+import { splitPath } from "../../lib/editPlan";
 import { useTextRasters } from "../../hooks/useTextRasters";
 import { bakeBase, buildRenderPlan, nextBakePath, planHash, samePath } from "../../lib/editPlan";
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../../lib/dropPaths";
@@ -209,6 +219,114 @@ export function EditWorkspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [active, keysEnabled]);
+
+  // --- Overlay templates ---------------------------------------------------------
+  const [templates, setTemplates] = useState<TemplateFile[]>([]);
+  const refreshTemplates = useCallback(() => {
+    api.listTemplates().then(setTemplates).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    if (active) refreshTemplates();
+  }, [active, refreshTemplates]);
+
+  const canSaveTemplate = edit ? templateCandidates(edit, state.selectedIds).usable.length > 0 : false;
+
+  /** Saves the selected overlay items, images and all, to the library. */
+  const saveTemplate = useCallback(async () => {
+    if (!edit) return;
+    const { usable } = templateCandidates(edit, state.selectedIds);
+    try {
+      const images = new Map<string, Awaited<ReturnType<typeof encodeImagePng>>>();
+      for (const item of usable) {
+        if (item.kind !== "image" || images.has(item.sourceId)) continue;
+        const source = edit.sources.find((s) => s.id === item.sourceId);
+        if (source) images.set(source.id, await encodeImagePng(source.path));
+      }
+      const firstText = usable.find((i) => i.kind === "text");
+      const suggested =
+        (firstText && firstText.kind === "text" ? firstText.text.split(/\r?\n/)[0] : "")
+          .replace(/[\\/:*?"<>|]+/g, " ")
+          .trim()
+          .slice(0, 40) || "Template";
+      const dir = await api.templatesDir();
+      const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+      const target = await saveDialog({
+        defaultPath: `${dir}${sep}${suggested}.${TEMPLATE_EXTENSION}`,
+        filters: [{ name: "Overlay template", extensions: [TEMPLATE_EXTENSION] }],
+      });
+      if (!target) return;
+      const name = splitPath(target).base.replace(/\.[^.]+$/, "");
+      const made = templateFrom(edit, state.selectedIds, name, images);
+      if (!made) return notify("Select text or image items on overlay tracks to make a template.", "error");
+      await api.writeTextFile(target, serializeTemplate(made.template));
+      refreshTemplates();
+      notify(
+        `Saved the template “${name}”.${
+          made.skipped > 0 ? ` ${made.skipped} selected item${made.skipped === 1 ? " was" : "s were"} left out: only overlay text and images go in a template.` : ""
+        }`,
+      );
+    } catch (e) {
+      notify(errorMessage(e), "error");
+    }
+  }, [edit, state.selectedIds, notify, refreshTemplates]);
+
+  /** Inserts a template at the playhead, its images written beside the project. */
+  const insertTemplate = useCallback(
+    async (path: string) => {
+      if (!edit) return;
+      try {
+        const template = parseTemplate(await api.readTextFile(path));
+        const folder = assetsFolder(projectPath, edit);
+        if (!folder && Object.keys(template.images).length > 0) {
+          return notify("Save the project first: its template images need a folder beside it.", "error");
+        }
+        const paths = folder ? await writeTemplateImages(template, folder) : new Map<string, string>();
+        // Ids made up front, so the update and the selection agree.
+        const pool = Array.from({ length: 4 * template.layers.length + 16 }, () => makeId());
+        const ids = () => {
+          let i = 0;
+          return () => pool[i++];
+        };
+        const at = state.time;
+        const preview = instantiateTemplate(edit, template, at, paths, ids());
+        setDefined((e) => instantiateTemplate(e, template, at, paths, ids()).edit);
+        state.selectItem(preview.itemIds[0] ?? null);
+        for (const id of preview.itemIds.slice(1)) state.selectItem(id, "add");
+        notify(`Inserted “${template.name}” at ${formatShort(at)}.`);
+      } catch (e) {
+        notify(errorMessage(e), "error");
+      }
+    },
+    [edit, projectPath, state, setDefined, notify],
+  );
+
+  /** Copies a template file from anywhere into the library. */
+  const importTemplate = useCallback(async () => {
+    const picked = await openDialog({
+      multiple: true,
+      filters: [{ name: "Overlay template", extensions: [TEMPLATE_EXTENSION] }],
+    });
+    const paths = Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
+    if (paths.length === 0) return;
+    try {
+      const dir = await api.templatesDir();
+      const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+      const taken = new Set(templates.map((t) => t.name.toLowerCase()));
+      for (const path of paths) {
+        const raw = await api.readTextFile(path);
+        parseTemplate(raw); // Refuses a file that is not a template before copying it.
+        const stem = splitPath(path).base.replace(/\.[^.]+$/, "");
+        let name = stem;
+        for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${stem} ${n}`;
+        taken.add(name.toLowerCase());
+        await api.writeTextFile(`${dir}${sep}${name}.${TEMPLATE_EXTENSION}`, raw);
+      }
+      refreshTemplates();
+      notify(`Imported ${paths.length} template${paths.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      notify(errorMessage(e), "error");
+    }
+  }, [templates, notify, refreshTemplates]);
 
   // --- Dragging a source from the bin onto a track ------------------------------
   // Pointer events rather than HTML drag and drop, which the webview withholds
@@ -412,6 +530,15 @@ export function EditWorkspace({
           <button
             type="button"
             className="small"
+            disabled={!canSaveTemplate}
+            onClick={() => void saveTemplate()}
+            title="Save the selected overlay items as a template (Ctrl+click to select several)"
+          >
+            Save as template…
+          </button>
+          <button
+            type="button"
+            className="small"
             onClick={() => setFitRequest((n) => n + 1)}
             title="Zoom to fit the whole timeline (Z)"
           >
@@ -465,6 +592,9 @@ export function EditWorkspace({
           onTab={setTab}
           selected={selected}
           onAddFiles={() => void pickFiles()}
+          templates={templates}
+          onInsertTemplate={(path) => void insertTemplate(path)}
+          onImportTemplate={() => void importTemplate()}
           onSourcePointerDown={startBinDrag}
           onAppendSource={appendSource}
           onRemoveSource={(id) => setDefined((e) => removeSource(e, id))}
@@ -507,11 +637,12 @@ export function EditWorkspace({
           playing={state.playing}
           zoom={state.zoom}
           selectedId={state.selectedId}
+          selectedIds={state.selectedIds}
           onSeek={state.seek}
           onZoomChange={state.setZoom}
           fitRequest={fitRequest}
-          onSelect={(id) => {
-            state.setSelectedId(id);
+          onSelect={(id, mode) => {
+            state.selectItem(id, mode);
             if (id) setTab("item");
           }}
           onMove={state.move}

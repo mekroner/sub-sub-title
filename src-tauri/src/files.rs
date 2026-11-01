@@ -5,6 +5,7 @@ use encoding_rs::{UTF_16BE, UTF_16LE, WINDOWS_1252};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager};
 
 /// SRT files arrive from Subtitle Edit, Whisper, and the wider internet, so they
 /// are frequently not UTF-8. Sniff the BOM, then fall back to Windows-1252 —
@@ -193,8 +194,149 @@ pub fn voiceover_trash_files(dir: String, files: Vec<String>) -> AppResult<u64> 
     Ok(bytes)
 }
 
+// --- Overlay templates and their images ---------------------------------------
+
+/// The folder templates are saved to and listed from, made on first use.
+fn templates_folder(app: &AppHandle) -> AppResult<PathBuf> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::msg(format!("No app data directory: {e}")))?
+        .join("templates");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+#[tauri::command]
+pub fn templates_dir(app: AppHandle) -> AppResult<String> {
+    Ok(templates_folder(&app)?.to_string_lossy().to_string())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateFile {
+    pub path: String,
+    pub name: String,
+    /// Milliseconds since the epoch.
+    pub modified: u64,
+}
+
+/// Every `.sstoverlay` in the templates folder, newest first.
+#[tauri::command]
+pub fn list_templates(app: AppHandle) -> AppResult<Vec<TemplateFile>> {
+    let dir = templates_folder(&app)?;
+    let mut found: Vec<TemplateFile> = std::fs::read_dir(&dir)?
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("sstoverlay")))
+        .map(|e| {
+            let path = e.path();
+            let modified = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            TemplateFile {
+                name: path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                path: path.to_string_lossy().to_string(),
+                modified,
+            }
+        })
+        .collect();
+    found.sort_by_key(|f| std::cmp::Reverse(f.modified));
+    Ok(found)
+}
+
+/// Undoes `encodeURIComponent`, so a header can carry any path.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Only PNGs, and only into a project's `… assets` folder: this writes bytes
+/// the webview hands it, so it must not be able to write anything else.
+fn writable_asset(path: &Path) -> bool {
+    let png = path.extension().is_some_and(|x| x.eq_ignore_ascii_case("png"));
+    let in_assets = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n.to_string_lossy().ends_with(" assets"));
+    png && in_assets && path.is_absolute()
+}
+
+/// Writes one PNG — an image a template carried — into a project's assets
+/// folder. The body is the raw bytes; the `x-path` header the percent-encoded
+/// path. Returns false when an identical file was already there.
+#[tauri::command]
+pub fn write_asset_png(request: tauri::ipc::Request<'_>) -> AppResult<bool> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::msg("Expected the image as raw bytes."));
+    };
+    let path = request
+        .headers()
+        .get("x-path")
+        .and_then(|v| v.to_str().ok())
+        .and_then(percent_decode)
+        .ok_or_else(|| AppError::msg("No file path for the image."))?;
+    let path = PathBuf::from(path);
+    if !writable_asset(&path) || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(AppError::msg(format!("Not a place for an image: {}", path.display())));
+    }
+    if std::fs::read(&path).is_ok_and(|old| old == *bytes) {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, bytes)
+        .map_err(|e| AppError::msg(format!("Could not write {}: {e}", path.display())))?;
+    Ok(true)
+}
+
+/// The bytes of an image file, for the webview to re-encode as a PNG inside
+/// a template. Images only: it hands file contents to the page.
+#[tauri::command]
+pub fn read_image_file(path: String) -> AppResult<tauri::ipc::Response> {
+    let p = Path::new(&path);
+    let image = p.extension().is_some_and(|x| {
+        ["png", "jpg", "jpeg", "webp", "bmp"].iter().any(|e| x.eq_ignore_ascii_case(e))
+    });
+    if !image {
+        return Err(AppError::msg(format!("Not an image: {path}")));
+    }
+    let bytes = std::fs::read(p).map_err(|e| AppError::msg(format!("Could not read {path}: {e}")))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn decodes_a_percent_encoded_path() {
+        assert_eq!(percent_decode("C%3A%5CFilm%20M%C3%BCller%5Ca.png").as_deref(), Some("C:\\Film Müller\\a.png"));
+        assert_eq!(percent_decode("bad%2").as_deref(), None);
+    }
+
+    #[test]
+    fn writes_images_only_into_an_assets_folder() {
+        let root = std::env::temp_dir();
+        assert!(writable_asset(&root.join("Film assets").join("img-abc.png")));
+        assert!(!writable_asset(&root.join("Film assets").join("img-abc.exe")));
+        assert!(!writable_asset(&root.join("Documents").join("img-abc.png")));
+        assert!(!writable_asset(Path::new("Film assets/img-abc.png")));
+    }
+
     use super::*;
 
     #[test]

@@ -18,6 +18,7 @@ import type {
   ProjectPaths,
   ProofreadCorrection,
   RenderPlan,
+  TemplateFile,
   ScriptLine,
   Settings,
   SpellDialect,
@@ -147,6 +148,23 @@ export const bakeEdit = (args: { plan: RenderPlan; outputPath: string; crf?: num
   invoke<void>("bake_edit", args);
 
 export const cancelBake = () => invoke<void>("cancel_bake");
+
+/** The folder overlay templates are saved to and listed from. */
+export const templatesDir = () => invoke<string>("templates_dir");
+
+/** Every template in that folder, newest first. */
+export const listTemplates = () => invoke<TemplateFile[]>("list_templates");
+
+/**
+ * Writes a PNG into a project's assets folder; false when an identical file
+ * was already there. The path is percent-encoded: headers carry ASCII only.
+ */
+export const writeAssetPng = (path: string, png: Uint8Array) =>
+  invoke<boolean>("write_asset_png", png, { headers: { "x-path": encodeURIComponent(path) } });
+
+/** An image file's bytes. */
+export const readImageFile = async (path: string) =>
+  new Uint8Array(await invoke<ArrayBuffer>("read_image_file", { path }));
 
 /** Sends an earlier bake nothing uses any more to the Recycle Bin. */
 export const trashBake = (path: string) => invoke<void>("trash_bake", { path });

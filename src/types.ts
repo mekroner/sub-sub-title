@@ -923,3 +923,11 @@ export interface GhostRequest {
   system: string;
   user: string;
 }
+
+/** An overlay template in the library folder. */
+export interface TemplateFile {
+  path: string;
+  name: string;
+  /** Milliseconds since the epoch. */
+  modified: number;
+}

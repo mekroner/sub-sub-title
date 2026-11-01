@@ -3390,3 +3390,12 @@ button.fill-alt.on {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
+
+/* The template library, under the media list. */
+.edit-templates-header {
+  border-top: 1px solid var(--border);
+}
+.edit-template-entry {
+  cursor: default;
+  align-items: center;
+}

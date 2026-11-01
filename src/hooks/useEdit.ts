@@ -27,7 +27,32 @@ export type SetEdit = (fn: (edit: Edit) => Edit, mergeKey?: string) => void;
 export function useEdit(edit: Edit | undefined, setEdit: SetEdit, active: boolean) {
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The items picked on the timeline; the primary one is what the inspector
+  // shows and the stage outlines.
+  const [selection, setSelection] = useState<{ ids: Set<string>; primary: string | null }>(() => ({
+    ids: new Set(),
+    primary: null,
+  }));
+  const selectedId = selection.primary;
+  const selectedIds = selection.ids;
+  /** Selects one item alone, or nothing. */
+  const setSelectedId = useCallback((id: string | null) => {
+    setSelection({ ids: id ? new Set([id]) : new Set(), primary: id });
+  }, []);
+  /** Ctrl toggles an item in or out; Shift adds it; a plain click picks it alone. */
+  const selectItem = useCallback((id: string | null, mode: "replace" | "toggle" | "add" = "replace") => {
+    setSelection((current) => {
+      if (!id || mode === "replace") return { ids: id ? new Set([id]) : new Set(), primary: id };
+      const ids = new Set(current.ids);
+      if (mode === "toggle" && ids.has(id)) {
+        ids.delete(id);
+        const primary = current.primary === id ? ([...ids].pop() ?? null) : current.primary;
+        return { ids, primary };
+      }
+      ids.add(id);
+      return { ids, primary: id };
+    });
+  }, []);
   const [zoom, setZoom] = useState(40);
 
   const end = edit ? editEnd(edit) : 0;
@@ -80,10 +105,14 @@ export function useEdit(edit: Edit | undefined, setEdit: SetEdit, active: boolea
     if (!active) setPlaying(false);
   }, [active]);
 
-  // An item that is gone (undo, delete) is no longer selected.
+  // Items that are gone (undo, delete) are no longer selected.
   useEffect(() => {
-    if (selectedId && !edit?.items.some((i) => i.id === selectedId)) setSelectedId(null);
-  }, [edit, selectedId]);
+    const present = new Set(edit?.items.map((i) => i.id) ?? []);
+    if ([...selection.ids].every((id) => present.has(id))) return;
+    const ids = new Set([...selection.ids].filter((id) => present.has(id)));
+    const primary = selection.primary && present.has(selection.primary) ? selection.primary : ([...ids].pop() ?? null);
+    setSelection({ ids, primary });
+  }, [edit, selection]);
 
   const seek = useCallback(
     (t: number) => {
@@ -124,10 +153,11 @@ export function useEdit(edit: Edit | undefined, setEdit: SetEdit, active: boolea
   }, [edit, selectedId, setEdit]);
 
   const deleteSelected = useCallback(() => {
-    if (!selectedId) return;
-    setEdit((e) => removeItem(e, selectedId));
+    if (selectedIds.size === 0) return;
+    const ids = [...selectedIds];
+    setEdit((e) => ids.reduce((acc, id) => removeItem(acc, id), e));
     setSelectedId(null);
-  }, [selectedId, setEdit]);
+  }, [selectedIds, setEdit, setSelectedId]);
 
   /** Moves the selected item by whole frames; without one, steps the playhead. */
   const nudge = useCallback(
@@ -172,7 +202,9 @@ export function useEdit(edit: Edit | undefined, setEdit: SetEdit, active: boolea
     zoom,
     setZoom,
     selectedId,
+    selectedIds,
     setSelectedId,
+    selectItem,
     stalled,
     seek,
     togglePlay,

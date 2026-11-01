@@ -31,7 +31,10 @@ interface Props {
   onZoomChange: (zoom: number) => void;
   /** Bumped to zoom until the whole timeline fits, from the start. */
   fitRequest?: number;
-  onSelect: (id: string | null) => void;
+  /** `mode`: a plain click picks one item; Ctrl toggles, Shift adds. */
+  onSelect: (id: string | null, mode?: "replace" | "toggle" | "add") => void;
+  /** Everything picked, for highlighting; `selectedId` is the primary one. */
+  selectedIds?: ReadonlySet<string>;
   onMove: (id: string, start: number, trackId: string | undefined, drag: string) => void;
   onTrimStart: (id: string, t: number, drag: string) => void;
   onTrimEnd: (id: string, t: number, drag: string) => void;
@@ -83,6 +86,7 @@ export function EditTimeline({
   onZoomChange,
   fitRequest = 0,
   onSelect,
+  selectedIds,
   onMove,
   onTrimStart,
   onTrimEnd,
@@ -234,6 +238,11 @@ export function EditTimeline({
     for (const other of edit.items) {
       if (other.id !== item.id) snaps.push(other.start, itemEnd(other));
     }
+    // With Ctrl or Shift a press changes the selection and nothing else.
+    if (!mode && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+      onSelect(item.id, e.ctrlKey || e.metaKey ? "toggle" : "add");
+      return;
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = {
       item,
@@ -243,7 +252,8 @@ export function EditTimeline({
       moved: false,
       snaps,
     };
-    onSelect(item.id);
+    // Pressing an item already in a multiple selection keeps the others.
+    if (!selectedIds?.has(item.id) || (selectedIds?.size ?? 0) <= 1) onSelect(item.id);
   };
 
   const moveItemDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -281,7 +291,10 @@ export function EditTimeline({
   };
 
   const endItemDrag = () => {
+    const d = drag.current;
     drag.current = null;
+    // A click (no drag) on one of several selected items picks it alone.
+    if (d && !d.moved && (selectedIds?.size ?? 0) > 1) onSelect(d.item.id);
   };
 
   // --- Key diamonds: drag to retime, click to go there -------------------------
@@ -448,7 +461,7 @@ export function EditTimeline({
                     return (
                       <div
                         key={item.id}
-                        className={`vo-clip edit-item ${item.kind}${item.id === selectedId ? " selected" : ""}`}
+                        className={`vo-clip edit-item ${item.kind}${(selectedIds ? selectedIds.has(item.id) : item.id === selectedId) ? " selected" : ""}`}
                         style={{ left: item.start * zoom, width, top: 3, bottom: 3 }}
                         title={`${itemLabel(edit, item)} · ${formatShort(item.start)}–${formatShort(itemEnd(item))}`}
                         onPointerDown={(e) => startItem(e, item)}

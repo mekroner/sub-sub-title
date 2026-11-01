@@ -7,6 +7,7 @@ import type {
   Project,
   RecutKind,
   RecutRef,
+  TemplateFile,
   TextItem,
   TextStyle,
   TransformKey,
@@ -45,6 +46,10 @@ interface Props {
   onTab: (tab: EditSideTab) => void;
   selected: EditItem | null;
   onAddFiles: () => void;
+  /** The template library, newest first. */
+  templates: TemplateFile[];
+  onInsertTemplate: (path: string) => void;
+  onImportTemplate: () => void;
   /** Starts dragging a source towards the timeline. */
   onSourcePointerDown: (e: ReactPointerEvent<HTMLElement>, sourceId: string) => void;
   /** Adds a source to the timeline: a video at the end of the main track, an image at the playhead. */
@@ -135,7 +140,16 @@ export function EditSidePanel(props: Props) {
   );
 }
 
-function MediaBin({ edit, onAddFiles, onSourcePointerDown, onAppendSource, onRemoveSource }: Props) {
+function MediaBin({
+  edit,
+  onAddFiles,
+  onSourcePointerDown,
+  onAppendSource,
+  onRemoveSource,
+  templates,
+  onInsertTemplate,
+  onImportTemplate,
+}: Props) {
   return (
     <div className="panel edit-bin">
       <div className="panel-header">
@@ -188,6 +202,38 @@ function MediaBin({ edit, onAddFiles, onSourcePointerDown, onAppendSource, onRem
               </li>
             );
           })}
+        </ul>
+      )}
+
+      <div className="panel-header edit-templates-header">
+        <h2>Templates</h2>
+        <button type="button" className="small" onClick={onImportTemplate} title="Copy a template file into the library">
+          Import…
+        </button>
+      </div>
+      {templates.length === 0 ? (
+        <p className="hint edit-pad">
+          Select overlay items on the timeline (Ctrl+click for several) and use <em>Save as template…</em> to
+          keep them here.
+        </p>
+      ) : (
+        <ul className="edit-bin-list">
+          {templates.map((t) => (
+            <li
+              key={t.path}
+              className="edit-bin-entry edit-template-entry"
+              title={`${t.path}\nDouble-click to insert it at the playhead.`}
+              onDoubleClick={() => onInsertTemplate(t.path)}
+            >
+              <span className="edit-bin-kind">❖</span>
+              <span className="edit-bin-text">
+                <span className="edit-bin-name">{t.name}</span>
+              </span>
+              <button type="button" className="small" onClick={() => onInsertTemplate(t.path)}>
+                Insert
+              </button>
+            </li>
+          ))}
         </ul>
       )}
     </div>
